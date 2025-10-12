@@ -2,7 +2,7 @@ import telebot
 import os
 
 # 🔹 Получаем токен из переменной окружения (удобно для GitHub)
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("8475002362:AAHtx03EBMUl6T4wUNROyrN23kpuLtOaHT0")
 
 if not TOKEN:
     raise ValueError("❌ Токен не найден! Установи переменную окружения BOT_TOKEN.")
