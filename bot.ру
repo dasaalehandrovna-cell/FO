@@ -4,8 +4,10 @@ import json
 import os
 from datetime import date
 
-# 🔹 вставь свой токен сюда (или используй переменную окружения)
-TOKEN = os.getenv("BOT_TOKEN") or "ВСТАВЬ_СВОЙ_ТОКЕН_СЮДА"
+# 🔹 Токен можно вставить сюда прямо, если репозиторий приватный:
+# TOKEN = "ВАШ_ТОКЕН_ОТ_BOTFATHER"
+# 🔹 Или использовать переменную окружения (безопаснее):
+TOKEN = os.getenv("BOT_TOKEN") or "ВСТАВЬ_СЮДА_ТОКЕН"
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -23,15 +25,18 @@ def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(finance_data, f, ensure_ascii=False, indent=2)
 
-# Получаем текущую дату
+# Получаем сегодняшнюю дату
 def today():
     return str(date.today())
 
-# Формируем окно статистики
+# Формируем текст статистики
 def get_summary(user_id):
     user_id = str(user_id)
     user_data = finance_data.get(user_id, {})
-    all_time = sum([sum(d.values()) for d in user_data.values()]) if user_data else 0
+    all_time = sum([
+        (day_data.get("income", 0) + day_data.get("expense", 0))
+        for day_data in user_data.values()
+    ]) if user_data else 0
 
     today_data = user_data.get(today(), {"income": 0, "expense": 0})
     income = today_data.get("income", 0)
@@ -39,8 +44,8 @@ def get_summary(user_id):
 
     text = (
         f"📅 <b>{today()}</b>\n"
-        f"💸 Приход дня: <b>{income:.2f}</b>\n"
-        f"💰 Расход дня: <b>{abs(expense):.2f}</b>\n"
+        f"💰 Приход дня: <b>{income:.2f}</b>\n"
+        f"💸 Расход дня: <b>{abs(expense):.2f}</b>\n"
         f"📊 Общий остаток: <b>{all_time:.2f}</b>"
     )
     return text
@@ -53,14 +58,23 @@ def get_keyboard():
 
 @bot.message_handler(commands=["start"])
 def start(message):
-    bot.reply_to(message, "👋 Привет! Отправь числа (например: -1000хлеб или +500 зп), я посчитаю твои финансы.")
+    bot.reply_to(
+        message,
+        "👋 Привет! Это бот учёта финансов.\n"
+        "Отправь число, например:\n"
+        "`-1000 хлеб` — расход\n"
+        "`1000` — расход\n"
+        "`+1000 зп` — приход\n\n"
+        "Я посчитаю и покажу баланс 💰",
+        parse_mode="Markdown"
+    )
 
 @bot.message_handler(func=lambda msg: True)
 def handle_message(message):
     user_id = str(message.from_user.id)
     text = message.text.strip()
 
-    # Ищем первое число в строке
+    # Извлекаем первое число
     num_str = ""
     for ch in text:
         if ch in "+-0123456789.":
@@ -68,10 +82,20 @@ def handle_message(message):
         else:
             break
 
+    if not num_str:
+        return  # нет числа
+
     try:
         number = float(num_str)
     except:
-        return  # если нет корректного числа — игнорируем
+        return  # не число
+
+    # Определяем тип операции по первому символу
+    first_char = num_str[0]
+    if first_char == "+":
+        is_income = True
+    else:
+        is_income = False  # минус или без знака → расход
 
     # Инициализация данных пользователя
     if user_id not in finance_data:
@@ -79,23 +103,21 @@ def handle_message(message):
     if today() not in finance_data[user_id]:
         finance_data[user_id][today()] = {"income": 0, "expense": 0}
 
-    # Запись данных
-    if number >= 0:
-        finance_data[user_id][today()]["income"] += number
+    # Добавляем значения
+    if is_income:
+        finance_data[user_id][today()]["income"] += abs(number)
+        action = f"💰 Приход: +{abs(number)}"
     else:
-        finance_data[user_id][today()]["expense"] += number
+        finance_data[user_id][today()]["expense"] -= abs(number)
+        action = f"💸 Расход: -{abs(number)}"
 
     save_data()
 
-    # Отправка нового окна
-    summary_text = get_summary(user_id)
+    # Формируем и отправляем новое окно
+    summary_text = action + "\n\n" + get_summary(user_id)
     sent = bot.send_message(message.chat.id, summary_text, parse_mode="HTML", reply_markup=get_keyboard())
 
-    # Удаляем предыдущее сообщение (если оно было)
-    finance_data[user_id][today()]["last_msg"] = sent.message_id
-    save_data()
-
-    # Пробуем удалить предыдущее
+    # Удаляем предыдущее сообщение за сегодняшний день
     try:
         old_id = finance_data[user_id][today()].get("prev_msg")
         if old_id:
@@ -108,7 +130,7 @@ def handle_message(message):
 @bot.callback_query_handler(func=lambda call: call.data == "edit_day")
 def edit_day(call):
     bot.answer_callback_query(call.id)
-    bot.send_message(call.message.chat.id, "✏️ Функция редактирования расходов пока в разработке.")
+    bot.send_message(call.message.chat.id, "✏️ Редактирование расходов будет добавлено в следующем обновлении.")
 
 print("✅ Бот запущен...")
 bot.polling(non_stop=True)
