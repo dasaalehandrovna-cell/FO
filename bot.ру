@@ -1,0 +1,26 @@
+import telebot
+import os
+
+# 🔹 Получаем токен из переменной окружения (удобно для GitHub)
+TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise ValueError("❌ Токен не найден! Установи переменную окружения BOT_TOKEN.")
+
+bot = telebot.TeleBot(TOKEN)
+
+@bot.message_handler(commands=['start', 'help'])
+def send_welcome(message):
+    bot.reply_to(message, "👋 Привет! Пришли мне числа через пробел, а я их сложу.\nНапример: 5 10 15")
+
+@bot.message_handler(func=lambda message: True)
+def sum_numbers(message):
+    try:
+        numbers = [float(num) for num in message.text.split()]
+        result = sum(numbers)
+        bot.reply_to(message, f"➕ Сумма: {result}")
+    except ValueError:
+        bot.reply_to(message, "❗ Пожалуйста, отправь только числа, разделённые пробелом.")
+
+print("✅ Бот запущен...")
+bot.polling()
