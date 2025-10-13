@@ -1,279 +1,69 @@
 import telebot
-from telebot import types
-import json
-import os
-from datetime import date
+import threading
+from flask import Flask
 
-# 🔹 Укажи токен
-TOKEN = os.getenv("BOT_TOKEN") or "ВСТАВЬ_СЮДА_СВОЙ_ТОКЕН"
+# 🔑 Твой токен
+TOKEN = "8475002362:AAEICuxcrZhnltpSBHxH74nw6efZ0T-4RZ0"
 
 bot = telebot.TeleBot(TOKEN)
-DATA_FILE = "finance_data.json"
+app = Flask(__name__)
 
-# ──────────────────────────────
-# Загружаем / сохраняем данные
-# ──────────────────────────────
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        finance_data = json.load(f)
-else:
-    finance_data = {}
+# 🧮 Память для финансового отчёта
+balance = 0
+records = []
 
-def save_data():
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(finance_data, f, ensure_ascii=False, indent=2)
+@app.route('/')
+def home():
+    return "Бот работает ✅"
 
-def today():
-    return str(date.today())
-
-# ──────────────────────────────
-# Формирование отчёта
-# ──────────────────────────────
-def get_summary(user_id, day=None):
-    user_id = str(user_id)
-    if day is None:
-        day = today()
-    user_data = finance_data.get(user_id, {})
-    day_data = user_data.get(day, {"income": 0, "expense": 0, "operations": []})
-
-    income = day_data.get("income", 0)
-    expense = abs(day_data.get("expense", 0))
-
-    all_time = sum([
-        (d.get("income", 0) + d.get("expense", 0))
-        for d in user_data.values()
-    ]) if user_data else 0
-
-    operations = day_data.get("operations", [])
-    ops_text = "\n".join(operations) if operations else "Нет операций за день."
-
-    text = (
-        f"📅 <b>{day}</b>\n"
-        f"──────────────────────\n"
-        f"{ops_text}\n"
-        f"──────────────────────\n"
-        f"💰 Приход дня: <b>{income:.2f}</b>\n"
-        f"💸 Расход дня: <b>{expense:.2f}</b>\n"
-        f"📊 Общий остаток: <b>{all_time:.2f}</b>"
-    )
-    return text
-
-# ──────────────────────────────
-# Клавиатуры
-# ──────────────────────────────
-def get_main_keyboard(day):
-    kb = types.InlineKeyboardMarkup()
-    kb.row(
-        types.InlineKeyboardButton("✏️ Редактировать день", callback_data=f"edit_{day}"),
-        types.InlineKeyboardButton("📅 Другой день", callback_data="select_day")
-    )
-    return kb
-
-def get_edit_keyboard(day):
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("➕ Добавить операцию", callback_data=f"add_{day}"))
-    kb.add(types.InlineKeyboardButton("🗑 Удалить операцию", callback_data=f"delete_{day}"))
-    kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"back_{day}"))
-    return kb
-
-# ──────────────────────────────
-# Команда /start
-# ──────────────────────────────
-@bot.message_handler(commands=["start"])
-def start(message):
-    bot.reply_to(
-        message,
-        "👋 Привет! Это бот учёта финансов.\n\n"
-        "📗 Пример ввода:\n"
-        "`-1000 хлеб` → расход\n"
-        "`1000` → расход\n"
-        "`+500 зп` → приход\n\n"
-        "Бот покажет баланс и список операций.",
+@bot.message_handler(commands=['start'])
+def start_message(message):
+    bot.send_message(
+        message.chat.id,
+        "👋 Привет! Я веду твой Финансовый Отчёт (ФО).\n\n"
+        "Отправляй мне сообщения в формате:\n"
+        "`+1000 хлеб` — приход\n"
+        "`-500 бензин` — расход\n\n"
+        "Команды:\n"
+        "/баланс — показать текущий остаток\n"
+        "/отчет — показать все операции",
         parse_mode="Markdown"
     )
 
-# ──────────────────────────────
-# Обработка операций
-# ──────────────────────────────
-@bot.message_handler(func=lambda msg: True)
-def handle_message(message):
-    user_id = str(message.from_user.id)
+@bot.message_handler(commands=['баланс'])
+def show_balance(message):
+    bot.send_message(message.chat.id, f"💰 Текущий баланс: {balance}")
+
+@bot.message_handler(commands=['отчет'])
+def show_report(message):
+    if not records:
+        bot.send_message(message.chat.id, "📂 Отчёт пуст.")
+    else:
+        text = "\n".join(records)
+        bot.send_message(message.chat.id, f"📘 Текущий отчёт:\n\n{text}\n\n💰 Баланс: {balance}")
+
+@bot.message_handler(func=lambda message: True)
+def handle_transaction(message):
+    global balance
+
     text = message.text.strip()
-
-    num_str = ""
-    for ch in text:
-        if ch in "+-0123456789.":
-            num_str += ch
-        else:
-            break
-
-    if not num_str:
-        return
-
-    try:
-        number = float(num_str)
-    except:
-        return
-
-    first_char = num_str[0]
-    if first_char == "+":
-        is_income = True
+    if text.startswith('+') or text.startswith('-'):
+        try:
+            parts = text.split(' ', 1)
+            amount = int(parts[0])
+            comment = parts[1] if len(parts) > 1 else ''
+            balance += amount
+            record = f"{'Приход' if amount > 0 else 'Расход'} {amount}: {comment}"
+            records.append(record)
+            bot.send_message(message.chat.id, f"✅ Добавлено: {record}\n💰 Баланс: {balance}")
+        except Exception:
+            bot.send_message(message.chat.id, "⚠️ Ошибка формата. Пример: `+1000 хлеб`", parse_mode="Markdown")
     else:
-        is_income = False
+        bot.send_message(message.chat.id, "📎 Сообщение не распознано. Используй `+` или `-` перед суммой.", parse_mode="Markdown")
 
-    if user_id not in finance_data:
-        finance_data[user_id] = {}
-    if today() not in finance_data[user_id]:
-        finance_data[user_id][today()] = {"income": 0, "expense": 0, "operations": []}
+def run_bot():
+    bot.polling(none_stop=True)
 
-    note = text
-    day_data = finance_data[user_id][today()]
-
-    if is_income:
-        day_data["income"] += abs(number)
-        op_text = f"💰 +{abs(number)} {note[len(num_str):].strip()}"
-    else:
-        day_data["expense"] -= abs(number)
-        op_text = f"💸 -{abs(number)} {note[len(num_str):].strip()}"
-
-    day_data["operations"].append(op_text)
-    save_data()
-
-    summary_text = get_summary(user_id)
-    sent = bot.send_message(message.chat.id, summary_text, parse_mode="HTML", reply_markup=get_main_keyboard(today()))
-
-    try:
-        old_id = day_data.get("prev_msg")
-        if old_id:
-            bot.delete_message(message.chat.id, old_id)
-        day_data["prev_msg"] = sent.message_id
-        save_data()
-    except:
-        pass
-
-# ──────────────────────────────
-# Кнопки редактирования
-# ──────────────────────────────
-@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_"))
-def edit_day(call):
-    day = call.data.split("_")[1]
-    bot.edit_message_text(
-        f"🛠 Выберите действие для {day}:",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=get_edit_keyboard(day)
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("back_"))
-def back_to_summary(call):
-    day = call.data.split("_")[1]
-    summary_text = get_summary(call.from_user.id, day)
-    bot.edit_message_text(
-        summary_text,
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode="HTML",
-        reply_markup=get_main_keyboard(day)
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("add_"))
-def add_operation(call):
-    day = call.data.split("_")[1]
-    msg = bot.send_message(call.message.chat.id, f"✏️ Введи новую операцию для {day} (пример: `+500 подарок`)", parse_mode="Markdown")
-    bot.register_next_step_handler(msg, lambda m: add_op_step(m, day))
-
-def add_op_step(message, day):
-    user_id = str(message.from_user.id)
-    text = message.text.strip()
-
-    num_str = ""
-    for ch in text:
-        if ch in "+-0123456789.":
-            num_str += ch
-        else:
-            break
-
-    try:
-        number = float(num_str)
-    except:
-        bot.reply_to(message, "⚠️ Не удалось определить сумму.")
-        return
-
-    first_char = num_str[0]
-    is_income = first_char == "+"
-    if user_id not in finance_data:
-        finance_data[user_id] = {}
-    if day not in finance_data[user_id]:
-        finance_data[user_id][day] = {"income": 0, "expense": 0, "operations": []}
-
-    day_data = finance_data[user_id][day]
-    note = text[len(num_str):].strip()
-
-    if is_income:
-        day_data["income"] += abs(number)
-        op_text = f"💰 +{abs(number)} {note}"
-    else:
-        day_data["expense"] -= abs(number)
-        op_text = f"💸 -{abs(number)} {note}"
-
-    day_data["operations"].append(op_text)
-    save_data()
-
-    bot.send_message(message.chat.id, f"✅ Добавлено: {op_text}")
-    summary_text = get_summary(user_id, day)
-    bot.send_message(message.chat.id, summary_text, parse_mode="HTML", reply_markup=get_main_keyboard(day))
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("delete_"))
-def delete_operation(call):
-    day = call.data.split("_")[1]
-    user_id = str(call.from_user.id)
-    day_data = finance_data.get(user_id, {}).get(day, {})
-    ops = day_data.get("operations", [])
-
-    if not ops:
-        bot.answer_callback_query(call.id, "Нет операций для удаления.")
-        return
-
-    kb = types.InlineKeyboardMarkup()
-    for i, op in enumerate(ops):
-        kb.add(types.InlineKeyboardButton(f"❌ {op}", callback_data=f"delop_{day}_{i}"))
-    kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"edit_{day}"))
-
-    bot.edit_message_text(
-        "Выбери операцию для удаления:",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=kb
-    )
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith("delop_"))
-def del_operation(call):
-    _, day, idx = call.data.split("_")
-    idx = int(idx)
-    user_id = str(call.from_user.id)
-
-    ops = finance_data[user_id][day]["operations"]
-    op_text = ops.pop(idx)
-
-    # Обновляем суммы
-    if op_text.startswith("💰"):
-        amount = float(op_text.split()[1].replace("+", ""))
-        finance_data[user_id][day]["income"] -= amount
-    elif op_text.startswith("💸"):
-        amount = float(op_text.split()[1].replace("-", ""))
-        finance_data[user_id][day]["expense"] += amount
-
-    save_data()
-
-    bot.answer_callback_query(call.id, f"Удалено: {op_text}")
-    summary_text = get_summary(user_id, day)
-    bot.edit_message_text(
-        summary_text,
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode="HTML",
-        reply_markup=get_main_keyboard(day)
-    )
-
-print("✅ Бот запущен...")
-bot.polling(non_stop=True)
+if __name__ == "__main__":
+    threading.Thread(target=run_bot).start()
+    app.run(host="0.0.0.0", port=10000)
