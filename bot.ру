@@ -1,90 +1,138 @@
 import telebot
+import threading
 import os
 import json
-from flask import Flask, request
+from flask import Flask
 
-# Загружаем токен из переменной окружения
+# 🔒 Токен берём из переменной окружения
 TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise ValueError("❌ Ошибка: переменная окружения BOT_TOKEN не установлена!")
+
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
+# 📁 Файл для хранения данных
 DATA_FILE = "data.json"
 
-data = {"balance": 0, "records": []}
+# 🧮 Данные
+balance = 0
+records = []
+
+# 👤 ID владельца (можно узнать после первого /start)
+OWNER_ID_FILE = "owner_id.txt"
 
 
+# 🔹 Загрузка сохранённых данных
 def load_data():
-    global data
+    global balance, records
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
+            balance = data.get("balance", 0)
+            records = data.get("records", [])
+    else:
+        save_data()
 
 
+# 🔹 Сохранение данных
 def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump({"balance": balance, "records": records}, f, ensure_ascii=False, indent=2)
 
 
-@app.route("/" + TOKEN, methods=["POST"])
-def getMessage():
-    json_str = request.get_data().decode("UTF-8")
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return "!", 200
+# 🔹 Сохранение ID владельца
+def save_owner_id(user_id):
+    with open(OWNER_ID_FILE, "w") as f:
+        f.write(str(user_id))
 
 
-@app.route("/")
-def webhook():
-    bot.remove_webhook()
-    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}"
-    bot.set_webhook(url=webhook_url)
-    print(f"✅ Вебхук установлен: {webhook_url}")
-    return "Webhook set", 200
+# 🔹 Получение ID владельца
+def get_owner_id():
+    if os.path.exists(OWNER_ID_FILE):
+        with open(OWNER_ID_FILE, "r") as f:
+            return f.read().strip()
+    return None
 
 
-@bot.message_handler(commands=["баланс"])
-def balance(message):
-    bot.reply_to(message, f"💰 Текущий баланс: {data['balance']}₽")
+@app.route('/')
+def home():
+    return "Бот работает ✅"
 
 
-@bot.message_handler(commands=["отчет"])
-def report(message):
-    if not data["records"]:
-        bot.reply_to(message, "📘 Пока нет записей.")
-        return
-    text = "\n".join(data["records"])
-    bot.reply_to(message, f"📒 Отчет:\n{text}")
+@bot.message_handler(commands=['start'])
+def start_message(message):
+    save_owner_id(message.chat.id)
+    bot.send_message(
+        message.chat.id,
+        "👋 Привет! Я веду твой Финансовый Отчёт (ФО).\n\n"
+        "Примеры:\n"
+        "`+1000 хлеб` — приход\n"
+        "`-500 бензин` — расход\n\n"
+        "Команды:\n"
+        "/баланс — показать текущий остаток\n"
+        "/отчет — показать все операции\n"
+        "/сброс — обнулить отчёт",
+        parse_mode="Markdown"
+    )
 
 
-@bot.message_handler(commands=["сброс"])
-def reset(message):
-    data["balance"] = 0
-    data["records"] = []
-    save_data()
-    bot.reply_to(message, "🔄 Финансовый отчет сброшен.")
+@bot.message_handler(commands=['баланс'])
+def show_balance(message):
+    bot.send_message(message.chat.id, f"💰 Текущий баланс: {balance}")
 
 
-@bot.message_handler(func=lambda msg: True)
-def add_record(message):
-    text = message.text.strip()
-    if text.startswith("+") or text.startswith("-"):
-        try:
-            sign = 1 if text[0] == "+" else -1
-            parts = text[1:].strip().split(" ", 1)
-            amount = int(parts[0])
-            note = parts[1] if len(parts) > 1 else ""
-            data["balance"] += sign * amount
-            record = f"{'+' if sign > 0 else '-'}{amount} {note}"
-            data["records"].append(record)
-            save_data()
-            bot.reply_to(message, f"✅ Запись добавлена. Баланс: {data['balance']}₽")
-        except:
-            bot.reply_to(message, "⚠️ Ошибка в формате. Пример: +1000 хлеб или -500 бензин")
+@bot.message_handler(commands=['отчет'])
+def show_report(message):
+    if not records:
+        bot.send_message(message.chat.id, "📂 Отчёт пуст.")
     else:
-        bot.reply_to(message, "❗ Используй + или - для записи.")
+        text = "\n".join(records)
+        bot.send_message(message.chat.id, f"📘 Отчёт:\n\n{text}\n\n💰 Баланс: {balance}")
+
+
+@bot.message_handler(commands=['сброс'])
+def reset_data(message):
+    global balance, records
+    balance = 0
+    records = []
+    save_data()
+    bot.send_message(message.chat.id, "♻️ Финансовый отчёт сброшен. Баланс: 0")
+
+
+@bot.message_handler(func=lambda message: True)
+def handle_transaction(message):
+    global balance
+    text = message.text.strip()
+
+    if text.startswith('+') or text.startswith('-'):
+        try:
+            parts = text.split(' ', 1)
+            amount = int(parts[0])
+            comment = parts[1] if len(parts) > 1 else ''
+            balance += amount
+            record = f"{'Приход' if amount > 0 else 'Расход'} {amount}: {comment}"
+            records.append(record)
+            save_data()
+            bot.send_message(message.chat.id, f"✅ Добавлено: {record}\n💰 Баланс: {balance}")
+        except Exception:
+            bot.send_message(message.chat.id, "⚠️ Ошибка формата. Пример: `+1000 хлеб`", parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "📎 Используй `+` или `-` перед суммой.", parse_mode="Markdown")
+
+
+def run_bot():
+    load_data()
+    owner_id = get_owner_id()
+    if owner_id:
+        try:
+            bot.send_message(owner_id, "✅ Бот запущен и готов к работе.")
+        except Exception:
+            print("⚠️ Не удалось отправить уведомление о запуске.")
+    bot.polling(none_stop=True)
 
 
 if __name__ == "__main__":
-    load_data()
-    print("🚀 Бот запущен и ожидает входящих сообщений...")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    threading.Thread(target=run_bot).start()
+    app.run(host="0.0.0.0", port=10000)
