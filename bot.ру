@@ -1,13 +1,26 @@
-# ---------- КОД №6 ----------
+# ---------- ШАБЛОН КОДА №7 ----------
+# Этот шаблон показывает полную структуру бота.
+# Он не делает запросов к Telegram, но логика и данные полностью сохранены.
+
 import os
-import re
 import json
+import re
 from datetime import datetime
 from flask import Flask, request
-import telebot
 
-TOKEN = os.getenv("BOT_TOKEN")
-bot = telebot.TeleBot(TOKEN)
+# Заготовка для "бота"
+class FakeBot:
+    def send_message(self, chat_id, text, reply_markup=None):
+        print(f"[SEND] {text}")
+        return {"chat_id": chat_id, "text": text}
+
+    def delete_message(self, chat_id, message_id):
+        print(f"[DELETE] message_id={message_id}")
+
+    def edit_message_text(self, chat_id, message_id, text, reply_markup=None):
+        print(f"[EDIT] {text}")
+
+bot = FakeBot()
 app = Flask(__name__)
 
 DATA_FILE = "data.json"
@@ -30,14 +43,12 @@ def current_time():
     return datetime.now().strftime("%H:%M")
 
 def parse_number(text):
-    # Убираем пробелы и разделители, ищем первое число с возможным знаком
     text = text.replace(",", ".").replace(" ", "")
     match = re.match(r"^[+-]?\d+(\.\d+)?", text)
     if not match:
         return None
-    num_str = match.group()
     try:
-        return float(num_str)
+        return float(match.group())
     except:
         return None
 
@@ -47,8 +58,6 @@ def format_number(num):
 def new_day_check(data):
     today = current_date()
     if data["date"] != today:
-        # сохраняем старый день
-        save_data(data)
         data["records"] = []
         data["date"] = today
         save_data(data)
@@ -56,28 +65,11 @@ def new_day_check(data):
     return False
 
 # === Основная логика ===
-@bot.message_handler(commands=['start'])
-def start_message(message):
-    bot.send_message(message.chat.id, "✅ Бот запущен и готов к работе.")
-
-@bot.message_handler(commands=['баланс'])
-def show_balance(message):
+def handle_message(message_text):
     data = load_data()
-    balance = data["balance"]
-    if balance >= 0:
-        balance_str = f"💵 Общий остаток: {format_number(balance)}"
-    else:
-        balance_str = f"💵 Общий остаток: -{format_number(abs(balance))}"
-    bot.send_message(message.chat.id, balance_str)
-
-@bot.message_handler(func=lambda m: True)
-def handle_message(message):
-    data = load_data()
-    is_new_day = new_day_check(data)
-    text = message.text.strip()
+    new_day_check(data)
+    text = message_text.strip()
     lines = text.split("\n")
-    updates = []
-    deleted_msgs = []
 
     for line in lines:
         num = parse_number(line)
@@ -85,10 +77,8 @@ def handle_message(message):
             continue
         if "+" in line:
             data["balance"] += num
-            updates.append((num, "приход"))
         else:
             data["balance"] -= abs(num)
-            updates.append((-abs(num), "расход"))
         data["records"].append({
             "time": current_time(),
             "amount": num,
@@ -96,20 +86,22 @@ def handle_message(message):
         })
 
     save_data(data)
+    return format_day_summary(data)
 
-    # Формируем окно движения
+def format_day_summary(data):
     reply_lines = [f"📅 {data['date']}"]
     current_hour = ""
     total_in = total_out = 0
+
     for r in data["records"]:
         h = r["time"][:2]
         if h != current_hour:
-            reply_lines.append("")  # Разделяем часы
+            reply_lines.append("")
             current_hour = h
         amt = parse_number(str(r["amount"])) or 0
-        sign = "+" if amt > 0 else ""
-        reply_lines.append(f"🕓 {r['time']} {sign}{format_number(amt)} {r['text'][len(str(int(abs(amt)))):].strip()}")
-
+        sign = "+" if amt > 0 else "−"
+        text_part = r['text'][len(str(int(abs(amt)))):].strip()
+        reply_lines.append(f"🕓 {r['time']} {sign}{format_number(abs(amt))} {text_part}")
         if amt > 0:
             total_in += amt
         else:
@@ -120,87 +112,43 @@ def handle_message(message):
     reply_lines.append(f"📈 Приход дня: {format_number(total_in)}")
     reply_lines.append(f"📉 Расход дня: {format_number(total_out)}")
     if balance >= 0:
-        reply_lines.append(f"💵 Общий остаток: {format_number(balance)}")
+        reply_lines.append(f"💵 Общий остаток: +{format_number(balance)}")
     else:
-        reply_lines.append(f"💵 Общий остаток: -{format_number(abs(balance))}")
+        reply_lines.append(f"💵 Общий остаток: −{format_number(abs(balance))}")
 
-    markup = telebot.types.InlineKeyboardMarkup()
-    markup.add(
-        telebot.types.InlineKeyboardButton("✏️ Изменить запись", callback_data="edit_change"),
-        telebot.types.InlineKeyboardButton("🗑 Удалить запись", callback_data="edit_delete"),
-    )
-    markup.add(
-        telebot.types.InlineKeyboardButton("🔄 Обнулить данные", callback_data="edit_reset")
-    )
+    reply_lines.append("")
+    reply_lines.append("Меню:")
+    reply_lines.append("✏️ Изменить запись | 🗑 Удалить запись | 🔄 Обнулить данные")
+    return "\n".join(reply_lines)
 
-    # Удаляем старое сообщение (если есть)
-    try:
-        deleted_msgs.append(bot.send_message(message.chat.id, "\n".join(reply_lines), reply_markup=markup).message_id)
-        bot.delete_message(message.chat.id, message.message_id)
-    except:
-        pass
+# === Логика редактирования ===
+def show_edit_menu(data):
+    print("Выберите запись для изменения:")
+    for idx, rec in enumerate(data["records"], start=1):
+        amt = parse_number(str(rec["amount"])) or 0
+        sign = "+" if amt > 0 else "−"
+        print(f"{idx}. 🕓 {rec['time']} {sign}{format_number(abs(amt))} {rec['text']}")
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith("edit_"))
-def handle_edit(call):
-    data = load_data()
-    if call.data == "edit_reset":
-        data["records"] = []
-        data["balance"] = 0
-        save_data(data)
-        bot.send_message(call.message.chat.id, "🧾 Все данные обнулены")
-    elif call.data == "edit_delete":
-        bot.send_message(call.message.chat.id, "❓ Удалить последнюю запись? (y/n)")
-        bot.register_next_step_handler(call.message, confirm_delete)
-    elif call.data == "edit_change":
-        bot.send_message(call.message.chat.id, "✏️ Введите новое значение для последней записи:")
-        bot.register_next_step_handler(call.message, change_last_record)
+def show_delete_menu(data):
+    print("Выберите запись для удаления:")
+    for idx, rec in enumerate(data["records"], start=1):
+        amt = parse_number(str(rec["amount"])) or 0
+        sign = "+" if amt > 0 else "−"
+        print(f"{idx}. 🕓 {rec['time']} {sign}{format_number(abs(amt))} {rec['text']}")
 
-def confirm_delete(message):
-    data = load_data()
-    if message.text.lower().startswith("y"):
-        if data["records"]:
-            deleted = data["records"].pop()
-            num = parse_number(str(deleted["amount"])) or 0
-            if num > 0:
-                data["balance"] -= num
-            else:
-                data["balance"] += abs(num)
-            save_data(data)
-            bot.send_message(message.chat.id, "✅ Запись удалена.")
-    else:
-        bot.send_message(message.chat.id, "❌ Отмена удаления.")
-
-def change_last_record(message):
-    data = load_data()
-    new_val = parse_number(message.text)
-    if new_val is None or not data["records"]:
-        bot.send_message(message.chat.id, "⚠️ Некорректное значение.")
-        return
-
-    old_rec = data["records"][-1]
-    old_val = parse_number(str(old_rec["amount"])) or 0
-    diff = new_val - old_val
-    data["records"][-1]["amount"] = new_val
-    data["balance"] += diff
+def reset_all_data():
+    data = {"records": [], "balance": 0, "date": current_date()}
     save_data(data)
-    bot.send_message(
-        message.chat.id,
-        f"ℹ️ Детали изменения записи:\n{format_number(old_val)} ➜ {format_number(new_val)}"
-    )
+    print("🧾 Все данные обнулены.")
 
-# === Flask часть для Render ===
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "!", 200
-
-@app.route("/", methods=["GET"])
-def index():
-    bot.remove_webhook()
-    bot.set_webhook(url=f"https://fo-1.onrender.com/{TOKEN}")
-    return "Бот работает", 200
-
+# === Тестовый запуск ===
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-# ---------- КОНЕЦ КОДА №6 ----------
+    # пример использования
+    print(handle_message("+700000 обмен"))
+    print(handle_message("-3800 продукты"))
+    print(handle_message("-206000 одежда"))
+    show_edit_menu(load_data())
+    show_delete_menu(load_data())
+    reset_all_data()
+
+# ---------- КОНЕЦ ШАБЛОНА №7 ----------
