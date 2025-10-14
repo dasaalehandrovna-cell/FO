@@ -1,154 +1,238 @@
-# ---------- ШАБЛОН КОДА №7 ----------
-# Этот шаблон показывает полную структуру бота.
-# Он не делает запросов к Telegram, но логика и данные полностью сохранены.
-
+# ---------- bot.py (версия 8) ----------
 import os
 import json
-import re
-from datetime import datetime
+import datetime
 from flask import Flask, request
+import telebot
+from telebot import types
 
-# Заготовка для "бота"
-class FakeBot:
-    def send_message(self, chat_id, text, reply_markup=None):
-        print(f"[SEND] {text}")
-        return {"chat_id": chat_id, "text": text}
-
-    def delete_message(self, chat_id, message_id):
-        print(f"[DELETE] message_id={message_id}")
-
-    def edit_message_text(self, chat_id, message_id, text, reply_markup=None):
-        print(f"[EDIT] {text}")
-
-bot = FakeBot()
+TOKEN = os.environ.get("BOT_TOKEN")
+bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
 DATA_FILE = "data.json"
 
-# === Вспомогательные функции ===
+# ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
+
 def load_data():
     if not os.path.exists(DATA_FILE):
-        return {"records": [], "balance": 0, "date": current_date()}
-    with open(DATA_FILE, "r") as f:
+        return {"records": [], "balance": 0}
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
         return json.load(f)
 
 def save_data(data):
-    with open(DATA_FILE, "w") as f:
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-def current_date():
-    return datetime.now().strftime("%Y-%m-%d")
-
-def current_time():
-    return datetime.now().strftime("%H:%M")
-
-def parse_number(text):
-    text = text.replace(",", ".").replace(" ", "")
-    match = re.match(r"^[+-]?\d+(\.\d+)?", text)
-    if not match:
-        return None
+def parse_amount(text):
+    text = text.replace(" ", "").replace(",", ".")
+    num = ""
+    for ch in text:
+        if ch.isdigit() or ch in "+-.":
+            num += ch
+        else:
+            break
     try:
-        return float(match.group())
+        return float(num)
     except:
         return None
 
-def format_number(num):
-    return f"{num:,.0f}".replace(",", ".")
+def format_num(n):
+    return f"{n:,.0f}".replace(",", ".")
 
-def new_day_check(data):
-    today = current_date()
-    if data["date"] != today:
-        data["records"] = []
-        data["date"] = today
-        save_data(data)
-        return True
-    return False
+# ====================== ЛОГИКА ======================
 
-# === Основная логика ===
-def handle_message(message_text):
-    data = load_data()
-    new_day_check(data)
-    text = message_text.strip()
-    lines = text.split("\n")
+def format_summary(records, balance):
+    now = datetime.datetime.now()
+    date_str = now.strftime("📅 %Y-%m-%d\n\n")
+    output = date_str
 
-    for line in lines:
-        num = parse_number(line)
-        if num is None:
-            continue
-        if "+" in line:
-            data["balance"] += num
+    current_hour = None
+    day_income = day_expense = 0
+
+    for rec in records:
+        t = rec["time"]
+        amt = rec["amount"]
+        desc = rec["desc"]
+        hour = t.split(":")[0]
+        if hour != current_hour:
+            output += f"\n🕓 {t} {amt:+.0f} {desc}\n"
+            current_hour = hour
         else:
-            data["balance"] -= abs(num)
-        data["records"].append({
-            "time": current_time(),
-            "amount": num,
-            "text": line
-        })
-
-    save_data(data)
-    return format_day_summary(data)
-
-def format_day_summary(data):
-    reply_lines = [f"📅 {data['date']}"]
-    current_hour = ""
-    total_in = total_out = 0
-
-    for r in data["records"]:
-        h = r["time"][:2]
-        if h != current_hour:
-            reply_lines.append("")
-            current_hour = h
-        amt = parse_number(str(r["amount"])) or 0
-        sign = "+" if amt > 0 else "−"
-        text_part = r['text'][len(str(int(abs(amt)))):].strip()
-        reply_lines.append(f"🕓 {r['time']} {sign}{format_number(abs(amt))} {text_part}")
+            output += f"🕓 {t} {amt:+.0f} {desc}\n"
         if amt > 0:
-            total_in += amt
+            day_income += amt
         else:
-            total_out += abs(amt)
+            day_expense += abs(amt)
 
+    output += (
+        f"\n📈 Приход дня: {format_num(day_income)}"
+        f"\n📉 Расход дня: {format_num(day_expense)}"
+        f"\n💵 Общий остаток: {'-' if balance < 0 else ''}{format_num(abs(balance))}"
+    )
+    return output
+
+def new_day_needed(records):
+    today = datetime.date.today().isoformat()
+    if not records:
+        return True
+    last_date = records[-1]["date"]
+    return last_date != today
+
+# ====================== ОБРАБОТКА СООБЩЕНИЙ ======================
+
+@bot.message_handler(commands=["start"])
+def start_msg(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("➕ Добавить", "✏️ Редактировать")
+    markup.row("💾 Обнулить всё")
+    bot.send_message(message.chat.id, "Бот запущен ✅", reply_markup=markup)
+
+@bot.message_handler(func=lambda m: True)
+def handle_message(message):
+    text = message.text.strip()
+    chat_id = message.chat.id
+
+    data = load_data()
+    records = data["records"]
     balance = data["balance"]
-    reply_lines.append("")
-    reply_lines.append(f"📈 Приход дня: {format_number(total_in)}")
-    reply_lines.append(f"📉 Расход дня: {format_number(total_out)}")
-    if balance >= 0:
-        reply_lines.append(f"💵 Общий остаток: +{format_number(balance)}")
-    else:
-        reply_lines.append(f"💵 Общий остаток: −{format_number(abs(balance))}")
 
-    reply_lines.append("")
-    reply_lines.append("Меню:")
-    reply_lines.append("✏️ Изменить запись | 🗑 Удалить запись | 🔄 Обнулить данные")
-    return "\n".join(reply_lines)
+    if text == "💾 Обнулить всё":
+        confirm = types.InlineKeyboardMarkup()
+        confirm.add(
+            types.InlineKeyboardButton("✅ Да", callback_data="reset_yes"),
+            types.InlineKeyboardButton("❌ Нет", callback_data="reset_no")
+        )
+        bot.send_message(chat_id, "Вы уверены, что хотите обнулить все данные?", reply_markup=confirm)
+        return
 
-# === Логика редактирования ===
-def show_edit_menu(data):
-    print("Выберите запись для изменения:")
-    for idx, rec in enumerate(data["records"], start=1):
-        amt = parse_number(str(rec["amount"])) or 0
-        sign = "+" if amt > 0 else "−"
-        print(f"{idx}. 🕓 {rec['time']} {sign}{format_number(abs(amt))} {rec['text']}")
+    if text == "✏️ Редактировать":
+        today = datetime.date.today().isoformat()
+        today_records = [r for r in records if r["date"] == today]
+        if not today_records:
+            bot.send_message(chat_id, "Сегодня ещё нет записей.")
+            return
+        kb = types.InlineKeyboardMarkup()
+        for i, r in enumerate(today_records):
+            label = f"{r['time']} {r['amount']:+.0f} {r['desc']}"
+            kb.add(types.InlineKeyboardButton(label, callback_data=f"edit_{i}"))
+        bot.send_message(chat_id, "Выбери запись для редактирования:", reply_markup=kb)
+        return
 
-def show_delete_menu(data):
-    print("Выберите запись для удаления:")
-    for idx, rec in enumerate(data["records"], start=1):
-        amt = parse_number(str(rec["amount"])) or 0
-        sign = "+" if amt > 0 else "−"
-        print(f"{idx}. 🕓 {rec['time']} {sign}{format_number(abs(amt))} {rec['text']}")
+    amount = parse_amount(text)
+    if amount is None:
+        return
 
-def reset_all_data():
-    data = {"records": [], "balance": 0, "date": current_date()}
+    # Берём только первое число, остальное описание
+    parts = text.split(maxsplit=1)
+    desc = parts[1] if len(parts) > 1 else ""
+
+    now = datetime.datetime.now()
+    record = {
+        "date": now.date().isoformat(),
+        "time": now.strftime("%H:%M"),
+        "amount": amount,
+        "desc": desc
+    }
+
+    if new_day_needed(records):
+        summary = format_summary(records, balance)
+        bot.send_message(chat_id, summary)
+        records = []
+
+    records.append(record)
+    balance += amount
+    data["records"] = records
+    data["balance"] = balance
     save_data(data)
-    print("🧾 Все данные обнулены.")
 
-# === Тестовый запуск ===
+    msg = format_summary(records, balance)
+    bot.send_message(chat_id, msg)
+
+# ====================== CALLBACK ======================
+
+@bot.callback_query_handler(func=lambda call: True)
+def callback_query(call):
+    chat_id = call.message.chat.id
+    data = load_data()
+
+    if call.data == "reset_yes":
+        data = {"records": [], "balance": 0}
+        save_data(data)
+        bot.edit_message_text("✅ Все данные обнулены", chat_id, call.message.id)
+        return
+    elif call.data == "reset_no":
+        bot.edit_message_text("❌ Отменено", chat_id, call.message.id)
+        return
+
+    if call.data.startswith("edit_"):
+        index = int(call.data.split("_")[1])
+        today = datetime.date.today().isoformat()
+        today_records = [r for r in data["records"] if r["date"] == today]
+        rec = today_records[index]
+
+        kb = types.InlineKeyboardMarkup()
+        kb.add(
+            types.InlineKeyboardButton("✏️ Изменить", callback_data=f"change_{index}"),
+            types.InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_{index}"),
+            types.InlineKeyboardButton("↩️ Отмена", callback_data="cancel")
+        )
+        text = f"Запись: {rec['time']} {rec['amount']:+.0f} {rec['desc']}"
+        bot.edit_message_text(text, chat_id, call.message.id, reply_markup=kb)
+
+    elif call.data.startswith("delete_"):
+        index = int(call.data.split("_")[1])
+        today = datetime.date.today().isoformat()
+        records = data["records"]
+        today_records = [r for r in records if r["date"] == today]
+        rec = today_records[index]
+        records.remove(rec)
+        data["records"] = records
+        data["balance"] -= rec["amount"]
+        save_data(data)
+        bot.edit_message_text("🗑 Запись удалена", chat_id, call.message.id)
+
+    elif call.data.startswith("change_"):
+        index = int(call.data.split("_")[1])
+        bot.edit_message_text("Введите новое значение для записи:", chat_id, call.message.id)
+        bot.register_next_step_handler(call.message, lambda m: change_value(m, index))
+
+    elif call.data == "cancel":
+        bot.edit_message_text("↩️ Отменено", chat_id, call.message.id)
+
+def change_value(message, index):
+    data = load_data()
+    today = datetime.date.today().isoformat()
+    records = data["records"]
+    today_records = [r for r in records if r["date"] == today]
+
+    rec = today_records[index]
+    old_amount = rec["amount"]
+
+    new_amount = parse_amount(message.text)
+    if new_amount is None:
+        bot.send_message(message.chat.id, "Некорректное значение.")
+        return
+
+    data["balance"] += new_amount - old_amount
+    rec["amount"] = new_amount
+    rec["desc"] = "изменено вручную"
+    save_data(data)
+
+    bot.send_message(message.chat.id, "✏️ Запись изменена\nДетали изменения записи")
+
+# ====================== FLASK WEBHOOK ======================
+
+@app.route("/" + TOKEN, methods=["POST"])
+def webhook():
+    bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
+    return "!", 200
+
+@app.route("/")
+def index():
+    return "Бот работает ✅"
+
 if __name__ == "__main__":
-    # пример использования
-    print(handle_message("+700000 обмен"))
-    print(handle_message("-3800 продукты"))
-    print(handle_message("-206000 одежда"))
-    show_edit_menu(load_data())
-    show_delete_menu(load_data())
-    reset_all_data()
-
-# ---------- КОНЕЦ ШАБЛОНА №7 ----------
+    bot.remove_webhook()
+    bot.set_webhook(url="https://fo-1.onrender.com/" + TOKEN)
+    app.run(host="0.0.0.0", port=10000)
