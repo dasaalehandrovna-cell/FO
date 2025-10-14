@@ -3,13 +3,11 @@ import os
 import json
 from flask import Flask, request
 
-# Загружаем токен из переменной окружения
 TOKEN = os.getenv("BOT_TOKEN")
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
 DATA_FILE = "data.json"
-
 data = {"balance": 0, "records": []}
 
 
@@ -33,13 +31,23 @@ def getMessage():
     return "!", 200
 
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def webhook():
     bot.remove_webhook()
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}"
     bot.set_webhook(url=webhook_url)
     print(f"✅ Вебхук установлен: {webhook_url}")
-    return "Webhook set", 200
+
+    # При каждом GET-запросе (например, от UptimeRobot)
+    # бот пишет в чат уведомление "✅ Я жив"
+    owner_id = os.getenv("OWNER_ID")
+    if owner_id:
+        try:
+            bot.send_message(owner_id, "✅ Я жив (пинг от Render или UptimeRobot)")
+        except Exception as e:
+            print(f"⚠️ Ошибка при отправке уведомления: {e}")
+
+    return "Webhook active", 200
 
 
 @bot.message_handler(commands=["баланс"])
@@ -87,4 +95,13 @@ def add_record(message):
 if __name__ == "__main__":
     load_data()
     print("🚀 Бот запущен и ожидает входящих сообщений...")
+
+    # Уведомляем владельца, что бот запущен
+    owner_id = os.getenv("OWNER_ID")
+    if owner_id:
+        try:
+            bot.send_message(owner_id, "✅ Бот 🦕запущен и готов к работе (Render)")
+        except Exception as e:
+            print(f"⚠️ Ошибка при уведомлении владельца: {e}")
+
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
