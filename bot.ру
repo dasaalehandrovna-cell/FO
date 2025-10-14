@@ -1,107 +1,595 @@
-import telebot
+# Код бота №4
+# Расширенная версия webhook-бота (на Render).
+# Требует в окружении: BOT_TOKEN, OWNER_ID
+# requirements.txt: pyTelegramBotAPI==4.23.0, flask
+
 import os
 import json
-from flask import Flask, request
+import time
+import threading
+import re
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
+import telebot
+from flask import Flask, request
+from telebot import types
+
+# -------------------------
+# Настройки
+# -------------------------
 TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_ID")  # строка
+TZ = ZoneInfo("America/Argentina/Catamarca")  # местное время пользователя
+DATA_FILE = "data.json"
+PORT = int(os.environ.get("PORT", 5000))
+
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не установлен в переменных окружения!")
+if not OWNER_ID:
+    print("⚠️ OWNER_ID не установлен. Некоторые уведомления/редактирование будут недоступны.")
+
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-DATA_FILE = "data.json"
-data = {"balance": 0, "records": []}
+# -------------------------
+# Структура данных, сохраняемая в data.json
+# {
+#   "overall_balance": int,
+#   "records": [ { "id": int, "timestamp": iso, "amount": int, "note": str, "owner": chat_id } , ... ],
+#   "active_messages": { "YYYY-MM-DD": { "chat_id": id, "message_id": id } },
+#   "next_id": int
+# }
+# -------------------------
 
+def default_data():
+    return {
+        "overall_balance": 0,
+        "records": [],
+        "active_messages": {},
+        "next_id": 1
+    }
 
+# -------------------------
+# Загрузка/Сохранение
+# -------------------------
 def load_data():
-    global data
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
+            try:
+                return json.load(f)
+            except Exception:
+                return default_data()
+    else:
+        return default_data()
 
-
-def save_data():
+def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+data = load_data()
 
+# -------------------------
+# Утилиты: парсинг чисел и форматирование
+# -------------------------
+# regex: ищет первый фрагмент с опциональным знаком (+/-) возможно с пробелем, затем цифры/разделители
+NUMBER_RE = re.compile(r'([+-]?\s*[\d][\d\s\.,]*)')
+
+def parse_first_number(text):
+    """
+    Возвращает tuple (amount:int, sign_detected: str, raw_match:str) или (None, None, None)
+    Правила:
+     - Если первая найденная часть начинается с '+': приход (положительное)
+     - Если начинается с '-' или нет знака: расход (отрицательное)
+     - Удаляем пробелы, точки и запятые в числе основываясь на том, что пользователь использует их как разделители тысяч
+     - Возвращаем целое число (без знаков для amount). Caller применит знак.
+    """
+    if not text:
+        return None, None, None
+    m = NUMBER_RE.search(text)
+    if not m:
+        return None, None, None
+    raw = m.group(1)
+    # определить знак
+    s = raw.strip()
+    sign = None
+    if s.startswith('+'):
+        sign = '+'
+        digits_part = s[1:].strip()
+    elif s.startswith('-'):
+        sign = '-'
+        digits_part = s[1:].strip()
+    else:
+        sign = ''  # отсутствие знака => расход per requirement
+        digits_part = s
+
+    # удалить разделители тысяч: пробелы, точки, запятые
+    digits_norm = re.sub(r'[\s\.,]', '', digits_part)
+    # взять только цифры в начале (на случай "56продукты")
+    digits_norm = re.match(r'(\d+)', digits_norm)
+    if not digits_norm:
+        return None, None, None
+    num = int(digits_norm.group(1))
+    return num, sign, raw
+
+def apply_sign_and_normalize(num, sign):
+    """
+    sign = '+' | '-' | '' (empty means treat as negative per new rule)
+    Возвращает signed int (например -500, +1000)
+    """
+    if sign == '+':
+        return num
+    else:
+        # '-' or '' -> expense => negative
+        return -num
+
+def format_amount_with_dots(n):
+    """Форматирует абсолютную величину n с точкой как разделителем тысяч, без знака."""
+    s = f"{abs(n):,}"  # использует запятую
+    s = s.replace(",", ".")
+    return s
+
+# -------------------------
+# Сообщения: сборка окна дня
+# -------------------------
+def date_str_local(dt):
+    return dt.astimezone(TZ).strftime("%Y-%m-%d")
+
+def time_str_local(dt):
+    return dt.astimezone(TZ).strftime("%H:%M")
+
+def build_day_window(chat_id, day_date):
+    """
+    Возвращает текст окна для указанной даты (YYYY-MM-DD).
+    Группировка по часу: между разными часами добавляется пустая строка.
+    Также считает приход/расход дня и общий остаток.
+    """
+    # собираем записи данной даты (по локальному времени)
+    recs = []
+    for r in data["records"]:
+        ts = datetime.fromisoformat(r["timestamp"]).astimezone(TZ)
+        if date_str_local(ts) == day_date and str(r.get("owner")) == str(chat_id):
+            recs.append( (ts, r) )
+    # сортируем по времени
+    recs.sort(key=lambda x: x[0])
+    if not recs:
+        return "📘 За этот день ещё нет записей."
+
+    lines = []
+    header = f"📅 {day_date}\n"
+    lines.append(header)
+    last_hour = None
+    day_income = 0
+    day_expense = 0
+    for ts, r in recs:
+        hour = ts.strftime("%H")
+        if last_hour is None:
+            last_hour = hour
+        elif hour != last_hour:
+            # добавляем пустую строку при смене часа
+            lines.append("") 
+            last_hour = hour
+        amt = r["amount"]  # signed int
+        amt_fmt = format_amount_with_dots(amt)
+        sign = "+" if amt > 0 else "-"
+        note = r.get("note", "")
+        lines.append(f"🕓 {time_str_local(ts)} {sign}{amt_fmt} {note}".rstrip())
+        if amt > 0:
+            day_income += amt
+        else:
+            day_expense += abs(amt)
+
+    overall = data.get("overall_balance", 0)
+    # Преобразуем суммы для вывода
+    inc_fmt = format_amount_with_dots(day_income)
+    exp_fmt = format_amount_with_dots(day_expense)
+    overall_fmt = format_amount_with_dots(overall)
+    lines.append("")
+    lines.append(f"📈 Приход дня: {inc_fmt}")
+    lines.append(f"📉 Расход дня: {exp_fmt}")
+    lines.append(f"💵 Общий остаток: {overall_fmt}")
+    return "\n".join(lines)
+
+# -------------------------
+# Удаление сообщений через время (используется и для автоудаления пингов)
+# -------------------------
+def delete_message_later(chat_id, message_id, delay=10):
+    def worker():
+        time.sleep(delay)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception as e:
+            # просто лог, не критично
+            print(f"Не удалось удалить сообщение {message_id} в {chat_id}: {e}")
+    threading.Thread(target=worker, daemon=True).start()
+
+# -------------------------
+# Вспомог. состояние редактирования (в памяти)
+# -------------------------
+# pending_actions[chat_id] = { "type": "delete_confirm"/"await_delete"/"await_modify"/"await_modify_input"/"await_reset_confirm", "payload": {...} }
+pending_actions = {}
+
+# -------------------------
+# Webhook endpoints
+# -------------------------
 @app.route("/" + TOKEN, methods=["POST"])
-def getMessage():
-    json_str = request.get_data().decode("UTF-8")
+def receive_update():
+    json_str = request.get_data().decode("utf-8")
     update = telebot.types.Update.de_json(json_str)
     bot.process_new_updates([update])
     return "!", 200
 
-
 @app.route("/", methods=["GET"])
-def webhook():
+def set_and_ping():
     bot.remove_webhook()
     webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}"
     bot.set_webhook(url=webhook_url)
     print(f"✅ Вебхук установлен: {webhook_url}")
 
-    # При каждом GET-запросе (например, от UptimeRobot)
-    # бот пишет в чат уведомление "✅ Я жив"
-    owner_id = os.getenv("OWNER_ID")
-    if owner_id:
+    # при пинге от UptimeRobot/Render отправляем "Я жив" в чат владельца и автоудаляем
+    if OWNER_ID:
         try:
-            bot.send_message(owner_id, "✅ Я жив (пинг от Render или UptimeRobot)")
+            msg = bot.send_message(int(OWNER_ID), "✅ Я жив (пинг от Render или UptimeRobot)")
+            delete_message_later(int(OWNER_ID), msg.message_id, delay=10)
         except Exception as e:
-            print(f"⚠️ Ошибка при отправке уведомления: {e}")
-
+            print(f"Ошибка при уведомлении владельца: {e}")
     return "Webhook active", 200
 
+# -------------------------
+# Клавиатуры
+# -------------------------
+def make_day_keyboard():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Редактировать", callback_data="edit_menu"))
+    return kb
 
+def make_edit_menu_keyboard():
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Изменить значение", callback_data="edit_modify"))
+    kb.add(types.InlineKeyboardButton("Удалить запись", callback_data="edit_delete"))
+    kb.add(types.InlineKeyboardButton("Обнулить всё (всех)", callback_data="edit_reset_all"))
+    kb.add(types.InlineKeyboardButton("Отмена", callback_data="edit_cancel"))
+    return kb
+
+def make_yes_no(cb_prefix):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Да", callback_data=f"{cb_prefix}_yes"),
+           types.InlineKeyboardButton("Нет", callback_data=f"{cb_prefix}_no"))
+    return kb
+
+# -------------------------
+# Обработка входящих сообщений (добавление записи и ожидание действий)
+# -------------------------
+@bot.message_handler(func=lambda m: True)
+def handle_message(message):
+    chat_id = message.chat.id
+    text = (message.text or "").strip()
+    # Если есть ожидаемое действие для этого пользователя — обработать
+    pa = pending_actions.get(str(chat_id))
+    if pa:
+        t = pa.get("type")
+        if t == "await_delete":
+            # ожидаем номер записи для удаления
+            try:
+                idx = int(text.strip())
+                # найдем запись с порядковым номером в today's list
+                pa["payload"] = {"delete_idx": idx}
+                pending_actions[str(chat_id)] = {"type": "delete_confirm", "payload": pa["payload"]}
+                bot.send_message(chat_id, f"Вы действительно хотите удалить запись номер {idx}? (Да/Нет)",
+                                 reply_markup=make_yes_no("confirm_delete"))
+            except Exception:
+                bot.send_message(chat_id, "Неверный номер. Отправь номер записи (целое число).")
+            return
+        elif t == "await_modify":
+            # Ожидаем ввод в формате "номер|новое значение" либо две строки — номер затем новое значение.
+            # Попытка распарсить "N|+1000 продукты" или "N\n+1000 продукты"
+            try:
+                if "|" in text:
+                    parts = text.split("|", 1)
+                    idx = int(parts[0].strip())
+                    new_text = parts[1].strip()
+                elif "\n" in text:
+                    parts = text.split("\n", 1)
+                    idx = int(parts[0].strip())
+                    new_text = parts[1].strip()
+                else:
+                    # не формат, попросим сначала номер, потом значение
+                    # сохраним и попросим новое значение
+                    idx = int(text.strip())
+                    pending_actions[str(chat_id)] = {"type": "await_modify_input", "payload": {"modify_idx": idx}}
+                    bot.send_message(chat_id, "ОК. Теперь отправь новое значение для этой записи (пример: +1000 хлеб или -500 бензин).")
+                    return
+                # имеем idx и new_text — выполняем изменение через общий обработчик
+                pending_actions[str(chat_id)] = {"type": "modify_confirm", "payload": {"modify_idx": idx, "new_text": new_text}}
+                bot.send_message(chat_id, f"Вы действительно хотите заменить запись #{idx} на `{new_text}`?", parse_mode="Markdown",
+                                 reply_markup=make_yes_no("confirm_modify"))
+            except Exception:
+                bot.send_message(chat_id, "Неверный формат. Отправь в формате `номер|новая запись` (например `3|+1000 зарплата`).", parse_mode="Markdown")
+            return
+        elif t == "await_modify_input":
+            # пришло новое значение для ранее указного индекса
+            payload = pa.get("payload", {})
+            idx = payload.get("modify_idx")
+            new_text = text.strip()
+            pending_actions[str(chat_id)] = {"type": "modify_confirm", "payload": {"modify_idx": idx, "new_text": new_text}}
+            bot.send_message(chat_id, f"Подтвердите замену записи #{idx} на `{new_text}`", parse_mode="Markdown", reply_markup=make_yes_no("confirm_modify"))
+            return
+        elif t == "await_reset_confirm":
+            # ожидаем да/нет в свободной форме (y/n)
+            if text.strip().lower() in ("y","yes","да","д"):
+                # выполнить сброс
+                data["overall_balance"] = 0
+                data["records"] = []
+                data["active_messages"] = {}
+                save_data(data)
+                bot.send_message(chat_id, "♻️ Все данные обнулены.")
+            else:
+                bot.send_message(chat_id, "Отмена. Данные не изменены.")
+            pending_actions.pop(str(chat_id), None)
+            return
+        # другие типы...
+    # Если это обычное сообщение — пытаемся распарсить запись
+    num, sign, raw = parse_first_number(text)
+    if num is None:
+        bot.reply_to(message, "❗ Я не нашёл число в сообщении. Пример: `+1000 хлеб` или `-500 бензин` или `1000 хлеб` (без знака считается расход).")
+        return
+
+    amt_signed = apply_sign_and_normalize(num, sign)
+    note = text[ (text.find(raw) + len(raw)) : ].strip() if raw in text else ""
+    # Добавляем запись в data
+    rec_id = data.get("next_id", 1)
+    ts = datetime.now(tz=ZoneInfo("UTC")).isoformat()  # хранить в UTC
+    rec = {
+        "id": rec_id,
+        "timestamp": ts,
+        "amount": amt_signed,
+        "note": note,
+        "owner": str(chat_id)
+    }
+    data["records"].append(rec)
+    data["next_id"] = rec_id + 1
+    data["overall_balance"] = data.get("overall_balance", 0) + amt_signed
+    save_data(data)
+
+    # Отправим подтверждение добавления (и сформируем новое окно дня)
+    # Сначала сформируем окно дня
+    local_day = date_str_local(datetime.fromisoformat(ts))
+    day_text = build_day_window(chat_id, local_day)
+    kb = make_day_keyboard()
+    sent = bot.send_message(chat_id, f"✅ Добавлено: {format_amount_with_dots(amt_signed) if amt_signed!=0 else '0'}\n{note}\n\n{day_text}", reply_markup=kb, parse_mode="Markdown")
+    # удалить предыдущее окно текущего дня (если было) — старое сообщение удаляем, но не трогаем окна прошлых дней
+    am = data.get("active_messages", {})
+    prev = am.get(local_day)
+    if prev:
+        try:
+            # удаляем предыдущее сообщение
+            bot.delete_message(prev["chat_id"], prev["message_id"])
+        except Exception as e:
+            print(f"Не удалось удалить предыдущее окно дня: {e}")
+    # сохраняем новый active message для этого дня
+    data["active_messages"][local_day] = {"chat_id": chat_id, "message_id": sent.message_id}
+    save_data(data)
+
+# -------------------------
+# Callback query handler (редактирование)
+# -------------------------
+@bot.callback_query_handler(func=lambda call: True)
+def callback_worker(call):
+    chat_id = call.message.chat.id
+    user = str(chat_id)
+    data_call = call.data
+
+    if data_call == "edit_menu":
+        # Показываем меню редактирования с инструкцией
+        bot.answer_callback_query(call.id)
+        bot.send_message(chat_id, "Меню редактирования. Выбери действие:", reply_markup=make_edit_menu_keyboard())
+        return
+
+    if data_call == "edit_cancel":
+        bot.answer_callback_query(call.id, "Отменено")
+        return
+
+    if data_call == "edit_modify":
+        bot.answer_callback_query(call.id)
+        # Просим ввести номер и новое значение
+        bot.send_message(chat_id, "Отправь в виде `номер|новое значение` (например `3|+1000 зарплата`) или сначала номер, а потом в следующем сообщении новое значение.")
+        pending_actions[user] = {"type": "await_modify", "payload": {}}
+        return
+
+    if data_call == "edit_delete":
+        bot.answer_callback_query(call.id)
+        bot.send_message(chat_id, "Отправь номер записи, которую хочешь удалить (номер в списке окна дня).")
+        pending_actions[user] = {"type": "await_delete", "payload": {}}
+        return
+
+    if data_call == "edit_reset_all":
+        bot.answer_callback_query(call.id)
+        bot.send_message(chat_id, "Вы уверены, что хотите обнулить ВСЕ данные навсегда? (Да/Нет)", reply_markup=make_yes_no("confirm_reset_all"))
+        pending_actions[user] = {"type": "await_reset_confirm", "payload": {}}
+        return
+
+    # Подтверждения (yes/no) для удаления/изменения/обнуления
+    if data_call.startswith("confirm_delete"):
+        bot.answer_callback_query(call.id)
+        # payload у нас должен уже быть в pending_actions
+        pa = pending_actions.get(user)
+        if not pa or pa.get("type") != "delete_confirm":
+            bot.send_message(chat_id, "Нет ожидающего удаления. Отмена.")
+            pending_actions.pop(user, None)
+            return
+        if data_call.endswith("_yes"):
+            idx = pa["payload"]["delete_idx"]
+            # Найдем запись с таким индексом в списке записей данного дня/чата.
+            deleted = delete_record_by_day_index(chat_id, idx)
+            if deleted:
+                bot.send_message(chat_id, f"✅ Запись #{idx} удалена.")
+            else:
+                bot.send_message(chat_id, f"❗ Запись #{idx} не найдена.")
+            pending_actions.pop(user, None)
+        else:
+            bot.send_message(chat_id, "Удаление отменено.")
+            pending_actions.pop(user, None)
+        return
+
+    if data_call.startswith("confirm_modify"):
+        bot.answer_callback_query(call.id)
+        pa = pending_actions.get(user)
+        if not pa or pa.get("type") != "modify_confirm":
+            bot.send_message(chat_id, "Нет ожидающего изменения. Отмена.")
+            pending_actions.pop(user, None)
+            return
+        if data_call.endswith("_yes"):
+            idx = pa["payload"]["modify_idx"]
+            new_text = pa["payload"]["new_text"]
+            ok = modify_record_by_day_index(chat_id, idx, new_text)
+            if ok:
+                bot.send_message(chat_id, f"✅ Запись #{idx} заменена.")
+            else:
+                bot.send_message(chat_id, f"❗ Не удалось заменить запись #{idx}.")
+            pending_actions.pop(user, None)
+        else:
+            bot.send_message(chat_id, "Изменение отменено.")
+            pending_actions.pop(user, None)
+        return
+
+    if data_call.startswith("confirm_reset_all"):
+        bot.answer_callback_query(call.id)
+        if data_call.endswith("_yes"):
+            data["overall_balance"] = 0
+            data["records"] = []
+            data["active_messages"] = {}
+            save_data(data)
+            bot.send_message(chat_id, "♻️ Все данные обнулены.")
+        else:
+            bot.send_message(chat_id, "Обнуление отменено.")
+        pending_actions.pop(user, None)
+        return
+
+# -------------------------
+# Вспомогательные операции: удалить запись/изменить запись по индексу в окне дня
+# -------------------------
+def get_day_records_for_chat(chat_id, day_date):
+    recs = []
+    for r in data["records"]:
+        if str(r.get("owner")) != str(chat_id):
+            continue
+        ts = datetime.fromisoformat(r["timestamp"]).astimezone(TZ)
+        if date_str_local(ts) == day_date:
+            recs.append((ts, r))
+    recs.sort(key=lambda x: x[0])
+    return recs
+
+def delete_record_by_day_index(chat_id, idx):
+    # idx — 1-based index in day's window (по порядку появления в окне)
+    # ищем record id и удаляем его из data["records"], корректируем overall_balance
+    # возвращает True если удалено
+    # получаем текущ day
+    now = datetime.now(tz=TZ)
+    day_date = date_str_local(now)
+    recs = get_day_records_for_chat(chat_id, day_date)
+    if idx < 1 or idx > len(recs):
+        return False
+    _, r = recs[idx-1]
+    try:
+        data["records"] = [x for x in data["records"] if x["id"] != r["id"]]
+        data["overall_balance"] = data.get("overall_balance", 0) - r["amount"]
+        save_data(data)
+        # обновим окно дня: отправим новое и удалим старое
+        update_day_window_after_change(chat_id, day_date)
+        return True
+    except Exception as e:
+        print(f"Ошибка удаления записи: {e}")
+        return False
+
+def modify_record_by_day_index(chat_id, idx, new_text):
+    # новый текст — нужно распарсить как обычное сообщение: взять первое число и note
+    now = datetime.now(tz=TZ)
+    day_date = date_str_local(now)
+    recs = get_day_records_for_chat(chat_id, day_date)
+    if idx < 1 or idx > len(recs):
+        return False
+    _, r = recs[idx-1]
+    # parse new_text similar to handle_message
+    num, sign, raw = parse_first_number(new_text)
+    if num is None:
+        return False
+    new_amt = apply_sign_and_normalize(num, sign)
+    note = new_text[ (new_text.find(raw) + len(raw)) : ].strip() if raw in new_text else ""
+    # find record in main list and update
+    for i, rr in enumerate(data["records"]):
+        if rr["id"] == r["id"]:
+            # adjust overall balance
+            data["overall_balance"] = data.get("overall_balance", 0) - rr["amount"] + new_amt
+            data["records"][i]["amount"] = new_amt
+            data["records"][i]["note"] = note
+            # update timestamp? оставляем прежний timestamp (можно добавить изменён флаг)
+            save_data(data)
+            update_day_window_after_change(chat_id, day_date)
+            return True
+    return False
+
+def update_day_window_after_change(chat_id, day_date):
+    # формируем новое окно и заменяем предыдущий: удаляем prev message и отправляем новый, сохраняем active_messages
+    day_text = build_day_window(chat_id, day_date)
+    kb = make_day_keyboard()
+    sent = bot.send_message(chat_id, day_text, reply_markup=kb)
+    # удалить предыдущий если есть
+    prev = data.get("active_messages", {}).get(day_date)
+    if prev:
+        try:
+            bot.delete_message(prev["chat_id"], prev["message_id"])
+        except Exception as e:
+            print(f"Не удалось удалить предыдущее окно при обновлении: {e}")
+    data["active_messages"][day_date] = {"chat_id": chat_id, "message_id": sent.message_id}
+    save_data(data)
+    # удалить подтверждающие сообщения если нужно — не делаем тут, они управляются выше
+
+# -------------------------
+# Команды быстрые: /баланс /отчет /сброс (сохраняем поведение)
+# -------------------------
 @bot.message_handler(commands=["баланс"])
-def balance(message):
-    bot.reply_to(message, f"💰 Текущий баланс: {data['balance']}₽")
-
+def cmd_balance(message):
+    chat_id = message.chat.id
+    overall = data.get("overall_balance", 0)
+    bot.reply_to(message, f"💰 Текущий общий баланс: {format_amount_with_dots(overall)}")
 
 @bot.message_handler(commands=["отчет"])
-def report(message):
-    if not data["records"]:
-        bot.reply_to(message, "📘 Пока нет записей.")
-        return
-    text = "\n".join(data["records"])
-    bot.reply_to(message, f"📒 Отчет:\n{text}")
-
+def cmd_report(message):
+    # отправим окно сегодняшнего дня
+    chat_id = message.chat.id
+    now = datetime.now(tz=TZ)
+    day_date = date_str_local(now)
+    day_text = build_day_window(chat_id, day_date)
+    sent = bot.send_message(chat_id, day_text, reply_markup=make_day_keyboard())
+    # удаляем предыдущий для дня
+    prev = data.get("active_messages", {}).get(day_date)
+    if prev:
+        try:
+            bot.delete_message(prev["chat_id"], prev["message_id"])
+        except Exception as e:
+            print(f"Не удалось удалить предыдущее окно при /отчет: {e}")
+    data["active_messages"][day_date] = {"chat_id": chat_id, "message_id": sent.message_id}
+    save_data(data)
 
 @bot.message_handler(commands=["сброс"])
-def reset(message):
-    data["balance"] = 0
-    data["records"] = []
-    save_data()
-    bot.reply_to(message, "🔄 Финансовый отчет сброшен.")
+def cmd_reset(message):
+    chat_id = message.chat.id
+    # подтверждение y/n через inline
+    pending_actions[str(chat_id)] = {"type": "await_reset_confirm", "payload": {}}
+    bot.send_message(chat_id, "Вы уверены, что хотите обнулить все данные? (Да/Нет)", reply_markup=make_yes_no("confirm_reset_all"))
 
-
-@bot.message_handler(func=lambda msg: True)
-def add_record(message):
-    text = message.text.strip()
-    if text.startswith("+") or text.startswith("-"):
-        try:
-            sign = 1 if text[0] == "+" else -1
-            parts = text[1:].strip().split(" ", 1)
-            amount = int(parts[0])
-            note = parts[1] if len(parts) > 1 else ""
-            data["balance"] += sign * amount
-            record = f"{'+' if sign > 0 else '-'}{amount} {note}"
-            data["records"].append(record)
-            save_data()
-            bot.reply_to(message, f"✅ Запись добавлена. Баланс: {data['balance']}₽")
-        except:
-            bot.reply_to(message, "⚠️ Ошибка в формате. Пример: +1000 хлеб или -500 бензин")
-    else:
-        bot.reply_to(message, "❗ Используй + или - для записи.")
-
-
+# -------------------------
+# Запуск приложения
+# -------------------------
 if __name__ == "__main__":
-    load_data()
-    print("🚀 Бот запущен и ожидает входящих сообщений...")
-
-    # Уведомляем владельца, что бот запущен
-    owner_id = os.getenv("OWNER_ID")
-    if owner_id:
+    print("🚀 Бот №4 запущен (webhook).")
+    # уведомление владельцу о запуске (автоудаление)
+    if OWNER_ID:
         try:
-            bot.send_message(owner_id, "✅ Бот 🦕запущен и готов к работе (Render)")
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №4 запущен и готов к работе (версия №4)")
+            delete_message_later(int(OWNER_ID), msg.message_id, delay=10)
         except Exception as e:
             print(f"⚠️ Ошибка при уведомлении владельца: {e}")
-
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # Ensure data saved on startup
+    save_data(data)
+    app.run(host="0.0.0.0", port=PORT)
