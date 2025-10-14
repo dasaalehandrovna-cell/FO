@@ -1,238 +1,138 @@
-# ---------- bot.py (версия 8) ----------
+import telebot
+import threading
 import os
 import json
-import datetime
-from flask import Flask, request
-import telebot
-from telebot import types
+from flask import Flask
 
-TOKEN = os.environ.get("BOT_TOKEN")
+# 🔒 Токен берём из переменной окружения
+TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise ValueError("❌ Ошибка: переменная окружения BOT_TOKEN не установлена!")
+
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
+# 📁 Файл для хранения данных
 DATA_FILE = "data.json"
 
-# ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
+# 🧮 Данные
+balance = 0
+records = []
 
+# 👤 ID владельца (можно узнать после первого /start)
+OWNER_ID_FILE = "owner_id.txt"
+
+
+# 🔹 Загрузка сохранённых данных
 def load_data():
-    if not os.path.exists(DATA_FILE):
-        return {"records": [], "balance": 0}
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    global balance, records
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            balance = data.get("balance", 0)
+            records = data.get("records", [])
+    else:
+        save_data()
 
-def save_data(data):
+
+# 🔹 Сохранение данных
+def save_data():
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump({"balance": balance, "records": records}, f, ensure_ascii=False, indent=2)
 
-def parse_amount(text):
-    text = text.replace(" ", "").replace(",", ".")
-    num = ""
-    for ch in text:
-        if ch.isdigit() or ch in "+-.":
-            num += ch
-        else:
-            break
-    try:
-        return float(num)
-    except:
-        return None
 
-def format_num(n):
-    return f"{n:,.0f}".replace(",", ".")
+# 🔹 Сохранение ID владельца
+def save_owner_id(user_id):
+    with open(OWNER_ID_FILE, "w") as f:
+        f.write(str(user_id))
 
-# ====================== ЛОГИКА ======================
 
-def format_summary(records, balance):
-    now = datetime.datetime.now()
-    date_str = now.strftime("📅 %Y-%m-%d\n\n")
-    output = date_str
+# 🔹 Получение ID владельца
+def get_owner_id():
+    if os.path.exists(OWNER_ID_FILE):
+        with open(OWNER_ID_FILE, "r") as f:
+            return f.read().strip()
+    return None
 
-    current_hour = None
-    day_income = day_expense = 0
 
-    for rec in records:
-        t = rec["time"]
-        amt = rec["amount"]
-        desc = rec["desc"]
-        hour = t.split(":")[0]
-        if hour != current_hour:
-            output += f"\n🕓 {t} {amt:+.0f} {desc}\n"
-            current_hour = hour
-        else:
-            output += f"🕓 {t} {amt:+.0f} {desc}\n"
-        if amt > 0:
-            day_income += amt
-        else:
-            day_expense += abs(amt)
-
-    output += (
-        f"\n📈 Приход дня: {format_num(day_income)}"
-        f"\n📉 Расход дня: {format_num(day_expense)}"
-        f"\n💵 Общий остаток: {'-' if balance < 0 else ''}{format_num(abs(balance))}"
-    )
-    return output
-
-def new_day_needed(records):
-    today = datetime.date.today().isoformat()
-    if not records:
-        return True
-    last_date = records[-1]["date"]
-    return last_date != today
-
-# ====================== ОБРАБОТКА СООБЩЕНИЙ ======================
-
-@bot.message_handler(commands=["start"])
-def start_msg(message):
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    markup.row("➕ Добавить", "✏️ Редактировать")
-    markup.row("💾 Обнулить всё")
-    bot.send_message(message.chat.id, "Бот запущен ✅", reply_markup=markup)
-
-@bot.message_handler(func=lambda m: True)
-def handle_message(message):
-    text = message.text.strip()
-    chat_id = message.chat.id
-
-    data = load_data()
-    records = data["records"]
-    balance = data["balance"]
-
-    if text == "💾 Обнулить всё":
-        confirm = types.InlineKeyboardMarkup()
-        confirm.add(
-            types.InlineKeyboardButton("✅ Да", callback_data="reset_yes"),
-            types.InlineKeyboardButton("❌ Нет", callback_data="reset_no")
-        )
-        bot.send_message(chat_id, "Вы уверены, что хотите обнулить все данные?", reply_markup=confirm)
-        return
-
-    if text == "✏️ Редактировать":
-        today = datetime.date.today().isoformat()
-        today_records = [r for r in records if r["date"] == today]
-        if not today_records:
-            bot.send_message(chat_id, "Сегодня ещё нет записей.")
-            return
-        kb = types.InlineKeyboardMarkup()
-        for i, r in enumerate(today_records):
-            label = f"{r['time']} {r['amount']:+.0f} {r['desc']}"
-            kb.add(types.InlineKeyboardButton(label, callback_data=f"edit_{i}"))
-        bot.send_message(chat_id, "Выбери запись для редактирования:", reply_markup=kb)
-        return
-
-    amount = parse_amount(text)
-    if amount is None:
-        return
-
-    # Берём только первое число, остальное описание
-    parts = text.split(maxsplit=1)
-    desc = parts[1] if len(parts) > 1 else ""
-
-    now = datetime.datetime.now()
-    record = {
-        "date": now.date().isoformat(),
-        "time": now.strftime("%H:%M"),
-        "amount": amount,
-        "desc": desc
-    }
-
-    if new_day_needed(records):
-        summary = format_summary(records, balance)
-        bot.send_message(chat_id, summary)
-        records = []
-
-    records.append(record)
-    balance += amount
-    data["records"] = records
-    data["balance"] = balance
-    save_data(data)
-
-    msg = format_summary(records, balance)
-    bot.send_message(chat_id, msg)
-
-# ====================== CALLBACK ======================
-
-@bot.callback_query_handler(func=lambda call: True)
-def callback_query(call):
-    chat_id = call.message.chat.id
-    data = load_data()
-
-    if call.data == "reset_yes":
-        data = {"records": [], "balance": 0}
-        save_data(data)
-        bot.edit_message_text("✅ Все данные обнулены", chat_id, call.message.id)
-        return
-    elif call.data == "reset_no":
-        bot.edit_message_text("❌ Отменено", chat_id, call.message.id)
-        return
-
-    if call.data.startswith("edit_"):
-        index = int(call.data.split("_")[1])
-        today = datetime.date.today().isoformat()
-        today_records = [r for r in data["records"] if r["date"] == today]
-        rec = today_records[index]
-
-        kb = types.InlineKeyboardMarkup()
-        kb.add(
-            types.InlineKeyboardButton("✏️ Изменить", callback_data=f"change_{index}"),
-            types.InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_{index}"),
-            types.InlineKeyboardButton("↩️ Отмена", callback_data="cancel")
-        )
-        text = f"Запись: {rec['time']} {rec['amount']:+.0f} {rec['desc']}"
-        bot.edit_message_text(text, chat_id, call.message.id, reply_markup=kb)
-
-    elif call.data.startswith("delete_"):
-        index = int(call.data.split("_")[1])
-        today = datetime.date.today().isoformat()
-        records = data["records"]
-        today_records = [r for r in records if r["date"] == today]
-        rec = today_records[index]
-        records.remove(rec)
-        data["records"] = records
-        data["balance"] -= rec["amount"]
-        save_data(data)
-        bot.edit_message_text("🗑 Запись удалена", chat_id, call.message.id)
-
-    elif call.data.startswith("change_"):
-        index = int(call.data.split("_")[1])
-        bot.edit_message_text("Введите новое значение для записи:", chat_id, call.message.id)
-        bot.register_next_step_handler(call.message, lambda m: change_value(m, index))
-
-    elif call.data == "cancel":
-        bot.edit_message_text("↩️ Отменено", chat_id, call.message.id)
-
-def change_value(message, index):
-    data = load_data()
-    today = datetime.date.today().isoformat()
-    records = data["records"]
-    today_records = [r for r in records if r["date"] == today]
-
-    rec = today_records[index]
-    old_amount = rec["amount"]
-
-    new_amount = parse_amount(message.text)
-    if new_amount is None:
-        bot.send_message(message.chat.id, "Некорректное значение.")
-        return
-
-    data["balance"] += new_amount - old_amount
-    rec["amount"] = new_amount
-    rec["desc"] = "изменено вручную"
-    save_data(data)
-
-    bot.send_message(message.chat.id, "✏️ Запись изменена\nДетали изменения записи")
-
-# ====================== FLASK WEBHOOK ======================
-
-@app.route("/" + TOKEN, methods=["POST"])
-def webhook():
-    bot.process_new_updates([telebot.types.Update.de_json(request.stream.read().decode("utf-8"))])
-    return "!", 200
-
-@app.route("/")
-def index():
+@app.route('/')
+def home():
     return "Бот работает ✅"
 
+
+@bot.message_handler(commands=['start'])
+def start_message(message):
+    save_owner_id(message.chat.id)
+    bot.send_message(
+        message.chat.id,
+        "👋 Привет! Я веду твой Финансовый Отчёт (ФО).\n\n"
+        "Примеры:\n"
+        "`+1000 хлеб` — приход\n"
+        "`-500 бензин` — расход\n\n"
+        "Команды:\n"
+        "/баланс — показать текущий остаток\n"
+        "/отчет — показать все операции\n"
+        "/сброс — обнулить отчёт",
+        parse_mode="Markdown"
+    )
+
+
+@bot.message_handler(commands=['баланс'])
+def show_balance(message):
+    bot.send_message(message.chat.id, f"💰 Текущий баланс: {balance}")
+
+
+@bot.message_handler(commands=['отчет'])
+def show_report(message):
+    if not records:
+        bot.send_message(message.chat.id, "📂 Отчёт пуст.")
+    else:
+        text = "\n".join(records)
+        bot.send_message(message.chat.id, f"📘 Отчёт:\n\n{text}\n\n💰 Баланс: {balance}")
+
+
+@bot.message_handler(commands=['сброс'])
+def reset_data(message):
+    global balance, records
+    balance = 0
+    records = []
+    save_data()
+    bot.send_message(message.chat.id, "♻️ Финансовый отчёт сброшен. Баланс: 0")
+
+
+@bot.message_handler(func=lambda message: True)
+def handle_transaction(message):
+    global balance
+    text = message.text.strip()
+
+    if text.startswith('+') or text.startswith('-'):
+        try:
+            parts = text.split(' ', 1)
+            amount = int(parts[0])
+            comment = parts[1] if len(parts) > 1 else ''
+            balance += amount
+            record = f"{'Приход' if amount > 0 else 'Расход'} {amount}: {comment}"
+            records.append(record)
+            save_data()
+            bot.send_message(message.chat.id, f"✅ Добавлено: {record}\n💰 Баланс: {balance}")
+        except Exception:
+            bot.send_message(message.chat.id, "⚠️ Ошибка формата. Пример: `+1000 хлеб`", parse_mode="Markdown")
+    else:
+        bot.send_message(message.chat.id, "📎 Используй `+` или `-` перед суммой.", parse_mode="Markdown")
+
+
+def run_bot():
+    load_data()
+    owner_id = get_owner_id()
+    if owner_id:
+        try:
+            bot.send_message(owner_id, "✅ Бот запущен и готов к работе.")
+        except Exception:
+            print("⚠️ Не удалось отправить уведомление о запуске.")
+    bot.polling(none_stop=True)
+
+
 if __name__ == "__main__":
-    bot.remove_webhook()
-    bot.set_webhook(url="https://fo-1.onrender.com/" + TOKEN)
+    threading.Thread(target=run_bot).start()
     app.run(host="0.0.0.0", port=10000)
