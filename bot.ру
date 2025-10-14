@@ -1,5 +1,5 @@
-# Код бота №5
-# Webhook-бот (на Render). Версия №5 — короткие ID, редактирование в том же окне, выбор записи перед вводом новых данных.
+# Код бота №6
+# Улучшенная версия с короткими ID и редактированием в том же окне
 # Требует в окружении: BOT_TOKEN, OWNER_ID
 # requirements.txt: pyTelegramBotAPI==4.23.0, flask
 
@@ -8,40 +8,28 @@ import json
 import time
 import threading
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import telebot
 from flask import Flask, request
 from telebot import types
 
-# -------------------------
-# Настройки
-# -------------------------
 TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID")  # строка
-TZ = ZoneInfo("America/Argentina/Catamarca")  # местное время пользователя
+OWNER_ID = os.getenv("OWNER_ID")
+TZ = ZoneInfo("America/Argentina/Catamarca")
 DATA_FILE = "data.json"
 PORT = int(os.environ.get("PORT", 5000))
 
 if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен в переменных окружения!")
-if not OWNER_ID:
-    print("⚠️ OWNER_ID не установлен. Некоторые уведомления/редактирование будут недоступны.")
+    raise ValueError("BOT_TOKEN не установлен!")
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
-# -------------------------
-# Структура данных, сохраняемая в data.json
-# {
-#   "overall_balance": int,
-#   "records": [ { "id": int, "short_id": str, "timestamp": iso, "amount": int, "note": str, "owner": chat_id } , ... ],
-#   "active_messages": { "YYYY-MM-DD": { "chat_id": id, "message_id": id } },
-#   "next_id": int
-# }
-# -------------------------
-
+# --------------------------------------
+# структура данных
+# --------------------------------------
 def default_data():
     return {
         "overall_balance": 0,
@@ -50,61 +38,24 @@ def default_data():
         "next_id": 1
     }
 
-# -------------------------
-# Загрузка/Сохранение + присвоение short_id если нужно
-# -------------------------
-def to_base36(n: int) -> str:
-    # короткий алфавит для компактного id
-    if n < 0:
-        n = -n
-    digits = "0123456789abcdefghijklmnopqrstuvwxyz"
-    if n == 0:
-        return "0"
-    s = ""
-    while n > 0:
-        n, rem = divmod(n, 36)
-        s = digits[rem] + s
-    return s
-
 def load_data():
-    data = default_data()
     if os.path.exists(DATA_FILE):
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             try:
-                data = json.load(f)
+                return json.load(f)
             except Exception:
-                data = default_data()
-    # гарантируем наличие next_id и short_id для существующих записей
-    if "next_id" not in data:
-        # вычислим max id + 1
-        maxid = 0
-        for r in data.get("records", []):
-            try:
-                maxid = max(maxid, int(r.get("id", 0)))
-            except Exception:
-                pass
-        data["next_id"] = maxid + 1
-    # присвоим short_id если отсутствует
-    changed = False
-    for r in data.get("records", []):
-        if "short_id" not in r or not r["short_id"]:
-            # используем базу на id (если есть) или на sequential next_id
-            base = r.get("id") or data["next_id"]
-            r["short_id"] = to_base36(int(base))
-            changed = True
-    if changed:
-        save_data(data)
-    return data
+                return default_data()
+    return default_data()
 
-def save_data(data):
+def save_data(d):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(d, f, ensure_ascii=False, indent=2)
 
 data = load_data()
 
-# -------------------------
-# Утилиты: парсинг чисел и форматирование (как в №4)
-# -------------------------
+# --------------------------------------
+# Утилиты
+# --------------------------------------
 NUMBER_RE = re.compile(r'([+-]?\s*[\d][\d\s\.,]*)')
 
 def parse_first_number(text):
@@ -115,510 +66,305 @@ def parse_first_number(text):
         return None, None, None
     raw = m.group(1)
     s = raw.strip()
-    sign = None
     if s.startswith('+'):
         sign = '+'
-        digits_part = s[1:].strip()
+        digits = s[1:].strip()
     elif s.startswith('-'):
         sign = '-'
-        digits_part = s[1:].strip()
+        digits = s[1:].strip()
     else:
         sign = ''
-        digits_part = s
-    digits_norm = re.sub(r'[\s\.,]', '', digits_part)
+        digits = s
+    digits_norm = re.sub(r'[\s\.,]', '', digits)
     digits_norm = re.match(r'(\d+)', digits_norm)
     if not digits_norm:
         return None, None, None
-    num = int(digits_norm.group(1))
-    return num, sign, raw
+    return int(digits_norm.group(1)), sign, raw
 
-def apply_sign_and_normalize(num, sign):
-    if sign == '+':
-        return num
-    else:
-        return -num
+def apply_sign(num, sign):
+    return num if sign == '+' else -num
 
-def format_amount_with_dots(n):
-    s = f"{abs(n):,}"
-    s = s.replace(",", ".")
-    return s
+def fmt(n):
+    return f"{abs(n):,}".replace(",", ".")
 
-# -------------------------
-# Формирование окна дня (включаем short_id в вывод)
-# -------------------------
-def date_str_local(dt):
+def short_id(n):
+    """короткий id: например 1 → A1, 27 → A27"""
+    return f"R{n}"
+
+def date_str(dt):
     return dt.astimezone(TZ).strftime("%Y-%m-%d")
 
-def time_str_local(dt):
+def time_str(dt):
     return dt.astimezone(TZ).strftime("%H:%M")
 
-def build_day_window(chat_id, day_date):
+# --------------------------------------
+# построение окна дня
+# --------------------------------------
+def build_day_window(chat_id, day):
     recs = []
     for r in data["records"]:
+        if str(r["owner"]) != str(chat_id):
+            continue
         ts = datetime.fromisoformat(r["timestamp"]).astimezone(TZ)
-        if date_str_local(ts) == day_date and str(r.get("owner")) == str(chat_id):
-            recs.append( (ts, r) )
+        if date_str(ts) == day:
+            recs.append((ts, r))
     recs.sort(key=lambda x: x[0])
     if not recs:
         return "📘 За этот день ещё нет записей."
 
-    lines = []
-    header = f"📅 {day_date}\n"
-    lines.append(header)
+    lines = [f"📅 {day}\n"]
     last_hour = None
-    day_income = 0
-    day_expense = 0
+    inc, exp = 0, 0
     for ts, r in recs:
         hour = ts.strftime("%H")
-        if last_hour is None:
-            last_hour = hour
-        elif hour != last_hour:
+        if last_hour and hour != last_hour:
             lines.append("")
-            last_hour = hour
+        last_hour = hour
         amt = r["amount"]
-        amt_fmt = format_amount_with_dots(amt)
         sign = "+" if amt > 0 else "-"
-        note = r.get("note", "")
-        sid = r.get("short_id", "")
-        # включаем короткий id в строку для понятности
-        lines.append(f"🕓 {time_str_local(ts)} [{sid}] {sign}{amt_fmt} {note}".rstrip())
         if amt > 0:
-            day_income += amt
+            inc += amt
         else:
-            day_expense += abs(amt)
-    overall = data.get("overall_balance", 0)
+            exp += abs(amt)
+        lines.append(f"{short_id(r['id'])} | {sign}{fmt(amt)} {r.get('note','')}".rstrip())
+
+    overall = data["overall_balance"]
     lines.append("")
-    lines.append(f"📈 Приход дня: {format_amount_with_dots(day_income)}")
-    lines.append(f"📉 Расход дня: {format_amount_with_dots(day_expense)}")
-    lines.append(f"💵 Общий остаток: {format_amount_with_dots(overall)}")
+    lines.append(f"📈 Приход дня: {fmt(inc)}")
+    lines.append(f"📉 Расход дня: {fmt(exp)}")
+    lines.append(f"💵 Общий остаток: {fmt(overall)}")
     return "\n".join(lines)
 
-# -------------------------
-# Удаление сообщений через время (как раньше)
-# -------------------------
-def delete_message_later(chat_id, message_id, delay=10):
-    def worker():
-        time.sleep(delay)
-        try:
-            bot.delete_message(chat_id, message_id)
-        except Exception as e:
-            print(f"Не удалось удалить сообщение {message_id} в {chat_id}: {e}")
-    threading.Thread(target=worker, daemon=True).start()
-
-# -------------------------
-# Вспомог. состояние редактирования (в памяти)
-# -------------------------
-# pending_actions[chat_id] = { "type": "await_modify_input"/"await_reset_confirm"/... , "payload": {...} }
-pending_actions = {}
-
-# -------------------------
-# Вспомогательные функции по short_id
-# -------------------------
-def find_record_by_short_id(short_id):
-    for r in data["records"]:
-        if r.get("short_id") == short_id:
-            return r
-    return None
-
-def delete_record_by_short_id(chat_id, short_id):
-    r = find_record_by_short_id(short_id)
-    if not r or str(r.get("owner")) != str(chat_id):
-        return False
-    try:
-        data["records"] = [x for x in data["records"] if x["short_id"] != short_id]
-        data["overall_balance"] = data.get("overall_balance", 0) - r["amount"]
-        save_data(data)
-        # обновим окно дня
-        today = date_str_local(datetime.now(tz=TZ))
-        update_day_window_after_change(chat_id, today)
-        return True
-    except Exception as e:
-        print(f"Ошибка удаления по short_id: {e}")
-        return False
-
-def modify_record_by_short_id(chat_id, short_id, new_text):
-    r = find_record_by_short_id(short_id)
-    if not r or str(r.get("owner")) != str(chat_id):
-        return False
-    num, sign, raw = parse_first_number(new_text)
-    if num is None:
-        return False
-    new_amt = apply_sign_and_normalize(num, sign)
-    note = new_text[ (new_text.find(raw) + len(raw)) : ].strip() if raw in new_text else ""
-    for i, rr in enumerate(data["records"]):
-        if rr["short_id"] == short_id:
-            data["overall_balance"] = data.get("overall_balance", 0) - rr["amount"] + new_amt
-            data["records"][i]["amount"] = new_amt
-            data["records"][i]["note"] = note
-            save_data(data)
-            today = date_str_local(datetime.now(tz=TZ))
-            update_day_window_after_change(chat_id, today)
-            return True
-    return False
-
-# -------------------------
-# Кнопки / клавиатуры (адаптированы)
-# -------------------------
-def make_day_keyboard():
+# --------------------------------------
+# клавиатуры
+# --------------------------------------
+def kb_main():
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Редактировать", callback_data="edit_menu"))
     return kb
 
-def make_edit_main_keyboard():
+def kb_edit_menu():
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Изменить запись", callback_data="start_choose:modify"))
-    kb.add(types.InlineKeyboardButton("Удалить запись", callback_data="start_choose:delete"))
-    kb.add(types.InlineKeyboardButton("Обнулить всё (всех)", callback_data="edit_reset_all"))
-    kb.add(types.InlineKeyboardButton("Отмена", callback_data="edit_cancel"))
+    kb.add(types.InlineKeyboardButton("Изменить", callback_data="edit_modify"))
+    kb.add(types.InlineKeyboardButton("Удалить", callback_data="edit_delete"))
+    kb.add(types.InlineKeyboardButton("Обнулить всё", callback_data="edit_reset"))
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_main"))
     return kb
 
-def make_yes_no(cb_prefix):
+def kb_records_for_edit(chat_id, day):
+    recs = []
+    for ts, r in get_day_records(chat_id, day):
+        recs.append((r["id"], f"{short_id(r['id'])} {r.get('note','') or ''}"))
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Да", callback_data=f"{cb_prefix}_yes"),
-           types.InlineKeyboardButton("Нет", callback_data=f"{cb_prefix}_no"))
+    for rid, txt in recs:
+        kb.add(types.InlineKeyboardButton(txt, callback_data=f"select_{rid}"))
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_edit"))
     return kb
 
-def make_records_list_keyboard(chat_id, day_date, mode):
-    # mode: 'modify' or 'delete'
+def kb_yes_no(prefix):
     kb = types.InlineKeyboardMarkup()
-    recs = get_day_records_for_chat(chat_id, day_date)
-    if not recs:
-        kb.add(types.InlineKeyboardButton("Нет записей за этот день", callback_data="no_op"))
-        kb.add(types.InlineKeyboardButton("Назад", callback_data="edit_menu"))
-        return kb
-    # добавляем по одной кнопке на запись: label "[sid] ±amount note"
-    for idx, (ts, r) in enumerate(recs, start=1):
-        sid = r.get("short_id", "")
-        amt = r["amount"]
-        sign = "+" if amt>0 else "-"
-        label = f"{idx}) [{sid}] {sign}{format_amount_with_dots(amt)} {r.get('note','')}"
-        cb = f"select_rec:{mode}:{sid}"
-        # обрезаем длину метки до 64 байт если нужно (telegram кнопки длинные, но всё же)
-        kb.add(types.InlineKeyboardButton(label[:60], callback_data=cb))
-    kb.add(types.InlineKeyboardButton("Отмена", callback_data="edit_menu"))
+    kb.add(
+        types.InlineKeyboardButton("Да", callback_data=f"{prefix}_yes"),
+        types.InlineKeyboardButton("Нет", callback_data=f"{prefix}_no")
+    )
     return kb
 
-# -------------------------
-# Webhook endpoints
-# -------------------------
-@app.route("/" + TOKEN, methods=["POST"])
-def receive_update():
-    json_str = request.get_data().decode("utf-8")
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
-    return "!", 200
+# --------------------------------------
+# вспомогательные операции
+# --------------------------------------
+def get_day_records(chat_id, day):
+    res = []
+    for r in data["records"]:
+        if str(r["owner"]) != str(chat_id):
+            continue
+        ts = datetime.fromisoformat(r["timestamp"]).astimezone(TZ)
+        if date_str(ts) == day:
+            res.append((ts, r))
+    res.sort(key=lambda x: x[0])
+    return res
 
-@app.route("/", methods=["GET"])
-def set_and_ping():
-    bot.remove_webhook()
-    webhook_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}"
-    bot.set_webhook(url=webhook_url)
-    print(f"✅ Вебхук установлен: {webhook_url}")
+def update_day_window(chat_id, day, call_msg=None):
+    text = build_day_window(chat_id, day)
+    if call_msg:
+        bot.edit_message_text(
+            text, chat_id, call_msg.message_id,
+            reply_markup=kb_main()
+        )
+        data["active_messages"][day] = {"chat_id": chat_id, "message_id": call_msg.message_id}
+        save_data(data)
+    else:
+        sent = bot.send_message(chat_id, text, reply_markup=kb_main())
+        data["active_messages"][day] = {"chat_id": chat_id, "message_id": sent.message_id}
+        save_data(data)
 
-    if OWNER_ID:
-        try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Я жив №5 (пинг от Render или UptimeRobot)")
-            delete_message_later(int(OWNER_ID), msg.message_id, delay=10)
-        except Exception as e:
-            print(f"Ошибка при уведомлении владельца: {e}")
-    return "Webhook active", 200
-
-# -------------------------
-# Обработка входящих сообщений (добавление записи и ожидание действий)
-# -------------------------
+# --------------------------------------
+# обработка сообщений
+# --------------------------------------
 @bot.message_handler(func=lambda m: True)
-def handle_message(message):
-    chat_id = message.chat.id
-    text = (message.text or "").strip()
-    pa = pending_actions.get(str(chat_id))
-    if pa:
-        t = pa.get("type")
-        if t == "await_modify_input":
-            payload = pa.get("payload", {})
-            short_id = payload.get("record_short_id")
-            # попытка изменить запись
-            ok = modify_record_by_short_id(chat_id, short_id, text)
-            if ok:
-                bot.send_message(chat_id, f"✅ Запись [{short_id}] обновлена.")
-            else:
-                bot.send_message(chat_id, f"❗ Не удалось обновить запись [{short_id}]. Проверь формат (+1000 хлеб).")
-            pending_actions.pop(str(chat_id), None)
-            return
-        elif t == "await_reset_confirm":
-            if text.strip().lower() in ("y","yes","да","д"):
-                data["overall_balance"] = 0
-                data["records"] = []
-                data["active_messages"] = {}
-                save_data(data)
-                bot.send_message(chat_id, "♻️ Все данные обнулены.")
-            else:
-                bot.send_message(chat_id, "Отмена. Данные не изменены.")
-            pending_actions.pop(str(chat_id), None)
-            return
-        # другие типы можно добавить...
-    # обычное сообщение — парсим запись (как прежде)
-    num, sign, raw = parse_first_number(text)
+def handle_message(m):
+    chat_id = m.chat.id
+    txt = m.text.strip()
+    num, sign, raw = parse_first_number(txt)
     if num is None:
-        bot.reply_to(message, "❗ Я не нашёл число в сообщении. Пример: `+1000 хлеб` или `-500 бензин` или `1000 хлеб` (без знака считается расход).")
+        bot.reply_to(m, "❗ Пример: `+1000 хлеб` или `-500 бензин`.", parse_mode="Markdown")
         return
-
-    amt_signed = apply_sign_and_normalize(num, sign)
-    note = text[ (text.find(raw) + len(raw)) : ].strip() if raw in text else ""
-    rec_id = data.get("next_id", 1)
-    short_id = to_base36(rec_id)
-    ts = datetime.now(tz=ZoneInfo("UTC")).isoformat()
+    amt = apply_sign(num, sign)
+    note = txt[(txt.find(raw) + len(raw)) :].strip() if raw in txt else ""
+    rec_id = data["next_id"]
+    data["next_id"] += 1
     rec = {
         "id": rec_id,
-        "short_id": short_id,
-        "timestamp": ts,
-        "amount": amt_signed,
+        "timestamp": datetime.now().astimezone(ZoneInfo("UTC")).isoformat(),
+        "amount": amt,
         "note": note,
         "owner": str(chat_id)
     }
     data["records"].append(rec)
-    data["next_id"] = rec_id + 1
-    data["overall_balance"] = data.get("overall_balance", 0) + amt_signed
+    data["overall_balance"] += amt
     save_data(data)
 
-    local_day = date_str_local(datetime.fromisoformat(ts))
-    day_text = build_day_window(chat_id, local_day)
-    kb = make_day_keyboard()
-    sent = bot.send_message(chat_id, f"✅ Добавлено: {format_amount_with_dots(amt_signed) if amt_signed!=0 else '0'}\n{note}\n\n{day_text}", reply_markup=kb, parse_mode="Markdown")
-    am = data.get("active_messages", {})
-    prev = am.get(local_day)
-    if prev:
-        try:
-            bot.delete_message(prev["chat_id"], prev["message_id"])
-        except Exception as e:
-            print(f"Не удалось удалить предыдущее окно дня: {e}")
-    data["active_messages"][local_day] = {"chat_id": chat_id, "message_id": sent.message_id}
-    save_data(data)
+    day = date_str(datetime.now(tz=TZ))
+    update_day_window(chat_id, day)
 
-# -------------------------
-# Callback query handler (редактирование — в том же окне)
-# -------------------------
-@bot.callback_query_handler(func=lambda call: True)
-def callback_worker(call):
-    call_data = call.data or ""
+# --------------------------------------
+# callback queries
+# --------------------------------------
+@bot.callback_query_handler(func=lambda c: True)
+def callbacks(call):
     chat_id = call.message.chat.id
-    user = str(chat_id)
+    day = date_str(datetime.now(tz=TZ))
+    data_call = call.data
 
-    # Небольшая защита: ответы на callback должны подтверждаться
-    try:
+    if data_call == "edit_menu":
         bot.answer_callback_query(call.id)
-    except Exception:
-        pass
-
-    # Основное меню редактирования — обновляем текущее сообщение (в том же окне)
-    if call_data == "edit_menu":
-        # заменяем текст сообщения, не отправляя новое
-        try:
-            bot.edit_message_text("Меню редактирования. Выбери действие:", chat_id, call.message.message_id, reply_markup=make_edit_main_keyboard())
-        except Exception as e:
-            # если нельзя редактировать — отправим обычное сообщение (fallback)
-            print(f"Не удалось редактировать сообщение при edit_menu: {e}")
-            bot.send_message(chat_id, "Меню редактирования. Выбери действие:", reply_markup=make_edit_main_keyboard())
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_edit_menu())
         return
 
-    if call_data == "edit_cancel":
-        # просто вернём окно назад — покажем текущее окно дня заново
-        now = datetime.now(tz=TZ)
-        day_date = date_str_local(now)
-        day_text = build_day_window(chat_id, day_date)
-        try:
-            bot.edit_message_text(day_text, chat_id, call.message.message_id, reply_markup=make_day_keyboard())
-        except Exception as e:
-            print(f"Не удалось вернуть окно дня при edit_cancel: {e}")
-            bot.send_message(chat_id, day_text, reply_markup=make_day_keyboard())
+    if data_call == "back_main":
+        bot.answer_callback_query(call.id)
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_main())
         return
 
-    if call_data.startswith("start_choose:"):
-        mode = call_data.split(":",1)[1]  # 'modify' или 'delete'
-        # сформируем список записей за текущий день и вставим кнопки в то же сообщение
-        now = datetime.now(tz=TZ)
-        day_date = date_str_local(now)
-        title = "Выберите запись для изменения:" if mode=="modify" else "Выберите запись для удаления:"
-        kb = make_records_list_keyboard(chat_id, day_date, mode)
-        try:
-            bot.edit_message_text(title, chat_id, call.message.message_id, reply_markup=kb)
-        except Exception as e:
-            print(f"Не удалось редактировать сообщение при start_choose: {e}")
-            bot.send_message(chat_id, title, reply_markup=kb)
+    if data_call == "back_edit":
+        bot.answer_callback_query(call.id)
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_edit_menu())
         return
 
-    # Выбор записи из списка: select_rec:mode:shortid
-    if call_data.startswith("select_rec:"):
-        parts = call_data.split(":",2)
-        if len(parts) < 3:
-            bot.send_message(chat_id, "Неверный выбор.")
-            return
-        mode = parts[1]
-        short_id = parts[2]
-        if mode == "modify":
-            # В том же сообщении просим ввести новое значение; сохраним pending_actions
-            try:
-                bot.edit_message_text(f"Введите новое значение для записи [{short_id}]. Пример: +1000 зарплата\n\n(Вводите обычным сообщением в чат; нажмите 'Отмена' чтобы вернуться.)", chat_id, call.message.message_id, reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("Отмена", callback_data="edit_menu")))
-            except Exception as e:
-                print(f"Не удалось редактировать сообщение при select_rec modify: {e}")
-                bot.send_message(chat_id, f"Введите новое значение для записи [{short_id}]. Пример: +1000 зарплата")
-            pending_actions[user] = {"type": "await_modify_input", "payload": {"record_short_id": short_id}}
-            return
-        elif mode == "delete":
-            # Подтверждение удаления в том же сообщении (да/нет)
-            kb = make_yes_no(f"confirm_delete:{short_id}")
-            try:
-                bot.edit_message_text(f"Вы уверены, что хотите удалить запись [{short_id}] ?", chat_id, call.message.message_id, reply_markup=kb)
-            except Exception as e:
-                print(f"Не удалось редактировать сообщение при select_rec delete: {e}")
-                bot.send_message(chat_id, f"Вы уверены, что хотите удалить запись [{short_id}] ?", reply_markup=kb)
-            return
-        else:
-            bot.send_message(chat_id, "Неподдерживаемый режим.")
-            return
-
-    # Подтверждение удаления: confirm_delete:<shortid>_yes/no
-    if call_data.startswith("confirm_delete:"):
-        # format: confirm_delete:<shortid>_yes  OR confirm_delete:<shortid>_no
-        tail = call_data[len("confirm_delete:"):]
-        if tail.endswith("_yes"):
-            short_id = tail[:-4]
-            ok = delete_record_by_short_id(chat_id, short_id)
-            if ok:
-                try:
-                    bot.edit_message_text(f"✅ Запись [{short_id}] удалена.", chat_id, call.message.message_id)
-                except Exception:
-                    bot.send_message(chat_id, f"✅ Запись [{short_id}] удалена.")
-            else:
-                try:
-                    bot.edit_message_text(f"❗ Не удалось удалить запись [{short_id}].", chat_id, call.message.message_id)
-                except Exception:
-                    bot.send_message(chat_id, f"❗ Не удалось удалить запись [{short_id}].")
-        else:
-            # отмена
-            try:
-                bot.edit_message_text("Удаление отменено.", chat_id, call.message.message_id, reply_markup=make_edit_main_keyboard())
-            except Exception:
-                bot.send_message(chat_id, "Удаление отменено.", reply_markup=make_edit_main_keyboard())
+    if data_call == "edit_modify":
+        bot.answer_callback_query(call.id)
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_records_for_edit(chat_id, day))
         return
 
-    # Обнуление (в том же окне)
-    if call_data == "edit_reset_all":
-        kb = make_yes_no("confirm_reset_all")
-        try:
-            bot.edit_message_text("Вы уверены, что хотите обнулить ВСЕ данные навсегда? (Да/Нет)", chat_id, call.message.message_id, reply_markup=kb)
-        except Exception as e:
-            print(f"Не удалось редактировать сообщение при edit_reset_all: {e}")
-            bot.send_message(chat_id, "Вы уверены, что хотите обнулить ВСЕ данные навсегда? (Да/Нет)", reply_markup=kb)
-        pending_actions[user] = {"type": "await_reset_confirm", "payload": {}}
+    if data_call.startswith("select_"):
+        bot.answer_callback_query(call.id)
+        rec_id = int(data_call.split("_")[1])
+        bot.send_message(chat_id, f"Введите новое значение для {short_id(rec_id)} (например: +2000 бензин):")
+        pending[str(chat_id)] = {"mode": "modify", "rid": rec_id, "msg": call.message}
         return
 
-    # Подтверждение обнуления
-    if call_data.startswith("confirm_reset_all"):
-        if call_data.endswith("_yes"):
+    if data_call == "edit_delete":
+        bot.answer_callback_query(call.id)
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_records_for_edit(chat_id, day))
+        pending[str(chat_id)] = {"mode": "delete_menu", "msg": call.message}
+        return
+
+    if data_call == "edit_reset":
+        bot.answer_callback_query(call.id)
+        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb_yes_no("reset_all"))
+        return
+
+    if data_call.startswith("reset_all_"):
+        if data_call.endswith("_yes"):
             data["overall_balance"] = 0
             data["records"] = []
             data["active_messages"] = {}
             save_data(data)
-            try:
-                bot.edit_message_text("♻️ Все данные обнулены.", chat_id, call.message.message_id)
-            except Exception:
-                bot.send_message(chat_id, "♻️ Все данные обнулены.")
+            bot.edit_message_text("♻️ Все данные обнулены.", chat_id, call.message.message_id)
         else:
-            try:
-                bot.edit_message_text("Обнуление отменено.", chat_id, call.message.message_id, reply_markup=make_edit_main_keyboard())
-            except Exception:
-                bot.send_message(chat_id, "Обнуление отменено.", reply_markup=make_edit_main_keyboard())
-        pending_actions.pop(user, None)
+            update_day_window(chat_id, day, call.message)
+        bot.answer_callback_query(call.id)
         return
 
-    # if no_op or unknown — просто игнорируем
-    if call_data in ("no_op",):
-        try:
-            bot.edit_message_text(build_day_window(chat_id, date_str_local(datetime.now(tz=TZ))), chat_id, call.message.message_id, reply_markup=make_day_keyboard())
-        except Exception:
-            bot.send_message(chat_id, build_day_window(chat_id, date_str_local(datetime.now(tz=TZ))), reply_markup=make_day_keyboard())
+pending = {}
+
+# --------------------------------------
+# обработка новых значений для редактирования
+# --------------------------------------
+@bot.message_handler(func=lambda m: str(m.chat.id) in pending)
+def handle_pending(m):
+    chat_id = m.chat.id
+    state = pending.get(str(chat_id))
+    if not state:
+        return
+    rid = state["rid"]
+    msg = state["msg"]
+    txt = m.text.strip()
+
+    rec = next((r for r in data["records"] if r["id"] == rid and str(r["owner"]) == str(chat_id)), None)
+    if not rec:
+        bot.send_message(chat_id, "❗ Запись не найдена.")
+        pending.pop(str(chat_id), None)
         return
 
-    # fallback
-    print(f"Unhandled callback: {call_data}")
-
-# -------------------------
-# Вспомогательные операции: получить записи дня
-# -------------------------
-def get_day_records_for_chat(chat_id, day_date):
-    recs = []
-    for r in data["records"]:
-        if str(r.get("owner")) != str(chat_id):
-            continue
-        ts = datetime.fromisoformat(r["timestamp"]).astimezone(TZ)
-        if date_str_local(ts) == day_date:
-            recs.append((ts, r))
-    recs.sort(key=lambda x: x[0])
-    return recs
-
-# -------------------------
-# Обновление окна дня (после изменений) — теперь удаляет старое и отправляет новое, как раньше
-# -------------------------
-def update_day_window_after_change(chat_id, day_date):
-    day_text = build_day_window(chat_id, day_date)
-    kb = make_day_keyboard()
-    try:
-        sent = bot.send_message(chat_id, day_text, reply_markup=kb)
-    except Exception as e:
-        print(f"Ошибка отправки обновлённого окна дня: {e}")
+    if state["mode"] == "modify":
+        num, sign, raw = parse_first_number(txt)
+        if num is None:
+            bot.send_message(chat_id, "Неверный формат. Пример: `+1000 продукты`", parse_mode="Markdown")
+            return
+        amt = apply_sign(num, sign)
+        note = txt[(txt.find(raw) + len(raw)) :].strip() if raw in txt else ""
+        data["overall_balance"] -= rec["amount"]
+        rec["amount"] = amt
+        rec["note"] = note
+        data["overall_balance"] += amt
+        save_data(data)
+        update_day_window(chat_id, date_str(datetime.now(tz=TZ)), msg)
+        pending.pop(str(chat_id), None)
         return
-    prev = data.get("active_messages", {}).get(day_date)
-    if prev:
-        try:
-            bot.delete_message(prev["chat_id"], prev["message_id"])
-        except Exception as e:
-            print(f"Не удалось удалить предыдущее окно при обновлении: {e}")
-    data["active_messages"][day_date] = {"chat_id": chat_id, "message_id": sent.message_id}
-    save_data(data)
 
-# -------------------------
-# Команды быстрые: /баланс /отчет /сброс
-# -------------------------
+# --------------------------------------
+# команды
+# --------------------------------------
 @bot.message_handler(commands=["баланс"])
-def cmd_balance(message):
-    chat_id = message.chat.id
-    overall = data.get("overall_balance", 0)
-    bot.reply_to(message, f"💰 Текущий общий баланс: {format_amount_with_dots(overall)}")
+def balance_cmd(m):
+    bot.reply_to(m, f"💰 Баланс: {fmt(data['overall_balance'])}")
 
 @bot.message_handler(commands=["отчет"])
-def cmd_report(message):
-    chat_id = message.chat.id
-    now = datetime.now(tz=TZ)
-    day_date = date_str_local(now)
-    day_text = build_day_window(chat_id, day_date)
-    sent = bot.send_message(chat_id, day_text, reply_markup=make_day_keyboard())
-    prev = data.get("active_messages", {}).get(day_date)
-    if prev:
-        try:
-            bot.delete_message(prev["chat_id"], prev["message_id"])
-        except Exception as e:
-            print(f"Не удалось удалить предыдущее окно при /отчет: {e}")
-    data["active_messages"][day_date] = {"chat_id": chat_id, "message_id": sent.message_id}
-    save_data(data)
+def report_cmd(m):
+    day = date_str(datetime.now(tz=TZ))
+    update_day_window(m.chat.id, day)
 
 @bot.message_handler(commands=["сброс"])
-def cmd_reset(message):
-    chat_id = message.chat.id
-    kb = make_yes_no("confirm_reset_all")
-    # редактирование в том же сообщении не всегда возможно, это команда — отправляем сообщение с кнопками
-    bot.send_message(chat_id, "Вы уверены, что хотите обнулить все данные? (Да/Нет)", reply_markup=kb)
-    pending_actions[str(chat_id)] = {"type": "await_reset_confirm", "payload": {}}
+def reset_cmd(m):
+    bot.send_message(m.chat.id, "Вы уверены, что хотите обнулить все данные?", reply_markup=kb_yes_no("reset_all"))
 
-# -------------------------
-# Запуск приложения
-# -------------------------
-if __name__ == "__main__":
-    print("🚀 Бот №5 запущен (webhook).")
+# --------------------------------------
+# webhook
+# --------------------------------------
+@app.route("/" + TOKEN, methods=["POST"])
+def receive_update():
+    update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
+    bot.process_new_updates([update])
+    return "!", 200
+
+@app.route("/", methods=["GET"])
+def set_hook():
+    bot.remove_webhook()
+    wh_url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{TOKEN}"
+    bot.set_webhook(url=wh_url)
+    print(f"✅ Webhook установлен: {wh_url}")
     if OWNER_ID:
-        try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №5 запущен и готов к работе (версия №5)")
-            delete_message_later(int(OWNER_ID), msg.message_id, delay=10)
-        except Exception as e:
-            print(f"⚠️ Ошибка при уведомлении владельца: {e}")
+        msg = bot.send_message(int(OWNER_ID), "✅ Бот №6 жив")
+        threading.Thread(target=lambda: (time.sleep(10), bot.delete_message(int(OWNER_ID), msg.message_id)), daemon=True).start()
+    return "ok", 200
+
+# --------------------------------------
+# запуск
+# --------------------------------------
+if __name__ == "__main__":
+    print("🚀 Бот №6 запущен.")
+    if OWNER_ID:
+        msg = bot.send_message(int(OWNER_ID), "✅ Бот №6 запущен и готов к работе.")
+        threading.Thread(target=lambda: (time.sleep(10), bot.delete_message(int(OWNER_ID), msg.message_id)), daemon=True).start()
     save_data(data)
     app.run(host="0.0.0.0", port=PORT)
