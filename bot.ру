@@ -1,8 +1,7 @@
-# Код бота №8
-# Webhook-бот (Flask). Версия №8
-# Требует в окружении: BOT_TOKEN, OWNER_ID
-# requirements.txt: pyTelegramBotAPI==4.23.0, flask
-# Файлы: data.json (база), data.csv (экспорт)
+# Код бота №9.1 (исправленный, на основе кода №8)
+# Webhook-бот (Flask). Версия №9.1
+# Единственная разница с №8: удаление всех сообщений через delayed_delete(..., delay=5)
+# и при обновлении окна — сначала отправляем новое окно, потом удаляем предыдущее.
 
 import os
 import json
@@ -134,6 +133,20 @@ def send_file_and_record(chat_id, path, caption=None, purpose="file"):
         sent = bot.send_document(int(chat_id), f, caption=caption)
     record_sent_message(chat_id, sent, purpose=purpose, day=datetime.now(tz=TZ).strftime("%Y-%m-%d"))
     return sent
+
+# -------------------------
+# УНИВЕРСАЛЬНОЕ УДАЛЕНИЕ С ЗАДЕРЖКОЙ
+# -------------------------
+def delayed_delete(chat_id, message_id, delay=5):
+    """Удаление сообщения с задержкой (в отдельном потоке)."""
+    def worker():
+        time.sleep(delay)
+        try:
+            bot.delete_message(int(chat_id), int(message_id))
+        except Exception as e:
+            # просто логируем ошибку
+            print(f"delayed_delete error for {chat_id}/{message_id}: {e}")
+    threading.Thread(target=worker, daemon=True).start()
 
 # -------------------------
 # Формирование окна дня (включая время записи)
@@ -276,22 +289,22 @@ def modify_record_by_short_id(chat_id, short_id, new_text):
     return False
 
 # -------------------------
-# Обновление окна дня: удалить старое и отправить новое (и записать в sent_messages)
+# Обновление окна дня: сначала новое — потом старое (удаляем с задержкой)
 # -------------------------
 def update_day_window_after_change(chat_id, day_date, purpose="day_window"):
     prev = data.get("active_messages", {}).get(day_date)
-    if prev and int(prev.get("chat_id")) == int(chat_id):
-        try:
-            bot.delete_message(prev["chat_id"], prev["message_id"])
-        except Exception as e:
-            print("Не удалось удалить предыдущее окно:", e)
-        data["active_messages"].pop(day_date, None)
+    # Сначала отправляем новое окно
     text = build_day_window(chat_id, day_date)
     kb = kb_day_main()
     sent = bot.send_message(int(chat_id), text, reply_markup=kb)
     data.setdefault("active_messages", {})[day_date] = {"chat_id": int(chat_id), "message_id": int(sent.message_id)}
     record_sent_message(chat_id, sent, purpose=purpose, day=day_date)
     save_data(data)
+    # Потом удаляем предыдущее (если было) с задержкой
+    if prev and int(prev.get("chat_id")) == int(chat_id):
+        delayed_delete(prev["chat_id"], prev["message_id"], delay=5)
+        data["active_messages"].pop(day_date, None)
+        save_data(data)
     return sent
 
 # -------------------------
@@ -301,10 +314,8 @@ def delete_active_window_if_today_and_belong(chat_id):
     today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     am = data.get("active_messages", {}).get(today)
     if am and int(am.get("chat_id")) == int(chat_id):
-        try:
-            bot.delete_message(am["chat_id"], am["message_id"])
-        except Exception as e:
-            print("Не удалось удалить активное окно при входящем сообщении:", e)
+        # удаляем с задержкой, но не сразу из active_messages (будем обновлять active_messages после нового окна)
+        delayed_delete(am["chat_id"], am["message_id"], delay=5)
         data["active_messages"].pop(today, None)
         save_data(data)
         return True
@@ -435,7 +446,7 @@ def handle_any_message(message):
         any_added = True
     if any_added:
         save_data(data)
-        # после добавления — обновляем окно (функция удалит старое и отправит новое)
+        # после добавления — обновляем окно (функция отправит новое и через delayed_delete удалит старое)
         update_day_window_after_change(chat_id, today, purpose="added_records")
 
 # -------------------------
@@ -625,8 +636,9 @@ def set_and_ping():
     print("Webhook установлен:", webhook_url)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №8: webhook активирован")
-            threading.Thread(target=lambda: (time.sleep(10), bot.delete_message(int(OWNER_ID), msg.message_id)), daemon=True).start()
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.1: webhook активирован")
+            # автоудаление уведомления через delayed_delete (5 сек)
+            delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_ping")
         except Exception as e:
             print("Ошибка уведомления владельца:", e)
@@ -636,12 +648,12 @@ def set_and_ping():
 # Запуск
 # -------------------------
 if __name__ == "__main__":
-    print("Запуск бота №8 (webhook)...")
+    print("Запуск бота №9.1 (webhook)...")
     save_data(data)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №8 запущен и готов к работе")
-            threading.Thread(target=lambda: (time.sleep(10), bot.delete_message(int(OWNER_ID), msg.message_id)), daemon=True).start()
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.1 запущен и готов к работе")
+            delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_start")
         except Exception as e:
             print("Ошибка уведомления владельца:", e)
