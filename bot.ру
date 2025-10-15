@@ -1,7 +1,8 @@
-# Код бота №9.2
-# Webhook-бот (Flask). Версия №9.2
-# Основан точно на коде №8 — только добавлено безопасное удаление (delayed_delete)
-# и порядок обновления окна (сначала новое, затем удаление предыдущего с задержкой)
+# Код бота №9.4
+# Webhook-бот (Flask). Версия №9.4
+# Требует в окружении: BOT_TOKEN, OWNER_ID
+# requirements.txt: pyTelegramBotAPI==4.23.0, flask
+# Файлы: data.json (база), data.csv (экспорт)
 
 import os
 import json
@@ -39,9 +40,10 @@ def default_data():
     return {
         "overall_balance": 0,
         "records": [],           # {id, short_id, timestamp(ISO UTC), amount, note, owner}
-        "active_messages": {},   # YYYY-MM-DD -> {chat_id, message_id}
+        "active_messages": {},   # YYYY-MM-DD -> { "chat_id": id, "message_id": id } (по владельцу)
         "next_id": 1,
-        "sent_messages": []      # история отправленных ботом сообщений
+        "sent_messages": [],     # история отправленных ботом сообщений
+        "forward_targets": {}    # "<owner_chat_id>": "<target_chat_id_or_username>"
     }
 
 def load_data():
@@ -128,7 +130,6 @@ def send_and_record(chat_id, text, reply_markup=None, parse_mode=None, purpose="
     return sent
 
 def send_file_and_record(chat_id, path, caption=None, purpose="file"):
-    # Отправка файла, запись в sent_messages
     with open(path, "rb") as f:
         sent = bot.send_document(int(chat_id), f, caption=caption)
     record_sent_message(chat_id, sent, purpose=purpose, day=datetime.now(tz=TZ).strftime("%Y-%m-%d"))
@@ -144,7 +145,6 @@ def delayed_delete(chat_id, message_id, delay=5):
         try:
             bot.delete_message(int(chat_id), int(message_id))
         except Exception as e:
-            # просто логируем ошибку
             print(f"delayed_delete error for {chat_id}/{message_id}: {e}")
     threading.Thread(target=worker, daemon=True).start()
 
@@ -192,19 +192,25 @@ def build_day_window(chat_id, day_date):
     return "\n".join(lines)
 
 # -------------------------
-# Клавиатуры
+# Клавиатуры (как в оригинале) + пересылка кнопка
 # -------------------------
 def kb_day_main():
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Редактировать", callback_data="edit_menu"))
     return kb
 
-def kb_edit_main():
+def kb_edit_main(chat_id=None):
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Изменить запись", callback_data="edit_modify"))
     kb.add(types.InlineKeyboardButton("Удалить запись", callback_data="edit_delete"))
     kb.add(types.InlineKeyboardButton("📄 Экспорт CSV", callback_data="edit_export_csv"))
     kb.add(types.InlineKeyboardButton("Обнулить всё (всех)", callback_data="edit_reset_all"))
+    # Добавим кнопку Пересылки / Отмены в зависимости от состояния
+    target = data.get("forward_targets", {}).get(str(chat_id)) if chat_id is not None else None
+    if target:
+        kb.add(types.InlineKeyboardButton("🚫 Отключить пересылку", callback_data="forward_cancel"))
+    else:
+        kb.add(types.InlineKeyboardButton("📤 Пересылка", callback_data="forward_setup"))
     kb.add(types.InlineKeyboardButton("Отмена", callback_data="edit_cancel"))
     return kb
 
@@ -226,10 +232,10 @@ def kb_records_list(chat_id, day_date, mode):
     kb.add(types.InlineKeyboardButton("Назад", callback_data="edit_menu"))
     return kb
 
-def kb_yes_no(prefix):
+def kb_yes_no(cb_prefix):
     kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Да", callback_data=f"{prefix}_yes"),
-           types.InlineKeyboardButton("Нет", callback_data=f"{prefix}_no"))
+    kb.add(types.InlineKeyboardButton("Да", callback_data=f"{cb_prefix}_yes"),
+           types.InlineKeyboardButton("Нет", callback_data=f"{cb_prefix}_no"))
     return kb
 
 # -------------------------
@@ -293,21 +299,34 @@ def modify_record_by_short_id(chat_id, short_id, new_text):
 # -------------------------
 def update_day_window_after_change(chat_id, day_date, purpose="day_window"):
     prev = data.get("active_messages", {}).get(day_date)
-    # Сначала отправляем новое окно
+    # Сначала отправляем новое окно (и записываем его как активное)
     text = build_day_window(chat_id, day_date)
     kb = kb_day_main()
+    # when sending day_main we want to include forward button state too — use kb_edit_main(chat_id) when editing
     sent = bot.send_message(int(chat_id), text, reply_markup=kb)
     data.setdefault("active_messages", {})[day_date] = {"chat_id": int(chat_id), "message_id": int(sent.message_id)}
     record_sent_message(chat_id, sent, purpose=purpose, day=day_date)
     save_data(data)
+
+    # Пересылка нового окна, если настроено
+    forward_target = data.get("forward_targets", {}).get(str(chat_id))
+    if forward_target:
+        # Попробуем интерпретировать как int chat_id, иначе как username
+        try:
+            tgt = int(forward_target)
+            bot.forward_message(tgt, int(chat_id), sent.message_id)
+        except Exception:
+            try:
+                # username forward (may fail if bot cannot access)
+                bot.forward_message(forward_target, int(chat_id), sent.message_id)
+            except Exception as e:
+                print(f"Forward failed to {forward_target}: {e}")
+
     # Потом удаляем предыдущее (если было) с задержкой
     if prev and int(prev.get("chat_id")) == int(chat_id):
         delayed_delete(prev["chat_id"], prev["message_id"], delay=5)
-        # удалить старую запись active_messages (новая уже записана)
-        data["active_messages"].pop(day_date, None)
-        # сохранить текущее состояние (active_messages уже содержит новое сообщение)
-        # note: pop above removed mapping; re-save mapping for new sent
-        data.setdefault("active_messages", {})[day_date] = {"chat_id": int(chat_id), "message_id": int(sent.message_id)}
+        # удаляем старую запись active_messages (новая уже записана)
+        # ensure mapping keeps only latest (we already set data[day_date] to sent)
         save_data(data)
     return sent
 
@@ -318,7 +337,6 @@ def delete_active_window_if_today_and_belong(chat_id):
     today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     am = data.get("active_messages", {}).get(today)
     if am and int(am.get("chat_id")) == int(chat_id):
-        # удаляем с задержкой, но не сразу из active_messages (будем обновлять active_messages после нового окна)
         delayed_delete(am["chat_id"], am["message_id"], delay=5)
         data["active_messages"].pop(today, None)
         save_data(data)
@@ -357,12 +375,6 @@ threading.Thread(target=midnight_watcher, daemon=True).start()
 # Экспорт в CSV (всё время)
 # -------------------------
 def export_all_to_csv(path=CSV_FILE):
-    """
-    Колонки CSV:
-    ID,Дата,Время,Сумма,Комментарий,Тип
-    Дата/Время — локальные (TZ)
-    Тип: приход/расход
-    """
     rows = []
     for r in data.get("records", []):
         ts_utc = datetime.fromisoformat(r["timestamp"])
@@ -380,7 +392,6 @@ def export_all_to_csv(path=CSV_FILE):
             "Тип": typ,
             "Владелец": r.get("owner")
         })
-    # записываем CSV (в UTF-8 с BOM чтобы Excel корректно открыл)
     with open(path, "w", newline="", encoding="utf-8-sig") as csvfile:
         fieldnames = ["ID","Дата","Время","Сумма","Комментарий","Тип","Владелец"]
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -390,27 +401,24 @@ def export_all_to_csv(path=CSV_FILE):
     return path
 
 # -------------------------
-# Обработка входящих сообщений
+# pending_actions: хранит состояния ожидания ввода (например, настройка пересылки, изменение записи)
 # -------------------------
-# pending_actions for modify flow
-pending_actions = {}
+pending_actions = {}  # key: str(chat_id) -> { "type": "...", payload: {...} }
 
+# -------------------------
+# Обработка входящих сообщений (включая ожидаемые вводы)
+# -------------------------
 @bot.message_handler(func=lambda m: True)
 def handle_any_message(message):
     chat_id = message.chat.id
-    text = message.text or ""
-    text = text.strip()
-    # 1) удалить активное окно текущего дня (если было создано сегодня) — мы пометим его на удаление (delayed) и уберём из active_messages
-    deleted = delete_active_window_if_today_and_belong(chat_id)
-    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
-    # 2) создаём новое окно (актуальное) — теперь при любой активности новое окно будет создано
-    update_day_window_after_change(chat_id, today, purpose="recreated_on_message")
-
-    # 3) если есть pending action (модификация) — обработать её в приоритет
-    if str(chat_id) in pending_actions:
-        state = pending_actions[str(chat_id)]
-        if state.get("type") == "await_modify_input":
-            short = state.get("short_id")
+    text = (message.text or "").strip()
+    # Если есть ожидаемое действие для этого пользователя — обработаем в первую очередь
+    pa = pending_actions.get(str(chat_id))
+    if pa:
+        t = pa.get("type")
+        if t == "await_modify_input":
+            # изменение записи: payload.short_id уже есть
+            short = pa["payload"]["short_id"]
             ok = modify_record_by_short_id(chat_id, short, text)
             if ok:
                 send_and_record(chat_id, f"✅ Запись {short} обновлена.", purpose="modified_record")
@@ -418,10 +426,30 @@ def handle_any_message(message):
                 send_and_record(chat_id, f"❗ Не удалось обновить запись {short}. Пример: +1000 зарплата", purpose="modify_failed")
             pending_actions.pop(str(chat_id), None)
             return
-        else:
+        if t == "await_forward_setup":
+            # ожидаем идентификатор куда пересылать: может быть @username или chat_id
+            target = text.strip()
+            if not target:
+                send_and_record(chat_id, "Неверный идентификатор. Отменено.")
+                pending_actions.pop(str(chat_id), None)
+                return
+            # сохраняем
+            data.setdefault("forward_targets", {})[str(chat_id)] = target
+            save_data(data)
+            send_and_record(chat_id, f"✅ Пересылка включена. Сообщения будут пересылаться в: {target}", purpose="forward_set")
             pending_actions.pop(str(chat_id), None)
+            return
+        # другие виды ожиданий — сбросим
+        pending_actions.pop(str(chat_id), None)
 
-    # 4) обработка многострочного сообщения: каждая непустая строка — отдельная транзакция
+    # 1) Удаляем/помечаем на удаление текущее активное окно (если есть) — так, чтобы потом создать новое
+    deleted = delete_active_window_if_today_and_belong(chat_id)
+    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+
+    # 2) Создаём новое окно (актуальное) — всегда
+    update_day_window_after_change(chat_id, today, purpose="recreated_on_message")
+
+    # 3) Если сообщение содержит транзакции — обработаем их (многострочно)
     if not text:
         return
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -429,7 +457,7 @@ def handle_any_message(message):
     for line in lines:
         num, sign, raw = parse_first_number(line)
         if num is None:
-            # если строка не содержит число — пропускаем
+            # если строка не содержит число — пропускаем (но окно уже обновлено)
             continue
         amt_signed = apply_sign_and_normalize(num, sign)
         note = line[(line.find(raw) + len(raw)):].strip() if raw in line else ""
@@ -450,7 +478,7 @@ def handle_any_message(message):
         any_added = True
     if any_added:
         save_data(data)
-        # после добавления — обновляем окно (функция отправит новое и через delayed_delete удалит старое)
+        # после добавления — обновляем окно (отправим новое; старое уже помечено на удаление)
         update_day_window_after_change(chat_id, today, purpose="added_records")
 
 # -------------------------
@@ -470,9 +498,9 @@ def callback_worker(call):
     # показать меню редактирования (меняем только reply_markup)
     if data_call == "edit_menu":
         try:
-            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main())
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
         except Exception:
-            send_and_record(chat_id, "Меню редактирования:", reply_markup=kb_edit_main(), purpose="edit_menu_fallback")
+            send_and_record(chat_id, "Меню редактирования:", reply_markup=kb_edit_main(chat_id), purpose="edit_menu_fallback")
         return
 
     if data_call == "edit_cancel":
@@ -503,14 +531,37 @@ def callback_worker(call):
         try:
             path = export_all_to_csv(CSV_FILE)
             send_file_and_record(chat_id, path, caption="Экспорт всех транзакций (CSV)", purpose="export_csv")
-            # вернуть меню редактирования (без изменения текста)
             try:
-                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main())
+                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
             except Exception:
                 pass
         except Exception as e:
             print("Ошибка экспорта CSV:", e)
             send_and_record(chat_id, "Ошибка при создании CSV.", purpose="export_error")
+        return
+
+    # Запуск настройки пересылки
+    if data_call == "forward_setup":
+        # попросим ввести target chat id или @username в чат; сохраним в pending_actions
+        send_and_record(chat_id, "Введите chat_id или @username чата/группы, куда пересылать мои сообщения. Отправьте `отмена` чтобы отменить.", purpose="await_forward_input")
+        pending_actions[str(chat_id)] = {"type": "await_forward_setup", "payload": {}}
+        return
+
+    # Отмена пересылки
+    if data_call == "forward_cancel":
+        ft = data.get("forward_targets", {})
+        if str(chat_id) in ft:
+            ft.pop(str(chat_id), None)
+            data["forward_targets"] = ft
+            save_data(data)
+            send_and_record(chat_id, "✅ Пересылка отключена.", purpose="forward_cancelled")
+        else:
+            send_and_record(chat_id, "Пересылка не была настроена.", purpose="forward_cancel_noop")
+        # вернуть меню редактирования
+        try:
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
+        except Exception:
+            pass
         return
 
     # Выбор конкретной записи: select:<mode>:<short_id>
@@ -522,16 +573,14 @@ def callback_worker(call):
         mode = parts[1]
         short_id = parts[2]
         if mode == "modify":
-            # просим в чате ввести новое значение; сохраняем pending
             try:
                 bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=None)
             except Exception:
                 pass
             send_and_record(chat_id, f"Введите новое значение для {short_id} (пример: +1000 зарплата).", purpose="await_modify_input")
-            pending_actions[str(chat_id)] = {"type": "await_modify_input", "short_id": short_id, "origin_message_id": call_msg.message_id}
+            pending_actions[str(chat_id)] = {"type": "await_modify_input", "payload": {"short_id": short_id}}
             return
         elif mode == "delete":
-            # показываем yes/no в том же сообщении
             try:
                 bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_yes_no(f"confirm_delete:{short_id}"))
             except Exception:
@@ -558,11 +607,10 @@ def callback_worker(call):
                 except Exception:
                     send_and_record(chat_id, f"❗ Не удалось удалить запись {short_id}.", purpose="delete_failed")
         else:
-            # отмена — вернуть меню редактирования
             try:
-                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main())
+                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
             except Exception:
-                send_and_record(chat_id, "Удаление отменено.", reply_markup=kb_edit_main(), purpose="delete_cancelled")
+                send_and_record(chat_id, "Удаление отменено.", reply_markup=kb_edit_main(chat_id), purpose="delete_cancelled")
         return
 
     # Обнуление: показать да/нет
@@ -586,9 +634,9 @@ def callback_worker(call):
                 send_and_record(chat_id, "♻️ Все данные обнулены. 📘 Данные обнулены. Начните новый день.", purpose="reset_done")
         else:
             try:
-                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main())
+                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
             except Exception:
-                send_and_record(chat_id, "Обнуление отменено.", reply_markup=kb_edit_main(), purpose="reset_cancel")
+                send_and_record(chat_id, "Обнуление отменено.", reply_markup=kb_edit_main(chat_id), purpose="reset_cancel")
         return
 
     # no_op или нераспознанные — вернуть главное меню
@@ -607,6 +655,7 @@ def callback_worker(call):
 # -------------------------
 @bot.message_handler(commands=["баланс"])
 def cmd_balance(message):
+    chat_id = message.chat.id
     overall = data.get("overall_balance", 0)
     bot.reply_to(message, f"💰 Текущий общий баланс: {fmt_amount(overall)}")
 
@@ -640,8 +689,7 @@ def set_and_ping():
     print("Webhook установлен:", webhook_url)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.2: webhook активирован")
-            # автоудаление уведомления через delayed_delete (5 сек)
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.4: webhook активирован")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_ping")
         except Exception as e:
@@ -652,11 +700,11 @@ def set_and_ping():
 # Запуск
 # -------------------------
 if __name__ == "__main__":
-    print("Запуск бота №9.2 (webhook)...")
+    print("Запуск бота №9.4 (webhook)...")
     save_data(data)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.2 запущен и готов к работе")
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.4 запущен и готов к работе")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_start")
         except Exception as e:
