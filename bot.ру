@@ -1,6 +1,6 @@
 # -------------------------
-# Код бота №9.6
-# Webhook-бот (Flask). Версия №9.6
+# Код бота №9.6.1
+# Webhook-бот (Flask). Версия №9.6.1
 # Требует в окружении: BOT_TOKEN, OWNER_ID
 # requirements.txt: pyTelegramBotAPI==4.23.0, flask
 # Файлы: data.json (база), data.csv (экспорт)
@@ -305,6 +305,41 @@ def modify_record_by_short_id(chat_id, short_id, new_text):
     return False
 
 # -------------------------
+# New helper: validate and save forward target with test message
+# -------------------------
+def validate_and_save_forward(owner_chat_id, target_raw):
+    """
+    Попытка проверить target и сохранить только если тестовое сообщение прошло.
+    target_raw может быть строкой (username) или строкой числа.
+    Возвращает (ok: bool, message: str)
+    Логи ошибок печатаются в консоль.
+    """
+    t = str(target_raw).strip()
+    # normalize: allow usernames with or without @
+    if t.startswith("@"):
+        target = t
+    else:
+        # try convert to int (chat_id like -100...)
+        try:
+            target = int(t)
+        except Exception:
+            # возможно username без @
+            target = t
+
+    # Попытка отправить тестовое сообщение (не бросаем исключение наружу)
+    test_text = "🔁 Тест от бота: проверка доступа для пересылки. Если видите это — подключение успешно."
+    try:
+        bot.send_message(target, test_text)
+    except Exception as e:
+        print(f"[forward test] Не удалось отправить тест в {repr(target)}: {e}")
+        return False, f"Не удалось отправить тест в {repr(target)}: {e}"
+    # если дошло — сохраняем
+    data.setdefault("forward_targets", {})[str(owner_chat_id)] = str(target)
+    save_data(data)
+    print(f"[forward test] Пересылка установлена для owner {owner_chat_id} -> target {repr(target)}")
+    return True, f"Пересылка установлена на {repr(target)}"
+
+# -------------------------
 # Обновление окна дня: Пытаемся редактировать существующее сообщение; если не получается — отправляем новое и удаляем старое
 # -------------------------
 def update_day_window_after_change(chat_id, day_date, purpose="day_window"):
@@ -440,7 +475,7 @@ def handle_any_message(message):
     data = load_data()
 
     # -----------------------
-    # 1) Автоматическая пересылка ВСЕХ типов сообщений (если настроена для этого чата)
+    # 1) Автоматическая пересылка ВСЕ типов сообщений (если настроена для этого чата)
     # -----------------------
     forward_target = data.get("forward_targets", {}).get(str(chat_id))
     if forward_target:
@@ -453,6 +488,7 @@ def handle_any_message(message):
         except Exception as e:
             # если пересылка не удалась, отправим уведомление хозяину (но не спамим)
             try:
+                print(f"[auto-forward] Ошибка пересылки для owner {chat_id} -> target {forward_target}: {e}")
                 bot.send_message(chat_id, f"⚠️ Ошибка пересылки сообщения: {e}")
             except Exception:
                 pass
@@ -479,7 +515,6 @@ def handle_any_message(message):
             target = None
 
             # 1) Если пользователь прислал пересланное сообщение из нужного чата — читаем его chat id
-            # telebot может иметь атрибут message.forward_from_chat (для каналов/супергрупп) или forward_from (для юзеров)
             if getattr(message, "forward_from_chat", None):
                 try:
                     target = str(message.forward_from_chat.id)
@@ -490,8 +525,8 @@ def handle_any_message(message):
                     target = str(message.forward_from.id)
                 except Exception:
                     target = None
-            # 2) Если это сообщение-пересылка от канала, иногда forward_from_chat may exist with 'id' attribute
-            # 3) Если пользователь просто ввёл текст (chat_id или @username)
+
+            # 2) Если пользователь просто ввёл текст (chat_id или @username)
             if not target and message.content_type == 'text':
                 txt = text.strip()
                 if txt.lower() == "отмена":
@@ -505,10 +540,12 @@ def handle_any_message(message):
                 pending_actions.pop(str(chat_id), None)
                 return
 
-            # save
-            data.setdefault("forward_targets", {})[str(chat_id)] = target
-            save_data(data)
-            send_and_record(chat_id, f"✅ Пересылка включена. Сообщения будут пересылаться в: {target}", purpose="forward_set")
+            # validate and save with test
+            ok, msg = validate_and_save_forward(chat_id, target)
+            if ok:
+                send_and_record(chat_id, f"✅ {msg}", purpose="forward_set")
+            else:
+                send_and_record(chat_id, f"❌ {msg}", purpose="forward_set_failed")
             pending_actions.pop(str(chat_id), None)
             return
 
@@ -780,7 +817,7 @@ def set_and_ping():
     print("Webhook установлен:", webhook_url)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6: webhook активирован")
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.1: webhook активирован")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_ping")
         except Exception as e:
@@ -791,13 +828,15 @@ def set_and_ping():
 # Запуск
 # -------------------------
 if __name__ == "__main__":
-    print("Запуск бота №9.6 (webhook)...")
+    print("Запуск бота №9.6.1 (webhook)...")
     save_data(data)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6 запущен и готов к работе")
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.1 запущен и готов к работе")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_start")
         except Exception as e:
             print("Ошибка уведомления владельца:", e)
     app.run(host="0.0.0.0", port=PORT)
+
+# Версия сохранена в памяти
