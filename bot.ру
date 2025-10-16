@@ -1,7 +1,6 @@
 # -------------------------
-# Код бота №9.6.2
-# Webhook-бот (Flask). Версия №9.6.2
-# (на базе 9.6.1 + буферизация пересылок)
+# Код бота №9.6.3
+# Webhook-бот (Flask). Версия №9.6.3
 # Требует в окружении: BOT_TOKEN, OWNER_ID
 # requirements.txt: pyTelegramBotAPI==4.23.0, flask
 # Файлы: data.json (база), data.csv (экспорт)
@@ -668,7 +667,6 @@ def handle_any_message(message):
 
 # -------------------------
 # Callback handler (inline)
-# (оставлен без изменений по логике 9.6.1)
 # -------------------------
 @bot.callback_query_handler(func=lambda call: True)
 def callback_worker(call):
@@ -889,7 +887,7 @@ def set_and_ping():
     print("Webhook установлен:", webhook_url)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.2: webhook активирован")
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.3: webhook активирован")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_ping")
         except Exception as e:
@@ -900,13 +898,15 @@ def set_and_ping():
 # Запуск
 # -------------------------
 if __name__ == "__main__":
-    print("Запуск бота №9.6.2 (webhook)...")
+    print("Запуск бота №9.6.3 (webhook)...")
     save_data(data)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.2 запущен и готов к работе")
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.3 запущен и готов к работе")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_start")
         except Exception as e:
             print("Ошибка уведомления владельца:", e)
     app.run(host="0.0.0.0", port=PORT)
+
+# Версия сохранена в памяти
