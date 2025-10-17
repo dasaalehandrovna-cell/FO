@@ -1,7 +1,6 @@
 # -------------------------
-# Код бота №9.6.2
-# Webhook-бот (Flask). Версия №9.6.2
-# (на базе 9.6.1 + буферизация пересылок)
+# Код бота №9.6.1
+# Webhook-бот (Flask). Версия №9.6.1
 # Требует в окружении: BOT_TOKEN, OWNER_ID
 # requirements.txt: pyTelegramBotAPI==4.23.0, flask
 # Файлы: data.json (база), data.csv (экспорт)
@@ -306,107 +305,7 @@ def modify_record_by_short_id(chat_id, short_id, new_text):
     return False
 
 # -------------------------
-# New: буферизация пересланных сообщений (чтобы при множественных пересылках создать только одно окно)
-# -------------------------
-# pending_forward_state: owner_chat_id -> {"texts": [str,...], "timer": threading.Timer}
-pending_forward_state = {}
-pending_lock = threading.Lock()
-PENDING_WAIT = 1.5  # seconds to wait after last forwarded message
-
-def _pending_timer_handler(owner_chat_id):
-    """
-    Вызывается из таймера по окончании окна ожидания пересылок.
-    Обрабатывает накопленные тексты как если бы это были входящие сообщения:
-    - парсит транзакции по строкам,
-    - добавляет записи в data["records"],
-    - сохраняет и вызывает update_day_window_after_change один раз.
-    """
-    global data
-    with pending_lock:
-        state = pending_forward_state.pop(str(owner_chat_id), None)
-    if not state:
-        return
-
-    texts = state.get("texts", [])
-    if not texts:
-        return
-
-    # reload data to be sure
-    data = load_data()
-    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
-    any_added = False
-    added_count = 0
-
-    for txt in texts:
-        # Each forwarded message may contain multiple lines; parse each line for transaction
-        lines = [ln.strip() for ln in txt.splitlines() if ln.strip()]
-        for line in lines:
-            num, sign, raw = parse_first_number(line)
-            if num is None:
-                continue
-            amt_signed = apply_sign_and_normalize(num, sign)
-            note = line[(line.find(raw) + len(raw)):].strip() if raw in line else ""
-            rec_id = data.get("next_id", 1)
-            short = make_short_id(rec_id)
-            ts = datetime.now(tz=ZoneInfo("UTC")).isoformat()
-            rec = {
-                "id": rec_id,
-                "short_id": short,
-                "timestamp": ts,
-                "amount": amt_signed,
-                "note": note,
-                "owner": str(owner_chat_id)
-            }
-            data["records"].append(rec)
-            data["next_id"] = rec_id + 1
-            data["overall_balance"] = data.get("overall_balance", 0) + amt_signed
-            any_added = True
-            added_count += 1
-
-    if any_added:
-        save_data(data)
-        # Обновляем окно ОДИН раз
-        try:
-            update_day_window_after_change(owner_chat_id, today, purpose="added_records_from_forwards")
-            print(f"[pending_forward] Добавлено {added_count} записей для {owner_chat_id} из пересланных сообщений.")
-        except Exception as e:
-            print(f"[pending_forward] Ошибка при обновлении окна для {owner_chat_id}: {e}")
-    else:
-        # если пересланные сообщения не содержали транзакций, просто обновим окно, чтобы удалить старое и поставить новое
-        try:
-            update_day_window_after_change(owner_chat_id, today, purpose="forward_refresh")
-            print(f"[pending_forward] Обновлено окно для {owner_chat_id} (пересланные сообщения без транзакций).")
-        except Exception as e:
-            print(f"[pending_forward] Ошибка при обновлении окна для {owner_chat_id}: {e}")
-
-def buffer_forwarded_message(owner_chat_id, message_text):
-    """
-    Добавляет текст пересланного сообщения в буфер, пересоздаёт таймер ожидания.
-    """
-    key = str(owner_chat_id)
-    with pending_lock:
-        state = pending_forward_state.get(key)
-        if not state:
-            state = {"texts": [], "timer": None}
-            pending_forward_state[key] = state
-        state["texts"].append(message_text)
-
-        # cancel previous timer
-        t = state.get("timer")
-        if t and isinstance(t, threading.Timer):
-            try:
-                t.cancel()
-            except Exception:
-                pass
-        # start new timer
-        timer = threading.Timer(PENDING_WAIT, _pending_timer_handler, args=(owner_chat_id,))
-        state["timer"] = timer
-        timer.daemon = True
-        timer.start()
-
-# -------------------------
 # New helper: validate and save forward target with test message
-# (copied from 9.6.1)
 # -------------------------
 def validate_and_save_forward(owner_chat_id, target_raw):
     """
@@ -441,7 +340,7 @@ def validate_and_save_forward(owner_chat_id, target_raw):
     return True, f"Пересылка установлена на {repr(target)}"
 
 # -------------------------
-# Обновление окна дня: (как в 9.6.1)
+# Обновление окна дня: Пытаемся редактировать существующее сообщение; если не получается — отправляем новое и удаляем старое
 # -------------------------
 def update_day_window_after_change(chat_id, day_date, purpose="day_window"):
     prev = data.get("active_messages", {}).get(day_date)
@@ -491,7 +390,82 @@ def update_day_window_after_change(chat_id, day_date, purpose="day_window"):
     return sent
 
 # -------------------------
-# При любом входящем сообщении — основной обработчик (модифицирован)
+# При любом входящем сообщении — удалить активное окно текущего дня (если было) (на удаление) и затем создать/обновить новое, но только ОДИН РАЗ после обработки входа
+# -------------------------
+def delete_active_window_if_today_and_belong(chat_id):
+    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    am = data.get("active_messages", {}).get(today)
+    if am and int(am.get("chat_id")) == int(chat_id):
+        delayed_delete(am["chat_id"], am["message_id"], delay=5)
+        data["active_messages"].pop(today, None)
+        save_data(data)
+        return True
+    return False
+
+# -------------------------
+# Фоновый тред: отслеживание смены дня
+# -------------------------
+def midnight_watcher():
+    last_date = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    while True:
+        try:
+            now_date = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+            if now_date != last_date:
+                # собрать владельцев чатов из записей + active_messages
+                owners = set()
+                for r in data.get("records", []):
+                    owners.add(str(r.get("owner")))
+                for d, am in data.get("active_messages", {}).items():
+                    owners.add(str(am.get("chat_id")))
+                for owner in owners:
+                    try:
+                        update_day_window_after_change(int(owner), now_date, purpose="new_day")
+                    except Exception as e:
+                        print(f"Ошибка при создании окна для {owner}: {e}")
+                last_date = now_date
+            time.sleep(30)
+        except Exception as e:
+            print("Ошибка в midnight_watcher:", e)
+            time.sleep(30)
+
+threading.Thread(target=midnight_watcher, daemon=True).start()
+
+# -------------------------
+# Экспорт в CSV (всё время)
+# -------------------------
+def export_all_to_csv(path=CSV_FILE):
+    rows = []
+    for r in data.get("records", []):
+        ts_utc = datetime.fromisoformat(r["timestamp"])
+        ts_local = ts_utc.astimezone(TZ)
+        date_s = ts_local.strftime("%Y-%m-%d")
+        time_s = ts_local.strftime("%H:%M:%S")
+        amt = r["amount"]
+        typ = "приход" if amt > 0 else "расход"
+        rows.append({
+            "ID": r.get("short_id") or make_short_id(r.get("id")),
+            "Дата": date_s,
+            "Время": time_s,
+            "Сумма": f"{amt:+d}",
+            "Комментарий": r.get("note",""),
+            "Тип": typ,
+            "Владелец": r.get("owner")
+        })
+    with open(path, "w", newline="", encoding="utf-8-sig") as csvfile:
+        fieldnames = ["ID","Дата","Время","Сумма","Комментарий","Тип","Владелец"]
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(row)
+    return path
+
+# -------------------------
+# pending_actions: хранит состояния ожидания ввода (например, настройка пересылки, изменение записи)
+# -------------------------
+pending_actions = {}  # key: str(chat_id) -> { "type": "...", payload: {...} }
+
+# -------------------------
+# Обработка входящих сообщений (включая ожидаемые вводы)
 # -------------------------
 @bot.message_handler(func=lambda m: True, content_types=['text','photo','document','video','voice','audio','sticker','animation','contact','location'])
 def handle_any_message(message):
@@ -519,58 +493,16 @@ def handle_any_message(message):
             except Exception:
                 pass
 
-    # -----------------------
-    # 2) Обработка пересланных сообщений: буферизуем, чтобы при серии пересылок создать одно окно
-    # -----------------------
-    is_forward = getattr(message, "forward_from", None) or getattr(message, "forward_from_chat", None)
-    if is_forward:
-        # получаем текст для буфера: при media используем caption, иначе text
-        buffered_text = ""
-        if getattr(message, "caption", None):
-            buffered_text = message.caption or ""
-        elif getattr(message, "text", None):
-            buffered_text = message.text or ""
-        else:
-            # placeholder for non-text media
-            # include minimal metadata so user sees something
-            src = getattr(message, "forward_from_chat", None)
-            if src:
-                src_s = getattr(src, "title", None) or getattr(src, "username", None) or str(getattr(src, "id", "unknown"))
-                buffered_text = f"[Медиа, переслано из {src_s}]"
-            else:
-                ffrom = getattr(message, "forward_from", None)
-                if ffrom:
-                    buffered_text = f"[Медиа, переслано от {getattr(ffrom,'first_name', '')}]"
-                else:
-                    buffered_text = "[Медиа (без текста)]"
+    text = (message.text or "").strip() if message.content_type == 'text' else ""
 
-        # дополнительно добавим метку-источник в начало (удобно в отчёте)
-        src_label = ""
-        if getattr(message, "forward_from_chat", None):
-            fc = message.forward_from_chat
-            src_label = f"Переслано из чата: {getattr(fc, 'title', None) or getattr(fc,'username',None) or fc.id}"
-        elif getattr(message, "forward_from", None):
-            ff = message.forward_from
-            src_label = f"Переслано от: {getattr(ff, 'first_name', '')} ({getattr(ff,'id', '')})"
-        if src_label:
-            full_buf = f"{src_label}\n{buffered_text}"
-        else:
-            full_buf = buffered_text
-
-        # Помещаем в буфер и перезапускаем таймер
-        buffer_forwarded_message(chat_id, full_buf)
-        # Не продолжаем стандартную обработку (чтобы не создавать окна на каждое сообщение)
-        return
-
-    # -----------------------
-    # 3) Если это ожидаемое действие (pending_actions) — обрабатываем, как раньше
-    # -----------------------
+    # Если есть ожидаемое действие для этого пользователя — обработаем в первую очередь
     pa = pending_actions.get(str(chat_id))
     if pa:
         t = pa.get("type")
         if t == "await_modify_input":
+            # изменение записи: payload.short_id уже есть
             short = pa["payload"]["short_id"]
-            ok = modify_record_by_short_id(chat_id, short, (message.text or "").strip())
+            ok = modify_record_by_short_id(chat_id, short, text)
             if ok:
                 send_and_record(chat_id, f"✅ Запись {short} обновлена.", purpose="modified_record")
             else:
@@ -596,7 +528,7 @@ def handle_any_message(message):
 
             # 2) Если пользователь просто ввёл текст (chat_id или @username)
             if not target and message.content_type == 'text':
-                txt = (message.text or "").strip()
+                txt = text.strip()
                 if txt.lower() == "отмена":
                     send_and_record(chat_id, "Отменено.")
                     pending_actions.pop(str(chat_id), None)
@@ -620,15 +552,12 @@ def handle_any_message(message):
         # другие виды ожиданий — сбросим
         pending_actions.pop(str(chat_id), None)
 
-    # -----------------------
-    # 4) Обычная обработка: удаляем окно и создаём/обновляем (транзакции или просто обновление)
-    # -----------------------
+    # 2) Удалим активное окно текущего дня (если было) — чтобы место освободилось для обновления
     deleted = delete_active_window_if_today_and_belong(chat_id)
     today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
 
-    # Текстовые транзакции (как раньше)
+    # 3) Обработка транзакций (многострочно). Не создаём новое окно до обработки.
     if message.content_type == 'text':
-        text = (message.text or "").strip()
         if not text:
             update_day_window_after_change(chat_id, today, purpose="recreated_on_message")
             return
@@ -668,7 +597,6 @@ def handle_any_message(message):
 
 # -------------------------
 # Callback handler (inline)
-# (оставлен без изменений по логике 9.6.1)
 # -------------------------
 @bot.callback_query_handler(func=lambda call: True)
 def callback_worker(call):
@@ -889,7 +817,7 @@ def set_and_ping():
     print("Webhook установлен:", webhook_url)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.2: webhook активирован")
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.1: webhook активирован")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_ping")
         except Exception as e:
@@ -900,13 +828,15 @@ def set_and_ping():
 # Запуск
 # -------------------------
 if __name__ == "__main__":
-    print("Запуск бота №9.6.2 (webhook)...")
+    print("Запуск бота №9.6.1 (webhook)...")
     save_data(data)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.2 запущен и готов к работе")
+            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.1 запущен и готов к работе")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_start")
         except Exception as e:
             print("Ошибка уведомления владельца:", e)
     app.run(host="0.0.0.0", port=PORT)
+
+# Версия сохранена в памяти
