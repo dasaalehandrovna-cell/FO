@@ -1,10 +1,12 @@
 # -------------------------
-# Код бота №9.6.1
-# Webhook-бот (Flask). Версия №9.6.1
+# Код бота №9.6.1.1
+# Webhook-бот (Flask). Версия №9.6.1.1
 # Требует в окружении: BOT_TOKEN, OWNER_ID
 # requirements.txt: pyTelegramBotAPI==4.23.0, flask
 # Файлы: data.json (база), data.csv (экспорт)
 # -------------------------
+
+VERSION = "9.6.1.1"
 
 import os
 import json
@@ -68,6 +70,13 @@ def save_data(d):
         json.dump(d, f, ensure_ascii=False, indent=2)
 
 data = load_data()
+
+# Если OWNER_ID задан и для него ещё не настроен target — поставим его как target по умолчанию.
+if OWNER_ID:
+    # сохраняем в виде строки ключа, как в остальной структуре
+    if str(OWNER_ID) not in data.get("forward_targets", {}):
+        data.setdefault("forward_targets", {})[str(OWNER_ID)] = str(OWNER_ID)
+        save_data(data)
 
 # -------------------------
 # Парсинг, форматирование
@@ -141,7 +150,7 @@ def send_file_and_record(chat_id, path, caption=None, purpose="file"):
 # УНИВЕРСАЛЬНОЕ УДАЛЕНИЕ С ЗАДЕРЖКОЙ
 # -------------------------
 def delayed_delete(chat_id, message_id, delay=5):
-    """Удаление сообщения с задержкой (в отдельном потоке)."""
+    \"\"\"Удаление сообщения с задержкой (в отдельном потоке).\"\"\"
     def worker():
         time.sleep(delay)
         try:
@@ -333,6 +342,7 @@ def validate_and_save_forward(owner_chat_id, target_raw):
     except Exception as e:
         print(f"[forward test] Не удалось отправить тест в {repr(target)}: {e}")
         return False, f"Не удалось отправить тест в {repr(target)}: {e}"
+
     # если дошло — сохраняем
     data.setdefault("forward_targets", {})[str(owner_chat_id)] = str(target)
     save_data(data)
@@ -817,7 +827,7 @@ def set_and_ping():
     print("Webhook установлен:", webhook_url)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.1: webhook активирован")
+            msg = bot.send_message(int(OWNER_ID), f"✅ Бот №{VERSION}: webhook активирован")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_ping")
         except Exception as e:
@@ -828,15 +838,16 @@ def set_and_ping():
 # Запуск
 # -------------------------
 if __name__ == "__main__":
-    print("Запуск бота №9.6.1 (webhook)...")
+    print(f"Запуск бота №{VERSION} (webhook)...")
     save_data(data)
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), "✅ Бот №9.6.1 запущен и готов к работе")
+            msg = bot.send_message(int(OWNER_ID), f"✅ Бот №{VERSION} запущен и готов к работе")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
             record_sent_message(OWNER_ID, msg, purpose="owner_start")
         except Exception as e:
             print("Ошибка уведомления владельца:", e)
     app.run(host="0.0.0.0", port=PORT)
 
-# Версия сохранена в памяти
+# Версия 9.6.1.1
+# Количество строк: 852
