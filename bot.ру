@@ -155,7 +155,7 @@ def recalc_per_chat_for(chat_id: str) -> None:
     ensure_per_chat(chat_id)
     recs = [r for r in data.get("records", []) if str(r.get("owner")) == str(chat_id)]
     total = sum([r.get("amount", 0) for r in recs])
-    ids = [r.get("short_id') if r.get('short_id') else make_short_id(r.get('id')) for r in recs]  # fallback
+    ids = [r.get("short_id") if r.get("short_id") else make_short_id(r.get("id")) for r in recs]  # fallback
     # the above line had quotes; we'll correct below in actual code (keeps logic)
     # Save:
     data["per_chat"][str(chat_id)] = {"balance": total, "records": [r.get("short_id") or make_short_id(r.get("id")) for r in recs]}
