@@ -776,39 +776,38 @@ def webhook_root():
 def index():
     return f"✅ Бот 'ФО' v{VERSION} работает (Render OK)", 200
 
-
 # -------------------------------
-# Startup: set webhook and run
+# Автоматическая установка webhook при запуске
 # -------------------------------
-def set_webhook_if_possible():
-    """Устанавливает webhook автоматически при старте."""
+def auto_set_webhook():
+    """Автоматически устанавливает webhook при старте, если он ещё не задан."""
     try:
-        host = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_HOSTNAME") or "fo-1.onrender.com"
-        if host:
-            url = f"https://{host}/webhook"
-            try:
-                bot.remove_webhook()
-                time.sleep(0.5)
-            except Exception:
-                pass
-            bot.set_webhook(url=url)
-            print(f"[startup] Webhook установлен: {url}")
+        # Получаем Render URL
+        render_host = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_HOSTNAME") or "fo-1.onrender.com"
+        webhook_url = f"https://{render_host}/webhook"
+
+        # Проверяем текущий webhook
+        info = bot.get_webhook_info()
+        current_url = info.url if hasattr(info, 'url') else ''
+
+        if current_url != webhook_url:
+            print(f"[webhook] Обновление webhook: {current_url} → {webhook_url}")
+            bot.remove_webhook()
+            time.sleep(0.5)
+            bot.set_webhook(url=webhook_url)
+            print(f"[webhook] Установлен: {webhook_url}")
+
             if OWNER_ID:
                 try:
-                    msg = bot.send_message(int(OWNER_ID), f"✅ Бот v{VERSION}: webhook активирован.")
+                    msg = bot.send_message(int(OWNER_ID), f"🔗 Webhook обновлён: {webhook_url}")
                     delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
-                    record_sent_message({
-                        "chat_id": str(OWNER_ID),
-                        "message_id": int(msg.message_id),
-                        "timestamp": now_iso_utc(),
-                        "purpose": "owner_ping"
-                    })
                 except Exception:
                     pass
         else:
-            print("[startup] Не найден URL Render — webhook не установлен.")
+            print(f"[webhook] Уже установлен: {webhook_url}")
+
     except Exception as e:
-        print(f"[set_webhook_if_possible] {e}")
+        print(f"[auto_set_webhook] Ошибка: {e}")
 
 
 # -------------------------------
@@ -818,29 +817,15 @@ if __name__ == "__main__":
     print(f"🚀 Запуск ФО v{VERSION} ...")
     save_data(data)
 
-    # Гарантируем, что владелец добавлен как цель пересылки
-    try:
-        if OWNER_ID:
-            add_forward_target(int(OWNER_ID), str(OWNER_ID))
-    except Exception:
-        pass
+    # Автоматическая установка webhook
+    auto_set_webhook()
 
-    # Установка webhook при старте
-    set_webhook_if_possible()
-
-    # Уведомление владельца о запуске
+    # Уведомление владельца
     if OWNER_ID:
         try:
             msg = bot.send_message(int(OWNER_ID), f"✅ Бот v{VERSION} запущен и активен на Render.")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
-            record_sent_message({
-                "chat_id": str(OWNER_ID),
-                "message_id": int(msg.message_id),
-                "timestamp": now_iso_utc(),
-                "purpose": "owner_start"
-            })
         except Exception:
             pass
 
-    # Запуск Flask-приложения
     app.run(host="0.0.0.0", port=PORT)
