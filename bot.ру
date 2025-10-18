@@ -630,15 +630,16 @@ def auto_forward_message_from(chat_id: int, message: types.Message) -> List[Dict
         })
     return results
 
-# --------------------------
-# Обработка всех сообщений (только от владельца)
-# --------------------------
 @bot.message_handler(func=lambda m: True, content_types=["text", "photo", "video", "document", "audio", "voice", "sticker"])
 def all_messages(msg):
     try:
         # --- Только владелец ---
         if str(msg.from_user.id) != str(OWNER_ID):
             return  # игнорируем чужие сообщения
+
+        # --- Пропускаем сообщения, отправленные ботом самим ---
+        if msg.from_user and msg.from_user.is_bot:
+            return
 
         text = msg.text or ""
 
