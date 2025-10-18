@@ -1,6 +1,6 @@
 # -------------------------------
-# Финансовый бот "ФО" — версия 9.8.1 (stable)
-# Per-chat accounting + PM-owner media forwarding
+# Финансовый бот "ФО" — версия 9.8.1 (full)
+# Per-chat accounting + PM-owner media forwarding + inline editing restored
 # Requires: BOT_TOKEN, OWNER_ID environment variables
 # -------------------------------
 
@@ -41,7 +41,7 @@ def default_data() -> Dict[str, Any]:
         "version_current": VERSION,
         "global_balance": 0,
         "chats": {},  # chat_id -> { balance, records, next_id, prefix }
-        "active_messages": {},  # day -> {chat_id, message_id}
+        "active_messages": {},  # day-> { "<chat_id>": { "chat_id": id, "message_id": id } }
         "sent_messages": [],
         "forward_targets": {}  # owner_chat_id -> [targets]
     }
@@ -134,10 +134,46 @@ def add_record_to_chat(chat_id: str, amount: int, note: str, user: str) -> Dict[
     ch.setdefault("records", []).append(rec)
     ch["next_id"] = rid + 1
     ch["balance"] = ch.get("balance", 0) + amount
-    # update global
     data["global_balance"] = sum([c.get("balance", 0) for c in data.get("chats", {}).values()])
     save_data(data)
     return rec
+
+def find_record_by_short_id(chat_id: str, short_id: str) -> Optional[Dict[str, Any]]:
+    ch = data.get("chats", {}).get(chat_id)
+    if not ch:
+        return None
+    for r in ch.get("records", []):
+        if r.get("short_id") == short_id:
+            return r
+    return None
+
+def delete_record_from_chat(chat_id: str, short_id: str) -> bool:
+    ch = data.get("chats", {}).get(chat_id)
+    if not ch:
+        return False
+    for r in ch.get("records", []):
+        if r.get("short_id") == short_id:
+            ch["records"] = [x for x in ch["records"] if x.get("short_id") != short_id]
+            ch["balance"] = ch.get("balance", 0) - r.get("amount", 0)
+            data["global_balance"] = sum([c.get("balance", 0) for c in data.get("chats", {}).values()])
+            save_data(data)
+            return True
+    return False
+
+def modify_record_in_chat(chat_id: str, short_id: str, new_amount: int, new_note: str) -> bool:
+    ch = data.get("chats", {}).get(chat_id)
+    if not ch:
+        return False
+    for i, r in enumerate(ch.get("records", [])):
+        if r.get("short_id") == short_id:
+            old = r.get("amount", 0)
+            ch["records"][i]["amount"] = new_amount
+            ch["records"][i]["note"] = new_note
+            ch["balance"] = ch.get("balance", 0) - old + new_amount
+            data["global_balance"] = sum([c.get("balance", 0) for c in data.get("chats", {}).values()])
+            save_data(data)
+            return True
+    return False
 
 def export_chat_to_csv(chat_id: str, path: str = CSV_FILE) -> str:
     ch = data.get("chats", {}).get(chat_id, {"records": []})
@@ -182,6 +218,16 @@ def add_forward_target(owner_chat_id: str, target: str) -> bool:
     data["forward_targets"][owner_chat_id] = lst
     save_data(data)
     return True
+
+def remove_forward_target(owner_chat_id: str, target: str) -> bool:
+    lst = ensure_forward_list_for(owner_chat_id)
+    t = str(target).strip()
+    if t in lst:
+        lst = [x for x in lst if x != t]
+        data["forward_targets"][owner_chat_id] = lst
+        save_data(data)
+        return True
+    return False
 
 def list_forward_targets(owner_chat_id: str) -> List[str]:
     return ensure_forward_list_for(owner_chat_id)
@@ -446,16 +492,66 @@ def build_day_window_for_chat(chat_id: str, day_date: str) -> str:
     lines.append(f"💵 Баланс чата: {fmt_amount(overall)}")
     return "\n".join(lines)
 
+# Keyboards for inline editing
 def kb_day_main():
     kb = types.InlineKeyboardMarkup()
     kb.add(types.InlineKeyboardButton("Редактировать", callback_data="edit_menu"))
+    return kb
+
+def kb_edit_main(chat_id=None):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Изменить запись", callback_data="edit_modify"))
+    kb.add(types.InlineKeyboardButton("Удалить запись", callback_data="edit_delete"))
+    kb.add(types.InlineKeyboardButton("📄 Экспорт CSV", callback_data="edit_export_csv"))
+    kb.add(types.InlineKeyboardButton("Обнулить всё (всех)", callback_data="edit_reset_all"))
+    target = data.get("forward_targets", {}).get(str(chat_id)) if chat_id is not None else None
+    if target:
+        kb.add(types.InlineKeyboardButton("🚫 Отключить пересылку", callback_data="forward_cancel"))
+    else:
+        kb.add(types.InlineKeyboardButton("📤 Пересылка", callback_data="forward_setup"))
+    kb.add(types.InlineKeyboardButton("Отмена", callback_data="edit_cancel"))
+    return kb
+
+def kb_forward_menu(chat_id=None):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔧 Установить пересылку (перешли сообщение из нужного чата)", callback_data="forward_setup"))
+    kb.add(types.InlineKeyboardButton("❌ Отключить пересылку", callback_data="forward_cancel"))
+    kb.add(types.InlineKeyboardButton("ℹ️ Проверить текущую", callback_data="forward_check"))
+    kb.add(types.InlineKeyboardButton("Отмена", callback_data="edit_cancel"))
+    return kb
+
+def kb_records_list(chat_id, day_date, mode):
+    kb = types.InlineKeyboardMarkup()
+    recs = []
+    ch = data.get("chats", {}).get(str(chat_id), {"records": []})
+    for ts, r in sorted([(datetime.fromisoformat(x["timestamp"]).astimezone(TZ), x) for x in ch.get("records", [])], key=lambda xx: xx[0]):
+        if ts.strftime("%Y-%m-%d") != day_date:
+            continue
+        sid = r.get("short_id")
+        amt = r["amount"]
+        sign = "+" if amt > 0 else "-"
+        label = f"[{sid}] {sign}{fmt_amount(amt)} {r.get('note','')}"
+        recs.append((sid, label))
+    if not recs:
+        kb.add(types.InlineKeyboardButton("Нет записей за этот день", callback_data="no_op"))
+        kb.add(types.InlineKeyboardButton("Назад", callback_data="edit_menu"))
+        return kb
+    for sid, label in recs:
+        kb.add(types.InlineKeyboardButton(label[:60], callback_data=f"select:{mode}:{sid}"))
+    kb.add(types.InlineKeyboardButton("Назад", callback_data="edit_menu"))
+    return kb
+
+def kb_yes_no(cb_prefix):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("Да", callback_data=f"{cb_prefix}_yes"),
+           types.InlineKeyboardButton("Нет", callback_data=f"{cb_prefix}_no"))
     return kb
 
 # -------------------------------
 pending_actions: Dict[str, Dict[str, Any]] = {}
 
 # -------------------------------
-# Main message handler
+# Message handler
 @bot.message_handler(func=lambda m: True, content_types=['text','photo','document','audio','video','voice','sticker','animation','contact','location'])
 def handle_any_message(message: types.Message):
     global data
@@ -467,7 +563,7 @@ def handle_any_message(message: types.Message):
     if handled:
         return
 
-    # 1) handle pending actions (forward setup / remove)
+    # 1) pending actions
     pa = pending_actions.get(str(chat_id))
     if pa:
         t = pa.get("type")
@@ -506,6 +602,29 @@ def handle_any_message(message: types.Message):
             pending_actions.pop(str(chat_id), None)
             return
 
+        if t == "await_modify_input":
+            short = pa["payload"]["short_id"]
+            text = (message.text or "").strip()
+            ok = False
+            if text:
+                num, sign, raw = parse_first_number(text)
+                if num is not None:
+                    new_amt = apply_sign_and_normalize(num, sign)
+                    note = text[(text.find(raw)+len(raw)):].strip() if raw in text else ""
+                    ok = modify_record_in_chat(str(chat_id), short, new_amt, note)
+            if ok:
+                send_text(chat_id, f"✅ Запись {short} обновлена.")
+            else:
+                send_text(chat_id, f"❗ Не удалось обновить запись {short}. Пример: +1000 зарплата")
+            pending_actions.pop(str(chat_id), None)
+            # refresh day window
+            today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+            try:
+                update_day_window_after_change(chat_id, today)
+            except Exception:
+                pass
+            return
+
         if t == "await_remove_forward":
             if message.content_type == 'text':
                 txt = (message.text or "").strip()
@@ -524,13 +643,13 @@ def handle_any_message(message: types.Message):
             pending_actions.pop(str(chat_id), None)
             return
 
-    # 2) auto-forward from this chat (as forward)
+    # 2) Auto-forward from group/chat if configured (for readers who set per-chat forward)
     try:
         auto_forward_message_from(str(chat_id), message)
     except Exception as e:
         print(f"[auto_forward] Ошибка: {e}")
 
-    # 3) accounting: messages of any participants in groups/pm (per-chat)
+    # 3) Accounting: messages of any participants in groups + private (per-chat accounting)
     if message.content_type == 'text':
         text = (message.text or "").strip()
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -546,42 +665,234 @@ def handle_any_message(message: types.Message):
             any_added = True
         if any_added:
             today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
-            text_window = build_day_window_for_chat(str(chat_id), today)
             try:
-                prev = data.get("active_messages", {}).get(today)
-                if prev and int(prev.get("chat_id")) == int(chat_id):
-                    try:
-                        bot.edit_message_text(chat_id=int(chat_id), message_id=int(prev.get("message_id")), text=text_window, reply_markup=kb_day_main())
-                    except Exception:
-                        sent = bot.send_message(int(chat_id), text_window, reply_markup=kb_day_main())
-                        data.setdefault("active_messages", {})[today] = {"chat_id": int(chat_id), "message_id": int(sent.message_id)}
-                        record_sent({"timestamp": now_iso_utc(), "chat_id": int(chat_id), "message_id": int(sent.message_id), "purpose": "day_window"})
-                        save_data(data)
-                else:
-                    sent = bot.send_message(int(chat_id), text_window, reply_markup=kb_day_main())
-                    data.setdefault("active_messages", {})[today] = {"chat_id": int(chat_id), "message_id": int(sent.message_id)}
-                    record_sent({"timestamp": now_iso_utc(), "chat_id": int(chat_id), "message_id": int(sent.message_id), "purpose": "day_window"})
-                    save_data(data)
+                update_day_window_after_change(chat_id, today)
             except Exception as e:
-                print(f"[day_window send] {e}")
+                print(f"[day window update] {e}")
         return
 
 # -------------------------------
-# Callback handler (basic)
+# Update day window with editing and forwarding
+def update_day_window_after_change(chat_id, day_date, purpose="day_window"):
+    # build text
+    text = build_day_window_for_chat(str(chat_id), day_date)
+    kb = kb_day_main()
+    prev = data.get("active_messages", {}).get(day_date, {}).get(str(chat_id))
+    # Try to edit existing message (search in active_messages structure)
+    # Our active_messages: day -> { "<chat_id>": {"chat_id":id, "message_id": id} }
+    try:
+        day_map = data.get("active_messages", {}).get(day_date, {})
+        prev_entry = day_map.get(str(chat_id))
+        if prev_entry and int(prev_entry.get("chat_id")) == int(chat_id):
+            try:
+                bot.edit_message_text(chat_id=int(chat_id), message_id=int(prev_entry.get("message_id")), text=text, reply_markup=kb)
+                # record as edited
+                fake_msg = types.Message.de_json({"message_id": int(prev_entry.get("message_id"))}, bot)
+                record_sent({"timestamp": now_iso_utc(), "chat_id": int(chat_id), "message_id": int(prev_entry.get("message_id")), "purpose": purpose, "ok": True})
+                save_data(data)
+                return prev_entry
+            except Exception as e:
+                print(f"[update_day_window] edit failed: {e}")
+        # send new
+        sent = bot.send_message(int(chat_id), text, reply_markup=kb)
+        data.setdefault("active_messages", {}).setdefault(day_date, {})[str(chat_id)] = {"chat_id": int(chat_id), "message_id": int(sent.message_id)}
+        record_sent({"timestamp": now_iso_utc(), "chat_id": int(chat_id), "message_id": int(sent.message_id), "purpose": purpose, "ok": True})
+        save_data(data)
+    except Exception as e:
+        print(f"[update_day_window] failed to send: {e}")
+
+    # forward the day window if forward_targets set for this chat (not owner's personal forward)
+    forward_targets_map = data.get("forward_targets", {})
+    forward_target = forward_targets_map.get(str(chat_id))
+    if forward_target:
+        for ft in forward_target:
+            try:
+                try:
+                    bot.forward_message(int(ft), int(chat_id), sent.message_id)
+                except Exception:
+                    bot.forward_message(ft, int(chat_id), sent.message_id)
+            except Exception as e:
+                print(f"[update_day_window] forward failed to {ft}: {e}")
+
+# -------------------------------
+# Callback handler (inline)
 @bot.callback_query_handler(func=lambda call: True)
 def callback_worker(call: types.CallbackQuery):
     data_local = load_data()
     data_call = call.data or ""
     chat_id = call.message.chat.id
+    call_msg = call.message
+    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
+
     if data_call == "edit_menu":
         try:
-            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=kb_day_main())
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
         except Exception:
-            send_text(chat_id, "Меню редактирования недоступно.")
+            send_text(chat_id, "Меню редактирования:",)
+        return
+
+    if data_call == "edit_cancel":
+        try:
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_day_main())
+        except Exception:
+            try:
+                send_text(chat_id, build_day_window_for_chat(str(chat_id), today))
+            except Exception:
+                pass
+        return
+
+    if data_call == "edit_modify":
+        try:
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_records_list(chat_id, today, mode="modify"))
+        except Exception:
+            send_text(chat_id, "Выбор записи для изменения:",)
+        return
+
+    if data_call == "edit_delete":
+        try:
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_records_list(chat_id, today, mode="delete"))
+        except Exception:
+            send_text(chat_id, "Выбор записи для удаления:",)
+        return
+
+    if data_call in ("edit_export_csv",):
+        try:
+            path = export_chat_to_csv(str(chat_id), CSV_FILE)
+            bot.send_document(chat_id, open(path, "rb"))
+            try:
+                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[export csv] {e}")
+            send_text(chat_id, "Ошибка при создании CSV.")
+        return
+
+    if data_call == "forward_setup":
+        send_text(chat_id, "Перешлите сюда сообщение из нужного чата/канала или введите chat_id/@username. Отправьте 'отмена' для отказа.")
+        pending_actions[str(chat_id)] = {"type":"await_forward_setup","payload":{}}
+        try:
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=None)
+        except Exception:
+            pass
+        return
+
+    if data_call == "forward_check":
+        ft = data.get("forward_targets", {}).get(str(chat_id))
+        if ft:
+            send_text(chat_id, f"📨 Текущие цели: {', '.join(ft)}")
+        else:
+            send_text(chat_id, "🔕 Пересылка не установлена.")
+        try:
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
+        except Exception:
+            pass
+        return
+
+    if data_call == "forward_cancel":
+        ft = data.get("forward_targets", {})
+        if str(chat_id) in ft:
+            ft.pop(str(chat_id), None)
+            data["forward_targets"] = ft
+            save_data(data)
+            send_text(chat_id, "✅ Пересылка отключена.")
+        else:
+            send_text(chat_id, "Пересылка не была настроена.")
+        try:
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
+        except Exception:
+            pass
+        return
+
+    if data_call.startswith("select:"):
+        parts = data_call.split(":", 2)
+        if len(parts) != 3:
+            send_text(chat_id, "Неверный выбор.")
+            return
+        mode = parts[1]
+        short_id = parts[2]
+        if mode == "modify":
+            try:
+                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=None)
+            except Exception:
+                pass
+            send_text(chat_id, f"Введите новое значение для {short_id} (пример: +1000 зарплата).")
+            pending_actions[str(chat_id)] = {"type":"await_modify_input","payload":{"short_id": short_id}}
+            return
+        elif mode == "delete":
+            try:
+                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_yes_no(f"confirm_delete:{short_id}"))
+            except Exception:
+                send_text(chat_id, f"Удалить запись {short_id}?",)
+            return
+        else:
+            send_text(chat_id, "Неподдерживаемый режим выбора.")
+            return
+
+    if data_call.startswith("confirm_delete:"):
+        tail = data_call[len("confirm_delete:"):]
+        if tail.endswith("_yes"):
+            short_id = tail[:-4]
+            ok = delete_record_from_chat(str(chat_id), short_id)
+            if ok:
+                try:
+                    bot.edit_message_text(f"✅ Запись {short_id} удалена.", call_msg.chat.id, call_msg.message_id)
+                except Exception:
+                    send_text(chat_id, f"✅ Запись {short_id} удалена.")
+                # refresh window
+                try:
+                    update_day_window_after_change(chat_id, today)
+                except Exception:
+                    pass
+            else:
+                try:
+                    bot.edit_message_text(f"❗ Не удалось удалить запись {short_id}.", call_msg.chat.id, call_msg.message_id)
+                except Exception:
+                    send_text(chat_id, f"❗ Не удалось удалить запись {short_id}.")
+        else:
+            try:
+                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
+            except Exception:
+                send_text(chat_id, "Удаление отменено.",)
+        return
+
+    if data_call == "edit_reset_all":
+        try:
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_yes_no("confirm_reset_all"))
+        except Exception:
+            send_text(chat_id, "Вы уверены, что хотите обнулить ВСЕ данные навсегда? (Да/Нет)")
+        return
+
+    if data_call.startswith("confirm_reset_all"):
+        if data_call.endswith("_yes"):
+            data.update(default_data())
+            save_data(data)
+            try:
+                bot.edit_message_text("♻️ Все данные обнулены.", call_msg.chat.id, call_msg.message_id)
+            except Exception:
+                send_text(chat_id, "♻️ Все данные обнулены.")
+        else:
+            try:
+                bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_edit_main(chat_id))
+            except Exception:
+                send_text(chat_id, "Обнуление отменено.")
+        return
+
+    if data_call in ("no_op",):
+        try:
+            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_day_main())
+        except Exception:
+            try:
+                send_text(chat_id, build_day_window_for_chat(str(chat_id), today))
+            except Exception:
+                pass
+        return
+
+    print("Unhandled callback:", data_call)
 
 # -------------------------------
 # Commands (forward management and accounting)
