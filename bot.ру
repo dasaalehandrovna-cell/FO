@@ -1,14 +1,12 @@
 # -------------------------------
-# Финансовый бот "ФО" — версия 9.8.1
-# Полная расширенная версия — per-chat accounting + pm-owner media forwarding
-# Требует: BOT_TOKEN, OWNER_ID
-# requirements.txt: pyTelegramBotAPI==4.23.0, flask
+# Финансовый бот "ФО" — версия 9.8.1 (stable)
+# Per-chat accounting + PM-owner media forwarding
+# Requires: BOT_TOKEN, OWNER_ID environment variables
 # -------------------------------
 
 import os
 import json
 import time
-import threading
 import re
 import csv
 from datetime import datetime
@@ -19,7 +17,7 @@ from flask import Flask, request
 import telebot
 from telebot import types
 
-# -------------------------------
+# Configuration
 VERSION = "9.8.1"
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_ID")
@@ -30,25 +28,22 @@ PORT = int(os.environ.get("PORT", 5000))
 WEBHOOK_PATH = os.environ.get("WEBHOOK_PATH", "/" + TOKEN) if TOKEN else "/webhook"
 
 if not TOKEN:
-    raise ValueError("Ошибка: BOT_TOKEN не установлен в переменных окружения.")
+    raise ValueError("Ошибка: BOT_TOKEN не установлен.")
 
 bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
 
 # -------------------------------
-# Data model
-# Now data contains per-chat accounting under data["chats"]
-# and global metadata. forward_targets keyed by OWNER_ID (string) map to list of targets.
-# -------------------------------
+# Data helpers
 def default_data() -> Dict[str, Any]:
     return {
         "version_base": "9.6.1",
         "version_current": VERSION,
         "global_balance": 0,
-        "chats": {},  # "<chat_id>": { "balance": 0, "records": [ {id, short_id, timestamp, amount, note, user} ] , "next_id":1 }
-        "active_messages": {},  # per day active messages for updating windows
+        "chats": {},  # chat_id -> { balance, records, next_id, prefix }
+        "active_messages": {},  # day -> {chat_id, message_id}
         "sent_messages": [],
-        "forward_targets": {},  # keyed by owner chat id string -> list of targets
+        "forward_targets": {}  # owner_chat_id -> [targets]
     }
 
 def load_data() -> Dict[str, Any]:
@@ -77,8 +72,7 @@ def save_data(d: Dict[str, Any]) -> None:
 data = load_data()
 
 # -------------------------------
-# Utilities: parsing, formatting
-# -------------------------------
+# Utilities
 NUMBER_RE = re.compile(r'([+-]?\s*[\d][\d\s\.,]*)')
 
 def parse_first_number(text: str) -> Tuple[Optional[int], Optional[str], Optional[str]]:
@@ -113,15 +107,8 @@ def fmt_amount(n: int) -> str:
 def now_iso_utc() -> str:
     return datetime.now(tz=ZoneInfo("UTC")).isoformat()
 
-def now_local_iso() -> str:
-    return datetime.now(tz=TZ).isoformat()
-
-def make_record_short_id(chat_info: Dict[str, Any], local_id: int) -> str:
-    return f"{chat_info.get('prefix','C')}{local_id}"
-
 # -------------------------------
-# Per-chat accounting helpers
-# -------------------------------
+# Per-chat accounting
 def ensure_chat_struct(chat_id: str) -> Dict[str, Any]:
     data.setdefault("chats", {})
     if chat_id not in data["chats"]:
@@ -129,10 +116,13 @@ def ensure_chat_struct(chat_id: str) -> Dict[str, Any]:
         save_data(data)
     return data["chats"][chat_id]
 
+def make_short_id(chat_info: Dict[str, Any], n: int) -> str:
+    return f"{chat_info.get('prefix','C')}{n}"
+
 def add_record_to_chat(chat_id: str, amount: int, note: str, user: str) -> Dict[str, Any]:
     ch = ensure_chat_struct(chat_id)
-    rid = ch.get("next_id",1)
-    short = make_record_short_id(ch, rid)
+    rid = ch.get("next_id", 1)
+    short = make_short_id(ch, rid)
     rec = {
         "id": rid,
         "short_id": short,
@@ -143,66 +133,33 @@ def add_record_to_chat(chat_id: str, amount: int, note: str, user: str) -> Dict[
     }
     ch.setdefault("records", []).append(rec)
     ch["next_id"] = rid + 1
-    ch["balance"] = ch.get("balance",0) + amount
-    # update global balance optionally
-    data["global_balance"] = sum([c.get("balance",0) for c in data.get("chats", {}).values()])
+    ch["balance"] = ch.get("balance", 0) + amount
+    # update global
+    data["global_balance"] = sum([c.get("balance", 0) for c in data.get("chats", {}).values()])
     save_data(data)
     return rec
 
-def delete_record_from_chat(chat_id: str, short_id: str) -> bool:
-    ch = data.get("chats", {}).get(chat_id)
-    if not ch:
-        return False
-    for r in ch.get("records", []):
-        if r.get("short_id") == short_id:
-            ch["records"] = [x for x in ch["records"] if x.get("short_id") != short_id]
-            ch["balance"] = ch.get("balance",0) - r.get("amount",0)
-            data["global_balance"] = sum([c.get("balance",0) for c in data.get("chats", {}).values()])
-            save_data(data)
-            return True
-    return False
-
-def modify_record_in_chat(chat_id: str, short_id: str, new_amount: int, new_note: str) -> bool:
-    ch = data.get("chats", {}).get(chat_id)
-    if not ch:
-        return False
-    for i, r in enumerate(ch.get("records", [])):
-        if r.get("short_id") == short_id:
-            old = r.get("amount",0)
-            ch["records"][i]["amount"] = new_amount
-            ch["records"][i]["note"] = new_note
-            ch["balance"] = ch.get("balance",0) - old + new_amount
-            data["global_balance"] = sum([c.get("balance",0) for c in data.get("chats", {}).values()])
-            save_data(data)
-            return True
-    return False
-
 def export_chat_to_csv(chat_id: str, path: str = CSV_FILE) -> str:
-    ch = data.get("chats", {}).get(chat_id, {"records":[]})
-    rows=[]
+    ch = data.get("chats", {}).get(chat_id, {"records": []})
+    rows = []
     for r in ch.get("records", []):
         try:
-            ts = datetime.fromisoformat(r["timestamp"])
-            date_s = ts.astimezone(TZ).strftime("%Y-%m-%d")
-            time_s = ts.astimezone(TZ).strftime("%H:%M:%S")
+            ts = datetime.fromisoformat(r["timestamp"]).astimezone(TZ)
+            date_s = ts.strftime("%Y-%m-%d")
+            time_s = ts.strftime("%H:%M:%S")
         except Exception:
-            date_s = r["timestamp"]
+            date_s = r.get("timestamp", "")
             time_s = ""
         rows.append([r.get("short_id"), date_s, time_s, r.get("amount"), r.get("note"), r.get("user")])
-    try:
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f)
-            writer.writerow(["ID","Дата","Время","Сумма","Комментарий","Пользователь"])
-            for row in rows:
-                writer.writerow(row)
-        return path
-    except Exception as e:
-        print(f"[export_chat_to_csv] Ошибка: {e}")
-        raise
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(["ID", "Дата", "Время", "Сумма", "Комментарий", "Пользователь"])
+        for row in rows:
+            writer.writerow(row)
+    return path
 
 # -------------------------------
-# Forward targets helpers (owner-targets)
-# -------------------------------
+# Forward targets helpers
 def ensure_forward_list_for(owner_chat_id: str) -> List[str]:
     data.setdefault("forward_targets", {})
     lst = data["forward_targets"].get(owner_chat_id)
@@ -226,16 +183,6 @@ def add_forward_target(owner_chat_id: str, target: str) -> bool:
     save_data(data)
     return True
 
-def remove_forward_target(owner_chat_id: str, target: str) -> bool:
-    lst = ensure_forward_list_for(owner_chat_id)
-    t = str(target).strip()
-    if t in lst:
-        lst = [x for x in lst if x != t]
-        data["forward_targets"][owner_chat_id] = lst
-        save_data(data)
-        return True
-    return False
-
 def list_forward_targets(owner_chat_id: str) -> List[str]:
     return ensure_forward_list_for(owner_chat_id)
 
@@ -250,13 +197,12 @@ def validate_and_test_target(target_raw: str) -> Tuple[bool, str, str]:
             normalized = t_raw if t_raw.startswith("@") else "@" + t_raw
     try:
         bot.send_message(normalized, "🔁 Тест от бота: проверка доступа для пересылки.")
-        return True, "Тестовое сообщение доставлено.", str(normalized)
+        return True, "Тест доставлен.", str(normalized)
     except Exception as e:
         return False, f"Не удалось отправить тест: {e}", str(normalized)
 
 # -------------------------------
-# Sending helpers (file_id based to avoid reupload)
-# -------------------------------
+# Sending helpers for different media (use file_id to resend)
 def record_sent(entry: Dict[str, Any]) -> None:
     data.setdefault("sent_messages", []).append(entry)
     save_data(data)
@@ -264,7 +210,7 @@ def record_sent(entry: Dict[str, Any]) -> None:
 def send_text(target, text: str, purpose: str="pm_forward_text"):
     try:
         sent = bot.send_message(int(target), text)
-        record_sent({"timestamp": now_iso_utc(), "to": str(target), "message_id": getattr(sent,"message_id",None), "purpose": purpose, "ok": True})
+        record_sent({"timestamp": now_iso_utc(), "to": str(target), "message_id": getattr(sent, "message_id", None), "purpose": purpose, "ok": True})
         return sent
     except Exception as e:
         record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose": purpose, "ok": False, "error": str(e)})
@@ -273,7 +219,7 @@ def send_text(target, text: str, purpose: str="pm_forward_text"):
 def send_photo_by_file_id(target, file_id, caption=None):
     try:
         sent = bot.send_photo(int(target), file_id, caption=caption)
-        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"photo", "message_id": getattr(sent,"message_id",None), "ok": True})
+        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"photo", "message_id": getattr(sent, "message_id", None), "ok": True})
         return sent
     except Exception as e:
         record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"photo", "ok": False, "error": str(e)})
@@ -282,7 +228,7 @@ def send_photo_by_file_id(target, file_id, caption=None):
 def send_document_by_file_id(target, file_id, caption=None):
     try:
         sent = bot.send_document(int(target), file_id, caption=caption)
-        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"document", "message_id": getattr(sent,"message_id",None), "ok": True})
+        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"document", "message_id": getattr(sent, "message_id", None), "ok": True})
         return sent
     except Exception as e:
         record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"document", "ok": False, "error": str(e)})
@@ -291,7 +237,7 @@ def send_document_by_file_id(target, file_id, caption=None):
 def send_sticker_by_file_id(target, file_id):
     try:
         sent = bot.send_sticker(int(target), file_id)
-        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"sticker", "message_id": getattr(sent,"message_id",None), "ok": True})
+        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"sticker", "message_id": getattr(sent, "message_id", None), "ok": True})
         return sent
     except Exception as e:
         record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"sticker", "ok": False, "error": str(e)})
@@ -300,7 +246,7 @@ def send_sticker_by_file_id(target, file_id):
 def send_voice_by_file_id(target, file_id):
     try:
         sent = bot.send_voice(int(target), file_id)
-        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"voice", "message_id": getattr(sent,"message_id",None), "ok": True})
+        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"voice", "message_id": getattr(sent, "message_id", None), "ok": True})
         return sent
     except Exception as e:
         record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"voice", "ok": False, "error": str(e)})
@@ -309,7 +255,7 @@ def send_voice_by_file_id(target, file_id):
 def send_video_by_file_id(target, file_id, caption=None):
     try:
         sent = bot.send_video(int(target), file_id, caption=caption)
-        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"video", "message_id": getattr(sent,"message_id",None), "ok": True})
+        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"video", "message_id": getattr(sent, "message_id", None), "ok": True})
         return sent
     except Exception as e:
         record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"video", "ok": False, "error": str(e)})
@@ -318,7 +264,7 @@ def send_video_by_file_id(target, file_id, caption=None):
 def send_location(target, latitude, longitude):
     try:
         sent = bot.send_location(int(target), latitude, longitude)
-        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"location", "message_id": getattr(sent,"message_id",None), "ok": True})
+        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"location", "message_id": getattr(sent, "message_id", None), "ok": True})
         return sent
     except Exception as e:
         record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"location", "ok": False, "error": str(e)})
@@ -327,32 +273,25 @@ def send_location(target, latitude, longitude):
 def send_contact(target, phone_number, first_name, last_name=None):
     try:
         sent = bot.send_contact(int(target), phone_number, first_name, last_name)
-        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"contact", "message_id": getattr(sent,"message_id",None), "ok": True})
+        record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"contact", "message_id": getattr(sent, "message_id", None), "ok": True})
         return sent
     except Exception as e:
         record_sent({"timestamp": now_iso_utc(), "to": str(target), "purpose":"contact", "ok": False, "error": str(e)})
         return None
 
 # -------------------------------
-# PM-owner forwarding: forward owner's private messages to configured targets
-# -------------------------------
+# PM-owner forwarding block
 def pm_owner_forward_block(message: types.Message) -> bool:
-    """
-    If PRIVATE and from OWNER_ID -> send message content (text/media) to owner's targets.
-    Returns True if handled (and no further processing should occur), False otherwise.
-    """
     try:
         if getattr(message.chat, "type", "") != "private":
             return False
         if str(message.from_user.id) != str(OWNER_ID):
             return False
-
         owner_key = str(OWNER_ID)
         targets = data.get("forward_targets", {}).get(owner_key, []) or []
         if not targets:
             return False
-
-        # TEXT
+        # text
         if message.content_type == 'text':
             text = (message.text or "").strip()
             if not text:
@@ -360,24 +299,21 @@ def pm_owner_forward_block(message: types.Message) -> bool:
             for tgt in targets:
                 send_text(tgt, text)
             return True
-
-        # PHOTO
+        # photo
         if message.content_type == 'photo' and getattr(message, "photo", None):
             file_id = message.photo[-1].file_id
             caption = getattr(message, "caption", None)
             for tgt in targets:
                 send_photo_by_file_id(tgt, file_id, caption=caption)
             return True
-
-        # DOCUMENT
+        # document
         if message.content_type == 'document' and getattr(message, "document", None):
             file_id = message.document.file_id
             caption = getattr(message, "caption", None)
             for tgt in targets:
                 send_document_by_file_id(tgt, file_id, caption=caption)
             return True
-
-        # AUDIO
+        # audio
         if message.content_type == 'audio' and getattr(message, "audio", None):
             file_id = message.audio.file_id
             for tgt in targets:
@@ -387,38 +323,33 @@ def pm_owner_forward_block(message: types.Message) -> bool:
                 except Exception as e:
                     record_sent({"timestamp": now_iso_utc(), "to": str(tgt), "purpose":"audio", "ok": False, "error": str(e)})
             return True
-
-        # VOICE
+        # voice
         if message.content_type == 'voice' and getattr(message, "voice", None):
             file_id = message.voice.file_id
             for tgt in targets:
                 send_voice_by_file_id(tgt, file_id)
             return True
-
-        # STICKER
+        # sticker
         if message.content_type == 'sticker' and getattr(message, "sticker", None):
             file_id = message.sticker.file_id
             for tgt in targets:
                 send_sticker_by_file_id(tgt, file_id)
             return True
-
-        # VIDEO
+        # video
         if message.content_type == 'video' and getattr(message, "video", None):
             file_id = message.video.file_id
             caption = getattr(message, "caption", None)
             for tgt in targets:
                 send_video_by_file_id(tgt, file_id, caption=caption)
             return True
-
-        # LOCATION
+        # location
         if message.content_type == 'location' and getattr(message, "location", None):
             lat = message.location.latitude
             lon = message.location.longitude
             for tgt in targets:
                 send_location(tgt, lat, lon)
             return True
-
-        # CONTACT
+        # contact
         if message.content_type == 'contact' and getattr(message, "contact", None):
             phone = message.contact.phone_number
             first = message.contact.first_name
@@ -426,8 +357,7 @@ def pm_owner_forward_block(message: types.Message) -> bool:
             for tgt in targets:
                 send_contact(tgt, phone, first, last)
             return True
-
-        # fallback: try forward (if sending as new fails)
+        # fallback: try forward
         for tgt in targets:
             try:
                 try:
@@ -439,7 +369,6 @@ def pm_owner_forward_block(message: types.Message) -> bool:
             except Exception as e:
                 record_sent({"timestamp": now_iso_utc(), "from_chat": str(message.chat.id), "to": str(tgt), "purpose":"pm_forward_forward", "ok": False, "error": str(e)})
         return True
-
     except Exception as e:
         print(f"[pm_owner_forward_block] Ошибка: {e}")
         try:
@@ -450,7 +379,6 @@ def pm_owner_forward_block(message: types.Message) -> bool:
 
 # -------------------------------
 # Auto-forward for chats (forward message as forward)
-# -------------------------------
 def auto_forward_message_from(chat_id: str, message: types.Message) -> None:
     targets = data.get("forward_targets", {}).get(str(chat_id)) or []
     if not targets:
@@ -464,7 +392,6 @@ def auto_forward_message_from(chat_id: str, message: types.Message) -> None:
                 bot.forward_message(t, int(chat_id), message.message_id)
                 record_sent({"timestamp": now_iso_utc(), "from_chat": str(chat_id), "to": str(t), "ok": True, "method":"forward"})
         except Exception as e:
-            # fallback: send text copy if text
             try:
                 if message.content_type == 'text' and getattr(message, "text", None):
                     bot.send_message(t, f"📨 Копия сообщения из {chat_id}:\n\n{message.text}")
@@ -475,18 +402,20 @@ def auto_forward_message_from(chat_id: str, message: types.Message) -> None:
                 record_sent({"timestamp": now_iso_utc(), "from_chat": str(chat_id), "to": str(t), "ok": False, "error": str(e2)})
 
 # -------------------------------
-# Active day window and keyboards (simplified but functional)
-# -------------------------------
+# Build day window per chat
 def build_day_window_for_chat(chat_id: str, day_date: str) -> str:
-    ch = data.get("chats", {}).get(chat_id, {"records":[]})
+    ch = data.get("chats", {}).get(chat_id, {"records": []})
     recs = []
     for r in ch.get("records", []):
         try:
             ts = datetime.fromisoformat(r["timestamp"]).astimezone(TZ)
         except Exception:
-            ts = datetime.fromisoformat(r["timestamp"])
-            ts = ts.astimezone(TZ)
-        if ts.strftime("%Y-%m-%d") == day_date:
+            try:
+                ts = datetime.fromisoformat(r["timestamp"])
+                ts = ts.astimezone(TZ)
+            except Exception:
+                ts = None
+        if ts and ts.strftime("%Y-%m-%d") == day_date:
             recs.append((ts, r))
     recs.sort(key=lambda x: x[0])
     if not recs:
@@ -503,14 +432,14 @@ def build_day_window_for_chat(chat_id: str, day_date: str) -> str:
         amt = r["amount"]
         sign = "+" if amt > 0 else "-"
         sid = r.get("short_id")
-        note = r.get("note","")
+        note = r.get("note", "")
         t_local = ts.strftime("%H:%M")
         lines.append(f"🕓 {t_local} | {sid} | {sign}{fmt_amount(amt)} {note}".rstrip())
-        if amt>0:
+        if amt > 0:
             day_income += amt
         else:
             day_expense += abs(amt)
-    overall = data.get("chats", {}).get(chat_id, {}).get("balance",0)
+    overall = data.get("chats", {}).get(chat_id, {}).get("balance", 0)
     lines.append("")
     lines.append(f"📈 Приход дня: {fmt_amount(day_income)}")
     lines.append(f"📉 Расход дня: {fmt_amount(day_expense)}")
@@ -523,24 +452,22 @@ def kb_day_main():
     return kb
 
 # -------------------------------
-# Pending actions state
 pending_actions: Dict[str, Dict[str, Any]] = {}
 
 # -------------------------------
-# Message handler (core)
-# -------------------------------
+# Main message handler
 @bot.message_handler(func=lambda m: True, content_types=['text','photo','document','audio','video','voice','sticker','animation','contact','location'])
 def handle_any_message(message: types.Message):
     global data
     chat_id = message.chat.id
     data = load_data()
 
-    # 0) PM-owner forwarding: if PRIVATE and from OWNER -> send copies to owner's targets and stop
+    # 0) PM-owner forwarding: if private and from OWNER -> send copies to targets and stop
     handled = pm_owner_forward_block(message)
     if handled:
         return
 
-    # 1) pending actions
+    # 1) handle pending actions (forward setup / remove)
     pa = pending_actions.get(str(chat_id))
     if pa:
         t = pa.get("type")
@@ -559,7 +486,7 @@ def handle_any_message(message: types.Message):
             elif message.content_type == 'text':
                 txt = (message.text or "").strip()
                 if txt.lower() == "отмена":
-                    send_text(chat_id, "Отменено",)
+                    send_text(chat_id, "Отменено")
                     pending_actions.pop(str(chat_id), None)
                     return
                 target = txt
@@ -597,14 +524,13 @@ def handle_any_message(message: types.Message):
             pending_actions.pop(str(chat_id), None)
             return
 
-    # 2) Auto-forward from group/chat if configured (for readers who set per-chat forward)
+    # 2) auto-forward from this chat (as forward)
     try:
         auto_forward_message_from(str(chat_id), message)
     except Exception as e:
         print(f"[auto_forward] Ошибка: {e}")
 
-    # 3) Accounting: react to messages of all participants in groups + private (per-chat accounting)
-    # If message is text and starts with + or -, treat as transaction
+    # 3) accounting: messages of any participants in groups/pm (per-chat)
     if message.content_type == 'text':
         text = (message.text or "").strip()
         lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
@@ -614,69 +540,58 @@ def handle_any_message(message: types.Message):
             if num is None:
                 continue
             amt_signed = apply_sign_and_normalize(num, sign)
-            note = line[(line.find(raw)+len(raw)):].strip() if raw in line else ""
+            note = line[(line.find(raw) + len(raw)):].strip() if raw in line else ""
             user_display = (message.from_user.username or message.from_user.first_name or str(message.from_user.id))
-            rec = add_record_to_chat(str(chat_id), amt_signed, note, user_display)
+            add_record_to_chat(str(chat_id), amt_signed, note, user_display)
             any_added = True
         if any_added:
-            # update day window for this chat
             today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
             text_window = build_day_window_for_chat(str(chat_id), today)
             try:
-                # try edit existing active message
-                prev = data.get("active_messages", {}).get(today, {})
+                prev = data.get("active_messages", {}).get(today)
                 if prev and int(prev.get("chat_id")) == int(chat_id):
                     try:
                         bot.edit_message_text(chat_id=int(chat_id), message_id=int(prev.get("message_id")), text=text_window, reply_markup=kb_day_main())
                     except Exception:
                         sent = bot.send_message(int(chat_id), text_window, reply_markup=kb_day_main())
                         data.setdefault("active_messages", {})[today] = {"chat_id": int(chat_id), "message_id": int(sent.message_id)}
-                        record_sent({"timestamp": now_iso_utc(), "chat_id": int(chat_id), "message_id": int(sent.message_id), "purpose":"day_window"})
+                        record_sent({"timestamp": now_iso_utc(), "chat_id": int(chat_id), "message_id": int(sent.message_id), "purpose": "day_window"})
                         save_data(data)
                 else:
                     sent = bot.send_message(int(chat_id), text_window, reply_markup=kb_day_main())
                     data.setdefault("active_messages", {})[today] = {"chat_id": int(chat_id), "message_id": int(sent.message_id)}
-                    record_sent({"timestamp": now_iso_utc(), "chat_id": int(chat_id), "message_id": int(sent.message_id), "purpose":"day_window"})
+                    record_sent({"timestamp": now_iso_utc(), "chat_id": int(chat_id), "message_id": int(sent.message_id), "purpose": "day_window"})
                     save_data(data)
             except Exception as e:
                 print(f"[day_window send] {e}")
         return
 
-    # for media and other types we do not add transactions by default, but can update window if needed
-    # end of handler
-
 # -------------------------------
-# Callback handler (simplified)
-# -------------------------------
+# Callback handler (basic)
 @bot.callback_query_handler(func=lambda call: True)
 def callback_worker(call: types.CallbackQuery):
     data_local = load_data()
     data_call = call.data or ""
     chat_id = call.message.chat.id
-    call_msg = call.message
-    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     try:
         bot.answer_callback_query(call.id)
     except Exception:
         pass
-
     if data_call == "edit_menu":
         try:
-            bot.edit_message_reply_markup(call_msg.chat.id, call_msg.message_id, reply_markup=kb_day_main())
+            bot.edit_message_reply_markup(call.message.chat.id, call.message.message_id, reply_markup=kb_day_main())
         except Exception:
             send_text(chat_id, "Меню редактирования недоступно.")
-        return
 
 # -------------------------------
-# Commands for forward management (owner-only)
-# -------------------------------
+# Commands (forward management and accounting)
 @bot.message_handler(commands=['addforward'])
 def cmd_addforward(message: types.Message):
     if str(message.from_user.id) != str(OWNER_ID):
         bot.reply_to(message, "⛔ Только владелец может управлять пересылкой.")
         return
     send_text(message.chat.id, "Перешлите мне сообщение из целевого чата/канала или отправьте chat_id/@username.")
-    pending_actions[str(message.chat.id)] = {"type":"await_forward_setup","payload":{}}
+    pending_actions[str(message.chat.id)] = {"type": "await_forward_setup", "payload": {}}
 
 @bot.message_handler(commands=['removeforward'])
 def cmd_removeforward(message: types.Message):
@@ -688,7 +603,7 @@ def cmd_removeforward(message: types.Message):
         send_text(message.chat.id, "Список пересылки пуст.")
         return
     send_text(message.chat.id, "Список целей:\n" + "\n".join(lst) + "\nОтправь цель для удаления или 'всё' для очистки.")
-    pending_actions[str(message.chat.id)] = {"type":"await_remove_forward","payload":{}}
+    pending_actions[str(message.chat.id)] = {"type": "await_remove_forward", "payload": {}}
 
 @bot.message_handler(commands=['listforwards'])
 def cmd_listforwards(message: types.Message):
@@ -698,19 +613,16 @@ def cmd_listforwards(message: types.Message):
     else:
         send_text(message.chat.id, "Текущие цели:\n" + "\n".join(lst))
 
-# -------------------------------
-# Commands: per-chat balance/report/reset
-# -------------------------------
 @bot.message_handler(commands=["баланс"])
 def cmd_balance(message: types.Message):
     chat_id = str(message.chat.id)
-    ch = data.get("chats", {}).get(chat_id, {"balance":0})
-    bot.reply_to(message, f"💰 Баланс этого чата: {fmt_amount(ch.get('balance',0))}")
+    ch = data.get("chats", {}).get(chat_id, {"balance": 0})
+    bot.reply_to(message, f"💰 Баланс этого чата: {fmt_amount(ch.get('balance', 0))}")
 
 @bot.message_handler(commands=["отчет"])
 def cmd_report(message: types.Message):
     chat_id = str(message.chat.id)
-    ch = data.get("chats", {}).get(chat_id, {"records":[]})
+    ch = data.get("chats", {}).get(chat_id, {"records": []})
     if not ch.get("records"):
         bot.reply_to(message, "Пока нет записей в этом чате.")
         return
@@ -722,7 +634,6 @@ def cmd_report(message: types.Message):
 
 @bot.message_handler(commands=["сброс"])
 def cmd_reset(message: types.Message):
-    # Only owner can global reset; chat reset allowed by owner or admin? We'll restrict to owner to be safe
     if str(message.from_user.id) != str(OWNER_ID):
         bot.reply_to(message, "⛔ Только владелец может обнулить данные.")
         return
@@ -731,8 +642,7 @@ def cmd_reset(message: types.Message):
     bot.reply_to(message, "♻️ Все данные обнулены (глобально).")
 
 # -------------------------------
-# Webhook endpoints
-# -------------------------------
+# Webhook endpoint
 @app.route(WEBHOOK_PATH, methods=['POST'])
 def webhook():
     try:
@@ -748,8 +658,6 @@ def index():
     return f"🤖 Бот 'ФО' v{VERSION} работает."
 
 # -------------------------------
-# Startup: set webhook if Render host present
-# -------------------------------
 def set_webhook_if_possible():
     try:
         host = os.getenv("RENDER_EXTERNAL_HOSTNAME")
@@ -761,15 +669,12 @@ def set_webhook_if_possible():
             print(f"[startup] Webhook установлен: {url}")
             if OWNER_ID:
                 try:
-                    msg = bot.send_message(int(OWNER_ID), f"✅ Бот v{VERSION}: webhook активирован.")
-                    time.sleep(0.5)
-                except Exception as e:
-                    print(f"[startup notify] Ошибка: {e}")
+                    bot.send_message(int(OWNER_ID), f"✅ Бот v{VERSION}: webhook активирован.")
+                except Exception:
+                    pass
     except Exception as e:
         print(f"[set_webhook_if_possible] {e}")
 
-# -------------------------------
-# Run
 # -------------------------------
 if __name__ == "__main__":
     print(f"Запуск бота 'ФО' v{VERSION} ...")
@@ -782,5 +687,5 @@ if __name__ == "__main__":
     app.run(host="0.0.0.0", port=PORT)
 
 # -------------------------------
-# lines: 1018
+# EOF
 # -------------------------------
