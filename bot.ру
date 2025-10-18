@@ -630,36 +630,140 @@ def auto_forward_message_from(chat_id: int, message: types.Message) -> List[Dict
         })
     return results
 
-@bot.message_handler(func=lambda m: True, content_types=["text", "photo", "video", "document", "audio", "voice", "sticker"])
-def all_messages(msg):
-    try:
-        # --- Только владелец ---
-        if str(msg.from_user.id) != str(OWNER_ID):
-            return  # игнорируем чужие сообщения
+# -------------------------------
+# Message handlers (core logic)
+# -------------------------------
+@bot.message_handler(func=lambda m: True, content_types=['text','photo','document','audio','video','voice','sticker','animation','contact','location'])
+def handle_any_message(message: types.Message):
+    
+    # --- Не пересылать собственные сообщения бота ---
+    if message.from_user and str(message.from_user.id) == str(bot.get_me().id):
+        return  # просто выходим, не обрабатываем свои сообщения
+    
+    global data
+    chat_id = message.chat.id
+    data = load_data()  # refresh
 
-        # --- Пропускаем сообщения, отправленные ботом самим ---
-        if msg.from_user and msg.from_user.is_bot:
+    # 1) If pending action for this chat, handle it first
+    pa = pending_actions.get(str(chat_id))
+    if pa:
+        t = pa.get("type")
+        if t == "await_modify_input":
+            short = pa["payload"]["short_id"]
+            ok = modify_record_by_short_id(chat_id, short, message.text or "")
+            if ok:
+                send_and_record(chat_id, f"✅ Запись {short} обновлена.", purpose="modified_record")
+            else:
+                send_and_record(chat_id, f"❗ Не удалось обновить запись {short}. Пример: +1000 зарплата", purpose="modify_failed")
+            pending_actions.pop(str(chat_id), None)
             return
-
-        text = msg.text or ""
-
-        # --- Финансовые записи (+1000 / -500 ...) ---
-        if re.match(r"^[+-]?\d+", text):
-            amount = int(re.findall(r"^[+-]?\d+", text)[0])
-            note = re.sub(r"^[+-]?\d+\s*", "", text)
-            add_record(amount, note, msg.from_user.username or msg.from_user.first_name)
-            bot.reply_to(msg, f"✅ Записано: {amount} ({note})")
-
-        else:
-            # --- Автопересылка только сообщений владельца ---
-            for target in data.get("forward_targets", []):
+        if t == "await_forward_setup":
+            # accept forwarded message or text id/username
+            target = None
+            if getattr(message, "forward_from_chat", None):
                 try:
-                    bot.forward_message(target, msg.chat.id, msg.message_id)
-                except Exception as e:
-                    print(f"[Ошибка пересылки в {target}] {e}")
+                    target = str(message.forward_from_chat.id)
+                except Exception:
+                    target = None
+            elif getattr(message, "forward_from", None):
+                try:
+                    target = str(message.forward_from.id)
+                except Exception:
+                    target = None
+            elif message.content_type == 'text' and (message.text or "").strip():
+                txt = (message.text or "").strip()
+                if txt.lower() == "отмена":
+                    send_and_record(chat_id, "Отменено.", purpose="forward_setup_cancel")
+                    pending_actions.pop(str(chat_id), None)
+                    return
+                target = txt
+            if not target:
+                send_and_record(chat_id, "❌ Неверный идентификатор. Отмена.", purpose="forward_setup_failed")
+                pending_actions.pop(str(chat_id), None)
+                return
+            ok, msg_text, norm = validate_and_test_target(target)
+            if ok:
+                added = add_forward_target(chat_id, norm)
+                if added:
+                    send_and_record(chat_id, f"✅ Пересылка добавлена: {norm}", purpose="forward_added")
+                else:
+                    send_and_record(chat_id, f"ℹ️ Цель уже в списке: {norm}", purpose="forward_exists")
+            else:
+                send_and_record(chat_id, f"❌ {msg_text}", purpose="forward_test_failed")
+            pending_actions.pop(str(chat_id), None)
+            return
+        if t == "await_remove_forward":
+            if message.content_type == 'text':
+                txt = (message.text or "").strip()
+                if txt.lower() in ('всё','все','all'):
+                    data["forward_targets"].pop(str(chat_id), None)
+                    save_data(data)
+                    send_and_record(chat_id, "✅ Все цели пересылки удалены.", purpose="forward_removed_all")
+                else:
+                    removed = remove_forward_target(chat_id, txt)
+                    if removed:
+                        send_and_record(chat_id, f"✅ Цель {txt} удалена.", purpose="forward_removed")
+                    else:
+                        send_and_record(chat_id, f"❗ Цель {txt} не найдена.", purpose="forward_remove_failed")
+            else:
+                send_and_record(chat_id, "❌ Неверный ввод, отменено.", purpose="forward_remove_failed")
+            pending_actions.pop(str(chat_id), None)
+            return
+        # other pending types - clear
+        pending_actions.pop(str(chat_id), None)
 
+    # 2) Automatic forward for this chat (if configured)
+    try:
+        auto_forward_message_from(chat_id, message)
     except Exception as e:
-        bot.reply_to(msg, f"⚠️ Ошибка обработки: {e}")
+        print(f"[auto_forward] unexpected error: {e}")
+        try:
+            bot.send_message(int(OWNER_ID), f"⚠️ auto_forward error for {chat_id}: {e}")
+        except Exception:
+            pass
+
+    # 3) Delete active window for today if it belongs to this chat (free the slot)
+    deleted = delete_active_window_if_today_and_belong(chat_id)
+    today = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+
+    # 4) If text - parse for transaction(s)
+    if message.content_type == 'text':
+        text = (message.text or "").strip()
+        if not text:
+            update_day_window_after_change(chat_id, today, purpose="recreated_on_empty")
+            return
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        any_added = False
+        for line in lines:
+            num, sign, raw = parse_first_number(line)
+            if num is None:
+                continue
+            amt_signed = apply_sign_and_normalize(num, sign)
+            note = line[(line.find(raw) + len(raw)):].strip() if raw in line else ""
+            rec_id = data.get("next_id", 1)
+            short = make_short_id(rec_id)
+            ts = datetime.now(tz=ZoneInfo("UTC")).isoformat()
+            rec = {
+                "id": rec_id,
+                "short_id": short,
+                "timestamp": ts,
+                "amount": amt_signed,
+                "note": note,
+                "owner": str(chat_id)
+            }
+            data.setdefault("records", []).append(rec)
+            data["next_id"] = rec_id + 1
+            data["overall_balance"] = data.get("overall_balance", 0) + amt_signed
+            any_added = True
+        if any_added:
+            save_data(data)
+            update_day_window_after_change(chat_id, today, purpose="added_records")
+        else:
+            update_day_window_after_change(chat_id, today, purpose="recreated_on_message")
+    else:
+        # non-text (media) received - update window
+        update_day_window_after_change(chat_id, today, purpose="media_received")
+
 # -------------------------------
 # Callback handler (inline buttons)
 # -------------------------------
