@@ -185,6 +185,29 @@ def kb_day_main():
 @bot.message_handler(content_types=["text"])
 def handle_any_message(message):
     chat_id, text = message.chat.id, message.text.strip()
+@bot.message_handler(content_types=["text"])
+def handle_any_message(message):
+    chat_id = message.chat.id
+    text = (message.text or "").strip()
+
+    # --- ПАТЧ: пропуск команд, чтобы они не считались расходами/доходами ---
+    entities = getattr(message, "entities", None) or getattr(message, "caption_entities", None)
+    if entities:
+        for ent in entities:
+            if getattr(ent, "type", "") == "bot_command":
+                # Это команда (/addforward, /баланс, /отчет и т.п.)
+                return
+    if text.startswith("/"):
+        # Дополнительная страховка — если Telegram не прислал entity
+        return
+    # ------------------------------------------------------------------------
+
+    # --- дальше остаётся твоя логика ---
+    m_amount, m_sign, m_raw = parse_first_number(text)
+    if not m_amount:
+        return
+   
+
     pend = data.get("pending_edit", {}).get(str(chat_id))
     if pend:
         amount, sign, raw_num = parse_first_number(text)
