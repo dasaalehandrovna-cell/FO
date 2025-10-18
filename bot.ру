@@ -39,6 +39,34 @@ bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
 
 # -------------------------------
+# Автосоздание data.json при запуске
+# -------------------------------
+import os, json
+
+DATA_FILE = "data.json"
+
+def default_data():
+    """Базовая структура данных для первого запуска."""
+    return {
+        "overall_balance": 0,
+        "records": [],
+        "active_messages": {},
+        "next_id": 1,
+        "sent_messages": [],
+        "forward_targets": []
+    }
+
+# Проверяем наличие файла, если нет — создаём
+if not os.path.exists(DATA_FILE):
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(default_data(), f, ensure_ascii=False, indent=2)
+        print("[init] Создан новый файл data.json (первичный запуск).")
+    except Exception as e:
+        print(f"[init] Ошибка создания data.json: {e}")
+else:
+    print("[init] Файл data.json найден — загрузка существующих данных.")
+# -------------------------------
 # Данные и структуры
 # -------------------------------
 def default_data() -> Dict[str, Any]:
