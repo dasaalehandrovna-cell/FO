@@ -737,6 +737,22 @@ def process_update_request(json_str: str):
     except Exception as e:
         print(f"[process_update_request] {e}")
 
+# Основной маршрут вебхука, куда Telegram шлёт обновления
+@app.route("/webhook", methods=['POST'])
+def webhook():
+    try:
+        if request.headers.get('content-type') == 'application/json':
+            json_str = request.get_data().decode('utf-8')
+            process_update_request(json_str)
+            return '', 200
+        else:
+            print("[webhook] неверный формат данных")
+            return 'Неверный формат', 403
+    except Exception as e:
+        print(f"[webhook] {e}")
+        return 'Ошибка обработки', 500
+
+# Альтернативные пути (если Telegram попал в старый URL)
 @app.route(WEBHOOK_PATH, methods=['POST'])
 def webhook_token_path():
     try:
@@ -755,52 +771,76 @@ def webhook_root():
         print(f"[webhook_root] {e}")
     return '', 200
 
+# Тестовая страница — просто проверка активности
 @app.route("/", methods=['GET'])
 def index():
-    return f"🤖 Бот 'ФО' v{VERSION} активен."
+    return f"✅ Бот 'ФО' v{VERSION} работает (Render OK)", 200
+
 
 # -------------------------------
 # Startup: set webhook and run
 # -------------------------------
 def set_webhook_if_possible():
+    """Устанавливает webhook автоматически при старте."""
     try:
-        host = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_HOSTNAME")
+        host = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_HOSTNAME") or "fo-1.onrender.com"
         if host:
-            url = f"https://{host}{WEBHOOK_PATH}"
+            url = f"https://{host}/webhook"
             try:
                 bot.remove_webhook()
                 time.sleep(0.5)
             except Exception:
                 pass
             bot.set_webhook(url=url)
+            print(f"[startup] Webhook установлен: {url}")
             if OWNER_ID:
                 try:
                     msg = bot.send_message(int(OWNER_ID), f"✅ Бот v{VERSION}: webhook активирован.")
                     delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
-                    record_sent_message({"chat_id": str(OWNER_ID), "message_id": int(msg.message_id), "timestamp": now_iso_utc(), "purpose": "owner_ping"})
+                    record_sent_message({
+                        "chat_id": str(OWNER_ID),
+                        "message_id": int(msg.message_id),
+                        "timestamp": now_iso_utc(),
+                        "purpose": "owner_ping"
+                    })
                 except Exception:
                     pass
         else:
-            print("[startup] RENDER_EXTERNAL_URL не задан — webhook не будет устанавливаться автоматически.")
+            print("[startup] Не найден URL Render — webhook не установлен.")
     except Exception as e:
         print(f"[set_webhook_if_possible] {e}")
 
+
+# -------------------------------
+# Автозапуск Flask и бота
+# -------------------------------
 if __name__ == "__main__":
-    print(f"Запуск ФО v{VERSION} ...")
+    print(f"🚀 Запуск ФО v{VERSION} ...")
     save_data(data)
-    # гарантируем, что OWNER_ID присутствует в качестве цели пересылки самого себя (помогает тестированию)
+
+    # Гарантируем, что владелец добавлен как цель пересылки
     try:
         if OWNER_ID:
             add_forward_target(int(OWNER_ID), str(OWNER_ID))
     except Exception:
         pass
+
+    # Установка webhook при старте
     set_webhook_if_possible()
+
+    # Уведомление владельца о запуске
     if OWNER_ID:
         try:
-            msg = bot.send_message(int(OWNER_ID), f"✅ Бот v{VERSION} запущен.")
+            msg = bot.send_message(int(OWNER_ID), f"✅ Бот v{VERSION} запущен и активен на Render.")
             delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
-            record_sent_message({"chat_id": str(OWNER_ID), "message_id": int(msg.message_id), "timestamp": now_iso_utc(), "purpose": "owner_start"})
+            record_sent_message({
+                "chat_id": str(OWNER_ID),
+                "message_id": int(msg.message_id),
+                "timestamp": now_iso_utc(),
+                "purpose": "owner_start"
+            })
         except Exception:
             pass
-    app.run(host="0.0.0.0", port=PORT)
 
+    # Запуск Flask-приложения
+    app.run(host="0.0.0.0", port=PORT)
