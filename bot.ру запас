@@ -1,0 +1,912 @@
+# ============================================
+# Финансовый бот «ФО» — версия 9.6.1.7
+# Полная версия
+# Базируется на 9.6.1.6
+# ОТСЕК 1 — Импорты и настройки
+# ============================================
+
+import os
+import json
+import csv
+import re
+import threading
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import telebot
+from flask import Flask, request
+from telebot import types
+
+# -----------------------------
+# Настройки окружения
+# -----------------------------
+TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_ID")
+if not TOKEN:
+    raise ValueError("❌ Переменная окружения BOT_TOKEN не установлена!")
+
+VERSION = "9.6.1.7"
+TZ = ZoneInfo("America/Argentina/Catamarca")
+DATA_FILE = "data.json"
+CSV_FILE = "data.csv"
+PORT = int(os.environ.get("PORT", 5000))
+
+bot = telebot.TeleBot(TOKEN, threaded=True)
+app = Flask(__name__)
+
+# -----------------------------
+# Вспомогательные функции логирования
+# -----------------------------
+def log_info(text):
+    print(f"[INFO] {datetime.now(TZ).strftime('%H:%M:%S')} — {text}")
+
+def log_error(text):
+    print(f"[ERROR] {datetime.now(TZ).strftime('%H:%M:%S')} — {text}")
+
+# -----------------------------
+# Основная структура данных
+# -----------------------------
+def default_data():
+    return {
+        "chats": {},
+        "processed_messages": [],
+        "forward_targets": []
+    }
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            try:
+                d = json.load(f)
+            except Exception:
+                d = default_data()
+    else:
+        d = default_data()
+    return d
+
+def save_data(d):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+
+data = load_data()
+
+# ============================================
+# Конец отсека 1
+# Строк: 94
+# Версия: 9.6.1.7
+# Полная версия
+# ============================================
+
+# ============================================
+# Финансовый бот «ФО» — версия 9.6.1.7
+# Полная версия
+# ОТСЕК 2 — Структура чата и добавление записей
+# ============================================
+
+# -----------------------------
+# Работа с чатами и данными
+# -----------------------------
+def get_chat_store(chat_id):
+    """Гарантирует наличие структуры чата"""
+    cid = str(chat_id)
+    if cid not in data["chats"]:
+        data["chats"][cid] = {
+            "balance": 0,
+            "records": [],
+            "daily_records": {},
+            "active_windows": {},
+            "next_id": 1
+        }
+        save_data(data)
+    store = data["chats"][cid]
+    if "daily_records" not in store:
+        store["daily_records"] = {}
+    if "active_windows" not in store:
+        store["active_windows"] = {}
+    return store
+
+# -----------------------------
+# Ключ текущего дня
+# -----------------------------
+def get_today_key():
+    return datetime.now(TZ).strftime("%Y-%m-%d")
+
+def get_today_active_window(chat_id):
+    store = get_chat_store(chat_id)
+    today_key = get_today_key()
+    return store.get("active_windows", {}).get(today_key)
+
+def set_today_active_window(chat_id, message_id):
+    store = get_chat_store(chat_id)
+    today_key = get_today_key()
+    store.setdefault("active_windows", {})[today_key] = message_id
+    save_data(data)
+
+# -----------------------------
+# Добавление записи
+# -----------------------------
+def add_record_to_chat(chat_id, amount, note, owner):
+    store = get_chat_store(chat_id)
+    ts = datetime.now(TZ).isoformat(timespec="seconds")
+    rid = store.get("next_id", 1)
+    rec = {
+        "id": rid,
+        "short_id": f"R{rid}",
+        "timestamp": ts,
+        "amount": amount,
+        "note": note,
+        "owner": owner
+    }
+    # Добавляем в общие и дневные записи
+    store.setdefault("records", []).append(rec)
+    today_key = get_today_key()
+    store.setdefault("daily_records", {}).setdefault(today_key, []).append(rec)
+    # Обновляем баланс и счётчик
+    store["balance"] = store.get("balance", 0) + amount
+    store["next_id"] = rid + 1
+    save_data(data)
+    export_to_csv(data)
+
+    sign = "+" if amount > 0 else ""
+    log_info(f"[CHAT {chat_id}] {sign}{amount} {note}")
+    return rec
+
+# -----------------------------
+# Экспорт CSV
+# -----------------------------
+def export_to_csv(d):
+    """Экспорт всех записей во все чаты в файл CSV"""
+    with open(CSV_FILE, "w", encoding="utf-8", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["chat_id", "record_id", "timestamp", "amount", "note", "owner"])
+        for cid, store in d.get("chats", {}).items():
+            for r in store.get("records", []):
+                writer.writerow([cid, r["id"], r["timestamp"], r["amount"], r["note"], r["owner"]])
+    log_info("💾 Данные экспортированы в CSV.")
+
+
+# ============================================
+# Конец отсека 2
+# Строк: 118
+# Версия: 9.6.1.7
+# Полная версия
+# ============================================
+
+
+# ============================================
+# Финансовый бот «ФО» — версия 9.6.1.7
+# Полная версия
+# ОТСЕК 3 — Обновление окна дня и клавиатура
+# ============================================
+
+# -----------------------------
+# Основная клавиатура
+# -----------------------------
+def build_main_keyboard(chat_id):
+    kb = types.InlineKeyboardMarkup()
+    kb.add(
+        types.InlineKeyboardButton("➕ Приход", callback_data="add_income"),
+        types.InlineKeyboardButton("➖ Расход", callback_data="add_expense")
+    )
+    kb.add(types.InlineKeyboardButton("📄 Отчёт", callback_data="show_report"))
+    return kb
+
+# -----------------------------
+# Обновление или создание окна текущего дня
+# -----------------------------
+def update_main_window(chat_id):
+    try:
+        today_key = get_today_key()
+        store = get_chat_store(chat_id)
+        day_records = store.get("daily_records", {}).get(today_key, [])
+
+        if not day_records:
+            text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
+        else:
+            lines = [f"📅 {today_key}", "📋 Операции:"]
+            for r in day_records[-20:]:
+                sign = "+" if r["amount"] > 0 else ""
+                lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+            lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
+            text = "\n".join(lines)
+
+        active_id = get_today_active_window(chat_id)
+        if active_id:
+            try:
+                bot.edit_message_text(
+                    text,
+                    chat_id,
+                    active_id,
+                    reply_markup=build_main_keyboard(chat_id)
+                )
+                return
+            except Exception as e:
+                log_error(f"Ошибка редактирования окна ({chat_id}, id={active_id}): {e}")
+                # Если редактирование не удалось — удалить активное окно и создать новое
+                try:
+                    store["active_windows"].pop(today_key, None)
+                except Exception:
+                    pass
+                save_data(data)
+
+        # Если активного окна нет — создаём новое (только один раз)
+        sent = bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
+        set_today_active_window(chat_id, sent.message_id)
+
+    except Exception as e:
+        log_error(f"Ошибка в update_main_window: {e}")
+
+# -----------------------------
+# Показ отчёта (по кнопке)
+# -----------------------------
+def show_report(chat_id):
+    store = get_chat_store(chat_id)
+    lines = [f"📊 Отчёт по чату {chat_id}", ""]
+    total_income = sum(r["amount"] for r in store["records"] if r["amount"] > 0)
+    total_expense = sum(r["amount"] for r in store["records"] if r["amount"] < 0)
+    lines.append(f"💵 Приход: {total_income}")
+    lines.append(f"💸 Расход: {total_expense}")
+    lines.append(f"💰 Баланс: {store.get('balance', 0)}")
+    text = "\n".join(lines)
+    bot.send_message(chat_id, text)
+
+# ============================================
+# Конец отсека 3
+# Строк: 129
+# Версия: 9.6.1.7
+# Полная версия
+# ============================================
+
+# ============================================
+# Финансовый бот «ФО» — версия 9.6.1.7
+# Полная версия
+# ОТСЕК 4 — Flask webhook, обработчики и автозапуск
+# ============================================
+
+# -----------------------------
+# Обработчик текстовых сообщений
+# -----------------------------
+@bot.message_handler(func=lambda m: True, content_types=["text"])
+def handle_message(message):
+    chat_id = message.chat.id
+    text = message.text.strip()
+    mid = message.message_id
+
+    # Проверка на повтор
+    if mid in data.get("processed_messages", []):
+        return
+    data["processed_messages"].append(mid)
+    if len(data["processed_messages"]) > 10000:
+        data["processed_messages"] = data["processed_messages"][-5000:]
+    save_data(data)
+
+    # Расход / Приход
+    m = re.match(r"^([+-]?\d+)\s*(.*)$", text)
+    if m:
+        amount = int(m.group(1))
+        note = m.group(2).strip() or "-"
+        add_record_to_chat(chat_id, amount, note, message.from_user.first_name)
+        update_main_window(chat_id)
+        return
+
+    # Команды
+    if text.lower() in ["/баланс", "/balance"]:
+        store = get_chat_store(chat_id)
+        bot.send_message(chat_id, f"💰 Текущий баланс: {store.get('balance', 0)} ARS")
+    elif text.lower() in ["/отчет", "/report"]:
+        show_report(chat_id)
+    elif text.lower() in ["/сброс", "/reset"]:
+        data["chats"][str(chat_id)] = {
+            "balance": 0,
+            "records": [],
+            "daily_records": {},
+            "active_windows": {},
+            "next_id": 1
+        }
+        save_data(data)
+        bot.send_message(chat_id, "🧹 Данные по этому чату сброшены.")
+        update_main_window(chat_id)
+    elif text.lower() in ["/версия", "/version"]:
+        bot.send_message(chat_id, f"⚙️ Версия бота: {VERSION}")
+    else:
+        bot.send_message(chat_id, "❔ Введите сумму (например: +1000 или -500) и комментарий.")
+
+# -----------------------------
+# Callback-кнопки
+# -----------------------------
+@bot.callback_query_handler(func=lambda call: True)
+def callback_handler(call):
+    chat_id = call.message.chat.id
+    data_cb = call.data
+
+    if data_cb == "add_income":
+        bot.send_message(chat_id, "Введите приход: +сумма комментарий")
+    elif data_cb == "add_expense":
+        bot.send_message(chat_id, "Введите расход: -сумма комментарий")
+    elif data_cb == "show_report":
+        show_report(chat_id)
+
+# -----------------------------
+# Flask Webhook
+# -----------------------------
+@app.route(f"/{TOKEN}", methods=["POST"])
+def webhook():
+    update = telebot.types.Update.de_json(request.data.decode("utf-8"))
+    bot.process_new_updates([update])
+    return "OK", 200
+
+@app.route("/", methods=["GET"])
+def index():
+    return f"Бот ФО {VERSION} работает.", 200
+
+# -----------------------------
+# Автозапуск и планировщик
+# -----------------------------
+def schedule_daily_window_creation():
+    """Планировщик обновления дневных окон (раз в сутки)"""
+    def task():
+        while True:
+            now = datetime.now(TZ)
+            if now.hour == 0 and now.minute == 0:
+                for cid in data.get("chats", {}).keys():
+                    try:
+                        update_main_window(int(cid))
+                    except Exception as e:
+                        log_error(f"Не удалось обновить окно для чата {cid}: {e}")
+                save_data(data)
+            threading.Event().wait(60)
+    thread = threading.Thread(target=task, daemon=True)
+    thread.start()
+
+# -----------------------------
+# Запуск приложения
+# -----------------------------
+if __name__ == "__main__":
+    log_info(f"🚀 Запуск бота ФО версии {VERSION}")
+    bot.remove_webhook()
+    webhook_url = f"https://fo-1.onrender.com/{TOKEN}"
+    bot.set_webhook(url=webhook_url)
+    log_info(f"🌐 Webhook установлен: {webhook_url}")
+
+    schedule_daily_window_creation()
+    app.run(host="0.0.0.0", port=PORT)
+
+# ============================================
+# Конец отсека 4
+# Строк: 201
+# Версия: 9.6.1.7
+# Полная версия
+# ============================================
+# --------------------------------------------
+# ОТСЕК 5 — Клавиатуры и кнопки (обновлённый)
+# --------------------------------------------
+from telebot import types
+
+def build_main_keyboard(chat_id=None):
+    """
+    Главное меню (компактное, в одну строку),
+    с кнопками и отображением текущего баланса.
+    """
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.add(
+        types.InlineKeyboardButton("💰 Баланс", callback_data="btn_balance"),
+        types.InlineKeyboardButton("📊 Отчёт", callback_data="btn_report"),
+    )
+    kb.add(
+        types.InlineKeyboardButton("✏️ Редактировать", callback_data="btn_edit"),
+        types.InlineKeyboardButton("⚙️ Сброс", callback_data="btn_reset"),
+    )
+    kb.add(
+        types.InlineKeyboardButton("🚀 Старт", callback_data="btn_start"),
+        types.InlineKeyboardButton("📘 О коде", callback_data="btn_cod"),
+    )
+
+    # --- нижняя строка с балансом ---
+    balance_text = ""
+    if chat_id is not None:
+        store = get_chat_store(chat_id)
+        balance_text = f"💰 {store.get('balance', 0)} ARS"
+    kb.add(types.InlineKeyboardButton(balance_text or "💰 0 ARS", callback_data="noop"))
+    return kb
+
+
+def build_edit_list_keyboard(chat_id):
+    """
+    Список транзакций с маленькими кнопками ✏ и 🗑
+    (в одну строку, компактно).
+    """
+    store = get_chat_store(chat_id)
+    kb = types.InlineKeyboardMarkup()
+    records = store.get("records", [])[-20:]
+    if not records:
+        kb.add(types.InlineKeyboardButton("Нет записей", callback_data="noop"))
+        kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="btn_start"))
+        return kb
+
+    for r in records:
+        sign = "+" if r["amount"] > 0 else ""
+        label = f"{r['short_id']}: {sign}{r['amount']} ARS {r.get('note','')}"
+        # небольшие кнопки по ширине
+        kb.row(
+            types.InlineKeyboardButton(label, callback_data=f"noop_row:{r['id']}"),
+            types.InlineKeyboardButton("✏", callback_data=f"edit_select:{r['id']}"),
+            types.InlineKeyboardButton("🗑", callback_data=f"delete_record:{r['id']}")
+        )
+
+    # кнопка "назад" в конце
+    kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="btn_start"))
+    return kb
+
+# 6--------------------------------------------
+# ОТСЕК 6 — Команды (основные)
+# --------------------------------------------
+@bot.message_handler(commands=["start"])
+def cmd_start(msg):
+    text = (
+        "👋 Добро пожаловать в Финансовый бот «ФО»\n\n"
+        "Команды (латиницей):\n"
+        "/start – показать справку\n"
+        "/myid – показать ваш user ID\n"
+        "/chatid – показать ID чата\n"
+        "/balance – показать текущий баланс (для текущего чата)\n"
+        "/report – показать последние операции (для текущего чата)\n"
+        "/reset – обнулить все данные (только владелец)\n"
+        "/addforward <chat_id> – добавить цель для пересылки (только владелец)\n"
+        "/removeforward <chat_id> – убрать цель пересылки (только владелец)\n"
+        "/listforwards – список целей пересылки\n"
+        "/cod – информация о версии и обновлениях\n"
+        "/edit – редактирование транзакций (список и выбор)\n"
+        "/delete <номер> – удалить запись по номеру\n\n"
+        "Для записи транзакции отправьте одну или несколько строк, каждая строка отдельный учёт.\n"
+        "Примеры:\n+1000 зарплата\n-123 хлеб\n200 сок\n"
+    )
+    bot.send_message(msg.chat.id, f"💬 Версия: {VERSION}\n\n{text}", reply_markup=build_main_keyboard())
+
+@bot.message_handler(commands=["myid"])
+def cmd_myid(msg):
+    uid = msg.from_user.id
+    bot.reply_to(msg, f"🆔 Ваш user ID: {uid}")
+
+@bot.message_handler(commands=["chatid"])
+def cmd_chatid(msg):
+    cid = msg.chat.id
+    bot.reply_to(msg, f"💬 ID текущего чата: {cid}")
+
+@bot.message_handler(commands=["balance"])
+def cmd_balance(msg):
+    store = get_chat_store(msg.chat.id)
+    bot.reply_to(msg, f"💰 Баланс этого чата: {store.get('balance',0)} ars", reply_markup=build_main_keyboard())
+
+@bot.message_handler(commands=["report"])
+def cmd_report(msg):
+    store = get_chat_store(msg.chat.id)
+    recs = store.get("records", [])
+    if not recs:
+        bot.send_message(msg.chat.id, "Пока нет операций в этом чате.", reply_markup=build_main_keyboard())
+        return
+    text_lines = ["📋 Последние операции этого чата:"]
+    for r in recs[-50:]:
+        sign = "+" if r["amount"] > 0 else ""
+        text_lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+    bot.send_message(msg.chat.id, "\n".join(text_lines), reply_markup=build_main_keyboard())
+
+@bot.message_handler(commands=["reset"])
+def cmd_reset(msg):
+    if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
+        bot.send_message(msg.chat.id, "Только владелец может сбрасывать данные.", reply_markup=build_main_keyboard())
+        return
+    global data
+    data = default_data()
+    try:
+        if OWNER_ID:
+            data["forward_targets"].append(int(OWNER_ID))
+    except Exception:
+        pass
+    save_data(data)
+    export_to_csv(data)
+    bot.send_message(msg.chat.id, "✅ Все данные сброшены.", reply_markup=build_main_keyboard())
+    log_info("ДАННЫЕ ОБНУЛЕНЫ владельцем")
+
+@bot.message_handler(commands=["addforward"])
+def cmd_addforward(msg):
+    if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
+        return
+    parts = msg.text.split()
+    if len(parts) < 2:
+        bot.reply_to(msg, "Использование: /addforward <chat_id>")
+        return
+    try:
+        cid = int(parts[1])
+    except Exception:
+        bot.reply_to(msg, "Неверный chat_id (должно быть число).")
+        return
+    if cid in data["forward_targets"]:
+        bot.reply_to(msg, "Этот чат уже в списке пересылки.")
+        return
+    data["forward_targets"].append(cid)
+    save_data(data)
+    bot.reply_to(msg, f"✅ Цель пересылки добавлена: {cid}")
+
+@bot.message_handler(commands=["removeforward"])
+def cmd_removeforward(msg):
+    if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
+        return
+    parts = msg.text.split()
+    if len(parts) < 2:
+        bot.reply_to(msg, "Использование: /removeforward <chat_id>")
+        return
+    try:
+        cid = int(parts[1])
+    except Exception:
+        bot.reply_to(msg, "Неверный chat_id (должно быть число).")
+        return
+    if cid not in data["forward_targets"]:
+        bot.reply_to(msg, "Этот чат не в списке пересылки.")
+        return
+    data["forward_targets"].remove(cid)
+    save_data(data)
+    bot.reply_to(msg, f"✅ Цель пересылки удалена: {cid}")
+
+@bot.message_handler(commands=["listforwards"])
+def cmd_listforwards(msg):
+    if not data["forward_targets"]:
+        bot.reply_to(msg, "Список пересылки пуст.", reply_markup=build_main_keyboard())
+        return
+    text = "📨 Цели пересылки:\n" + "\n".join(map(str, data["forward_targets"]))
+    bot.reply_to(msg, text, reply_markup=build_main_keyboard())
+
+@bot.message_handler(commands=["cod"])
+def cmd_cod(msg):
+    text = (
+        f"📘 Информация о коде — версия {VERSION}\n\n"
+        "Краткое структурное описание:\n"
+        "- Интерфейс полностью на русском языке\n"
+        "- Команды остаются на латинице\n"
+        "- Добавлены inline-кнопки для быстрого доступа\n"
+        "- Автоматическая установка webhook при запуске\n"
+        "- Пересылка сообщений от владельца в указанные чаты (без эха)\n"
+        "- Отдельный учёт по каждому чату\n"
+        "- Редактирование записей через /edit и /delete\n"
+        "- Каждая строка сообщения = отдельная запись\n\n"
+        "Последнее обновление: добавлена версия 9.6.1.6 — сегментированный учёт, улучшенная пересылка, редактирование."
+    )
+    bot.send_message(msg.chat.id, text, reply_markup=build_main_keyboard())
+
+@bot.message_handler(commands=["edit"])
+def cmd_edit(msg):
+    kb = build_edit_list_keyboard(msg.chat.id)
+    if not kb.keyboard:
+        bot.reply_to(msg, "Нет записей для редактирования в этом чате.", reply_markup=build_main_keyboard())
+        return
+    bot.send_message(msg.chat.id, "Выберите запись для редактирования:", reply_markup=kb)
+
+@bot.message_handler(commands=["delete"])
+def cmd_delete(msg):
+    parts = msg.text.split()
+    if len(parts) < 2:
+        bot.reply_to(msg, "Использование: /delete <номер или Rномер>")
+        return
+    token = parts[1].strip()
+    if token.upper().startswith("R"):
+        token = token[1:]
+    try:
+        rid = int(token)
+    except Exception:
+        bot.reply_to(msg, "Неверный номер записи.")
+        return
+    ok, rec = delete_record_in_chat(msg.chat.id, rid)
+    if ok:
+        bot.reply_to(msg, f"✅ Запись R{rid} удалена. Баланс обновлён: {get_chat_store(msg.chat.id).get('balance',0)} ars", reply_markup=build_main_keyboard())
+    else:
+        bot.reply_to(msg, "Запись не найдена.", reply_markup=build_main_keyboard())
+
+
+# --------------------------------------------
+# ОТСЕК 7 — Обработка callback'ов (в одном окне, с кнопкой Назад)
+# --------------------------------------------
+@bot.callback_query_handler(func=lambda c: True)
+def handle_callback(call):
+    try:
+        data_cd = call.data
+        cid = call.message.chat.id
+        mid = call.message.message_id
+
+        # --- 💰 Баланс ---
+        if data_cd == "btn_balance":
+            store = get_chat_store(cid)
+            text = f"💰 Текущий баланс этого чата: {store.get('balance', 0)} ARS"
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
+            bot.answer_callback_query(call.id)
+
+        # --- 📊 Отчёт ---
+        elif data_cd == "btn_report":
+            recs = get_chat_store(cid).get("records", [])
+            if not recs:
+                text = "📋 Пока нет операций."
+            else:
+                text_lines = ["📋 Последние операции:"]
+                for r in recs[-20:]:
+                    sign = "+" if r["amount"] > 0 else ""
+                    text_lines.append(f"{r['short_id']}: {sign}{r['amount']} ARS — {r.get('note','')}")
+                text = "\n".join(text_lines)
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
+            bot.answer_callback_query(call.id)
+
+        # --- ⚙️ Сброс ---
+        elif data_cd == "btn_reset":
+            if str(call.from_user.id) != str(OWNER_ID):
+                bot.answer_callback_query(call.id, text="Только владелец может сбрасывать данные.")
+                return
+            chat_store = data["chats"].get(str(cid))
+            if chat_store:
+                chat_store["records"] = []
+                chat_store["balance"] = 0
+                chat_store["daily_records"] = {}
+                chat_store["next_id"] = 1
+            save_data(data)
+            text = "✅ Все данные этого чата сброшены."
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
+            bot.answer_callback_query(call.id)
+
+        # --- ✏️ Редактировать ---
+        elif data_cd == "btn_edit":
+            kb = build_edit_list_keyboard(cid)
+            text = "Выберите запись для редактирования или удаления:"
+            bot.edit_message_text(text, cid, mid, reply_markup=kb)
+            bot.answer_callback_query(call.id)
+
+        # --- 🚀 Старт ---
+        elif data_cd == "btn_start":
+            text = "Главное меню — выберите действие:"
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
+            bot.answer_callback_query(call.id)
+
+        # --- 📘 О коде ---
+        elif data_cd == "btn_cod":
+            info_text = (
+                "🤖 Финансовый бот — версия 9.8.X (дневной учёт)\n\n"
+                "📂 Возможности:\n"
+                "• Учёт по дням (новые сутки — новое окно)\n"
+                "• Общий баланс сохраняется\n"
+                "• Удобное редактирование и удаление записей\n"
+                "• Все действия в одном окне\n\n"
+                "🔄 Обновление: добавлен дневной учёт и баланс на клавиатуре."
+            )
+            bot.edit_message_text(info_text, cid, mid, reply_markup=build_main_keyboard(cid))
+            bot.answer_callback_query(call.id)
+
+        # --- ✏ Выбор для редактирования ---
+        elif data_cd.startswith("edit_select:"):
+            rid = int(data_cd.split(":")[1])
+            chat_state = data.setdefault("tracked_messages", {})
+            chat_key = str(cid)
+            user_states = chat_state.setdefault(chat_key, {})
+            user_states[str(call.from_user.id)] = {
+                "action": "edit_wait_value",
+                "rid": rid,
+                "msg_id": mid
+            }
+            save_data(data)
+            text = f"Введите новое значение для R{rid} (например: +500 продажа)"
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
+            bot.answer_callback_query(call.id)
+
+        # --- 🗑 Удаление записи ---
+        elif data_cd.startswith("delete_record:"):
+            rid = int(data_cd.split(":")[1])
+            ok, rec = delete_record_in_chat(cid, rid)
+            if ok:
+                text = f"✅ Запись R{rid} удалена.\n💰 Баланс обновлён: {get_chat_store(cid).get('balance', 0)} ARS"
+            else:
+                text = "⚠️ Запись не найдена."
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
+            bot.answer_callback_query(call.id)
+
+        # --- ⬅️ Назад (универсальная кнопка) ---
+        elif data_cd in ("btn_back", "noop"):
+            bot.edit_message_reply_markup(cid, mid, reply_markup=build_main_keyboard(cid))
+            bot.answer_callback_query(call.id)
+
+        else:
+            bot.answer_callback_query(call.id)
+
+    except Exception as e:
+        log_error(f"Ошибка обработки callback: {e}")
+
+
+# --------------------------------------------
+# ОТСЕК 8 — Обработка входящих сообщений (одно окно в день)
+# --------------------------------------------
+@bot.message_handler(func=lambda m: True, content_types=[
+    "text", "photo", "document", "voice", "video", "audio", "sticker"
+])
+def handle_message(msg):
+    if not getattr(msg, "from_user", None) or msg.from_user.is_bot:
+        return
+
+    chat_id = msg.chat.id
+    user_id = msg.from_user.id
+    today_key = get_today_key()
+    store = get_chat_store(chat_id)
+
+    # --- 1. Проверка состояния редактирования
+    user_states = data.setdefault("tracked_messages", {}).get(str(chat_id), {})
+    state = user_states.get(str(user_id))
+    if state and state.get("action") == "edit_wait_value":
+        rid = state.get("rid")
+        target_msg_id = get_today_active_window(chat_id)
+        lines = msg.text.splitlines() if msg.text else []
+        if not lines:
+            bot.edit_message_text(
+                "Введите строку с числом, пример: +500 продажа.",
+                chat_id, target_msg_id, reply_markup=build_main_keyboard(chat_id)
+            )
+            return
+        first_line = lines[0].strip()
+        amt, token = extract_first_number(first_line)
+        if amt is None:
+            bot.edit_message_text(
+                "Число не обнаружено. Попробуйте ещё раз.",
+                chat_id, target_msg_id, reply_markup=build_main_keyboard(chat_id)
+            )
+            return
+        m = num_re.search(first_line)
+        note = first_line[m.end():].strip() if m else ""
+        final_amt = amt if token.lstrip().startswith("+") else -abs(amt)
+        ok, updated = update_record_in_chat(chat_id, rid, final_amt, note)
+        user_states.pop(str(user_id), None)
+        save_data(data)
+        if ok:
+            update_main_window(chat_id)
+        return
+
+    # --- 2. Пропускаем дубли
+    msg_key = f"{chat_id}:{msg.message_id}"
+    processed = data.setdefault("processed_messages", [])
+    if msg_key in processed:
+        return
+
+    # --- 3. Определяем владельца
+    owner_int = int(OWNER_ID) if OWNER_ID and OWNER_ID.isdigit() else None
+    is_owner_msg = (owner_int is not None and user_id == owner_int)
+
+    # --- 4. Подготавливаем строки для учёта
+    lines = []
+    if msg.content_type == "text" and msg.text:
+        lines = msg.text.splitlines()
+    elif msg.caption:
+        lines = msg.caption.splitlines()
+
+    # --- 5. Обработка записей (учёт)
+    added = False
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        amt, token = extract_first_number(line)
+        if amt is None:
+            continue
+        m = num_re.search(line)
+        note = line[m.end():].strip() if m else ""
+        final_amt = amt if token.lstrip().startswith("+") else -abs(amt)
+        add_record_to_chat(chat_id, final_amt, note, user_id)
+        added = True
+
+    # --- 6. Помечаем сообщение обработанным
+    processed.append(msg_key)
+    if len(processed) > 1000:
+        processed = processed[-500:]
+    data["processed_messages"] = processed
+    save_data(data)
+
+    # --- 7. Обновляем активное окно
+    update_main_window(chat_id)
+
+    # --- 8. Пересылка сообщений от владельца
+    if is_owner_msg:
+        for target in data.get("forward_targets", []):
+            try:
+                t = int(target)
+            except Exception:
+                continue
+            if t == chat_id:
+                # если владелец пишет в цель — обновляем окно владельца, без дублей
+                update_main_window(owner_int)
+                continue
+            try:
+                sent = bot.copy_message(chat_id=t, from_chat_id=chat_id, message_id=msg.message_id)
+                key = f"{sent.chat.id}:{sent.message_id}"
+                processed.append(key)
+            except Exception as e:
+                log_error(f"Ошибка пересылки в {t}: {e}")
+        save_data(data)
+
+
+# --------------------------------------------
+# Вспомогательная функция — обновление одного окна
+# --------------------------------------------
+def update_main_window(chat_id):
+    """Обновляет текущее окно чата по данным дня, не создавая новое."""
+    today_key = get_today_key()
+    store = get_chat_store(chat_id)
+    active_id = get_today_active_window(chat_id)
+
+    # Попытка редактировать существующее окно
+    text = ""
+    try:
+        day_records = get_daily_records(chat_id, today_key)
+        if not day_records:
+            text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
+        else:
+            lines = [f"📅 {today_key}", "📋 Операции:"]
+            for r in day_records[-20:]:
+                sign = "+" if r["amount"] > 0 else ""
+                lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+            lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
+            text = "\n".join(lines)
+
+        # если активное окно есть — обновляем его
+        if active_id:
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
+        else:
+            # если активного окна нет — ищем последнее сообщение бота в этом чате
+            messages = get_chat_store(chat_id).get("records", [])
+            if messages:
+                # не создаём новое окно — просто пытаемся обновить последнее
+                possible_id = get_today_active_window(chat_id)
+                if possible_id:
+                    bot.edit_message_text(text, chat_id, possible_id, reply_markup=build_main_keyboard(chat_id))
+            else:
+                # ничего не делаем, чтобы не спамить
+                log_info(f"Нет окна для редактирования в чате {chat_id}")
+    except Exception as e:
+        log_error(f"Ошибка при обновлении окна (без создания нового): {e}")
+
+# --------------------------------------------
+# ОТСЕК 9 — Автоматическое создание окна нового дня (с версией кода)
+# --------------------------------------------
+
+VERSION = "9.8.1.1"
+
+def schedule_daily_window_creation():
+    """Фоновая задача: следит за сменой суток и создаёт новое окно в каждом чате."""
+    def task():
+        try:
+            last_day = get_today_key()
+            while True:
+                try:
+                    time.sleep(60)  # проверяем каждую минуту
+                    current_day = get_today_key()
+                    if current_day != last_day:
+                        # Смена суток — создаём новое окно для всех чатов
+                        for chat_id_str in list(data.get("chats", {}).keys()):
+                            try:
+                                chat_id = int(chat_id_str)
+                            except Exception:
+                                continue
+                            text = (
+                                f"🗓 {current_day}\n"
+                                f"🤖 Версия бота: {VERSION}\n\n"
+                                f"💰 Баланс: {get_chat_store(chat_id).get('balance', 0)} ARS"
+                            )
+                            try:
+                                sent = bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
+                                set_today_active_window(chat_id, sent.message_id)
+                                log_info(f"Создано новое окно дня {current_day} для чата {chat_id}")
+                            except Exception as e:
+                                log_error(f"Не удалось создать окно дня для {chat_id}: {e}")
+                        last_day = current_day
+                except Exception as loop_exc:
+                    # Если что-то пошло не так внутри цикла — логируем и продолжаем (чтобы поток не умер)
+                    log_error(f"Ошибка в daily loop: {loop_exc}")
+                    time.sleep(5)
+        except Exception as e:
+            log_error(f"Фатальная ошибка фоновой задачи schedule_daily_window_creation: {e}")
+
+    thread = threading.Thread(target=task, daemon=True)
+    thread.start()
+
+# --------------------------------------------
+# Автозапуск фоновой задачи при старте бота
+# --------------------------------------------
+schedule_daily_window_creation()
