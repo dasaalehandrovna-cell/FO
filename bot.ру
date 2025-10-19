@@ -85,8 +85,9 @@ def log_error(msg):
 
 log_info(f"Старт приложения. Версия {VERSION}")
 
+
 # --------------------------------------------
-# ОТСЕК 3 — Структура данных и работа с файлом (с дневным учётом)
+# ОТСЕК 3 — Структура данных и работа с файлом (единое окно по дню)
 # --------------------------------------------
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -95,14 +96,14 @@ TZ = ZoneInfo("America/Argentina/Catamarca")
 
 def default_data():
     return {
-        "chats": {},                # chat_id -> { balance, records:[], next_id, daily_records:{} }
+        "chats": {},                # chat_id -> { balance, records:[], next_id, daily_records:{}, active_windows:{} }
         "forward_targets": [],      # список chat_id (int)
-        "tracked_messages": {},     # chat_id -> {user_id: state}
-        "processed_messages": []    # предотвращение дублей пересылки
+        "tracked_messages": {},     # временные состояния (редактирование и т.д.)
+        "processed_messages": [],   # чтобы не дублировать пересылку
     }
 
 def get_today_key():
-    """Возвращает ключ текущего дня в формате YYYY-MM-DD (локально для Аргентины)."""
+    """Возвращает ключ текущего дня в формате YYYY-MM-DD (локальное время Аргентины)."""
     return datetime.now(TZ).strftime("%Y-%m-%d")
 
 def load_data():
@@ -115,7 +116,6 @@ def load_data():
             d = default_data()
     else:
         d = default_data()
-    # гарантируем наличие ключей
     for k, v in default_data().items():
         if k not in d:
             d[k] = v
@@ -129,15 +129,36 @@ def save_data(d):
         log_error(f"Ошибка сохранения data.json: {e}")
 
 def get_chat_store(chat_id):
-    """Гарантирует наличие структуры для чата, включая дневной раздел."""
+    """Создаёт структуру для чата, если её нет."""
     cid = str(chat_id)
-    store = data["chats"].setdefault(cid, {"balance": 0, "records": [], "next_id": 1, "daily_records": {}})
+    store = data["chats"].setdefault(cid, {
+        "balance": 0,
+        "records": [],
+        "next_id": 1,
+        "daily_records": {},
+        "active_windows": {}   # day_key -> message_id
+    })
     if "daily_records" not in store:
         store["daily_records"] = {}
+    if "active_windows" not in store:
+        store["active_windows"] = {}
     return store
 
+def get_today_active_window(chat_id):
+    """Возвращает ID активного окна текущего дня, если оно есть."""
+    store = get_chat_store(chat_id)
+    today_key = get_today_key()
+    return store.get("active_windows", {}).get(today_key)
+
+def set_today_active_window(chat_id, message_id):
+    """Устанавливает ID активного окна текущего дня."""
+    store = get_chat_store(chat_id)
+    today_key = get_today_key()
+    store["active_windows"][today_key] = message_id
+    save_data(data)
+
 def add_record_to_chat(chat_id, amount, note, owner):
-    """Добавление записи и в общий список, и в дневной раздел."""
+    """Добавление новой записи (в общий и дневной списки)."""
     store = get_chat_store(chat_id)
     rid = store.get("next_id", 1)
     today_key = get_today_key()
@@ -147,13 +168,12 @@ def add_record_to_chat(chat_id, amount, note, owner):
         "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
         "amount": amount,
         "note": note,
-        "owner": owner
+        "owner": owner,
     }
     # общий список
     store["records"].append(record)
     # дневной список
-    day_list = store["daily_records"].setdefault(today_key, [])
-    day_list.append(record)
+    store["daily_records"].setdefault(today_key, []).append(record)
     # баланс
     store["balance"] += amount
     store["next_id"] = rid + 1
@@ -161,14 +181,14 @@ def add_record_to_chat(chat_id, amount, note, owner):
     return record
 
 def get_daily_records(chat_id, day_key=None):
-    """Возвращает записи за конкретный день или за сегодня."""
+    """Возвращает записи за конкретный день (или сегодня)."""
     store = get_chat_store(chat_id)
     if day_key is None:
         day_key = get_today_key()
     return store["daily_records"].get(day_key, [])
 
 def update_record_in_chat(chat_id, rid, amount, note):
-    """Редактирует запись в общем и дневном списках."""
+    """Редактирует запись (в общем и дневном списке)."""
     store = get_chat_store(chat_id)
     found = None
     for r in store["records"]:
@@ -180,8 +200,7 @@ def update_record_in_chat(chat_id, rid, amount, note):
             found = r
             break
     if found:
-        # обновляем дневной список, если есть
-        for recs in store.get("daily_records", {}).values():
+        for recs in store["daily_records"].values():
             for r in recs:
                 if r["id"] == rid:
                     r.update(found)
@@ -190,7 +209,7 @@ def update_record_in_chat(chat_id, rid, amount, note):
     return False, None
 
 def delete_record_in_chat(chat_id, rid):
-    """Удаление записи в общем и дневном списках."""
+    """Удаляет запись (в общем и дневном списке)."""
     store = get_chat_store(chat_id)
     removed = None
     for r in list(store["records"]):
@@ -200,14 +219,14 @@ def delete_record_in_chat(chat_id, rid):
             removed = r
             break
     if removed:
-        for recs in store.get("daily_records", {}).values():
+        for recs in store["daily_records"].values():
             recs[:] = [r for r in recs if r["id"] != rid]
         save_data(data)
         return True, removed
     return False, None
 
 def export_to_csv(d):
-    """Экспорт всех операций (включая дневные)."""
+    """Экспорт всех операций с учётом дней."""
     try:
         with open(CSV_FILE, "w", newline='', encoding="utf-8") as f:
             writer = csv.writer(f)
@@ -221,7 +240,7 @@ def export_to_csv(d):
 
 data = load_data()
 
-# если OWNER_ID задан — убедимся, что он есть среди forward_targets
+# если OWNER_ID задан — убедимся, что он в списке целей пересылки
 if OWNER_ID:
     try:
         owner_int = int(OWNER_ID)
@@ -230,6 +249,7 @@ if OWNER_ID:
     if owner_int is not None and owner_int not in data["forward_targets"]:
         data["forward_targets"].append(owner_int)
         save_data(data)
+
 
 # --------------------------------------------
 # ОТСЕК 4 — Вспомогательные функции (парсинг, чат-менеджмент)
@@ -663,34 +683,35 @@ def handle_callback(call):
     except Exception as e:
         log_error(f"Ошибка обработки callback: {e}")
 
+
+
 # --------------------------------------------
-# ОТСЕК 8 — Обработка входящих сообщений и пересылка (с дневным учётом)
+# ОТСЕК 8 — Обработка входящих сообщений и пересылка (единое окно по дню)
 # --------------------------------------------
 @bot.message_handler(func=lambda m: True, content_types=[
     "text", "photo", "document", "voice", "video", "audio", "sticker"
 ])
 def handle_message(msg):
-    # --- 1. Фильтры системных сообщений ---
     if not getattr(msg, "from_user", None) or msg.from_user.is_bot:
         return
 
     chat_id = msg.chat.id
     user_id = msg.from_user.id
-    today_key = get_today_key()
-
-    # --- 2. Проверка состояния редактирования ---
     chat_key = str(chat_id)
+    today_key = get_today_key()
+    store = get_chat_store(chat_id)
+
+    # --- 1. Проверка состояния редактирования
     user_states = data.setdefault("tracked_messages", {}).get(chat_key, {})
     state = user_states.get(str(user_id))
     if state and state.get("action") == "edit_wait_value":
         rid = state.get("rid")
-        target_msg_id = state.get("msg_id", msg.message_id)
+        target_msg_id = state.get("msg_id")
         lines = msg.text.splitlines() if msg.content_type == "text" and msg.text else []
         if not lines:
             bot.edit_message_text(
                 "Введите строку с числом, пример: +500 продажа.",
-                chat_id, target_msg_id,
-                reply_markup=build_main_keyboard()
+                chat_id, target_msg_id, reply_markup=build_main_keyboard(chat_id)
             )
             return
         first_line = lines[0].strip()
@@ -698,57 +719,50 @@ def handle_message(msg):
         if amt is None:
             bot.edit_message_text(
                 "Число не обнаружено. Попробуйте ещё раз.",
-                chat_id, target_msg_id,
-                reply_markup=build_main_keyboard()
+                chat_id, target_msg_id, reply_markup=build_main_keyboard(chat_id)
             )
             return
         m = num_re.search(first_line)
         note = first_line[m.end():].strip() if m else ""
-        raw_token = token
-        if raw_token.lstrip().startswith("+"):
+        if token.lstrip().startswith("+"):
             final_amt = amt
-        elif raw_token.lstrip().startswith("-"):
+        elif token.lstrip().startswith("-"):
             final_amt = amt
         else:
             final_amt = -abs(amt)
         ok, updated = update_record_in_chat(chat_id, rid, final_amt, note)
         user_states.pop(str(user_id), None)
         save_data(data)
-        if ok:
-            bot.edit_message_text(
-                f"✅ Запись R{rid} обновлена: {updated['amount']} ARS — {updated.get('note','')}\n"
-                f"💰 Баланс: {get_chat_store(chat_id).get('balance',0)} ARS",
-                chat_id, target_msg_id, reply_markup=build_main_keyboard()
-            )
-        else:
-            bot.edit_message_text(
-                "Запись не найдена.", chat_id, target_msg_id, reply_markup=build_main_keyboard()
-            )
+        text = (f"✅ Запись R{rid} обновлена: {updated['amount']} — {updated.get('note','')}\n"
+                f"💰 Баланс: {get_chat_store(chat_id).get('balance',0)} ARS")
+        bot.edit_message_text(text, chat_id, target_msg_id, reply_markup=build_main_keyboard(chat_id))
         return
 
-    # --- 3. Предотвращение дублей ---
+    # --- 2. Избегаем дублей
     processed = data.setdefault("processed_messages", [])
     msg_key = f"{chat_id}:{msg.message_id}"
     if msg_key in processed:
         return
-    processed.append(msg_key)
-    if len(processed) > 1000:
-        processed = processed[-500:]
-    data["processed_messages"] = processed
-    save_data(data)
 
-    # --- 4. Определяем владельца ---
+    # --- 3. Определяем владельца
     owner_int = None
     if OWNER_ID:
         try:
             owner_int = int(OWNER_ID)
         except Exception:
             owner_int = None
-    is_owner_msg = owner_int and user_id == owner_int
+    is_owner_msg = (owner_int is not None and user_id == owner_int)
 
-    # --- 5. Универсальная функция обработки строк ---
-    def process_lines_and_record(lines_list, target_chat):
-        added_any = False
+    # --- 4. Подготовка строк для обработки
+    lines_for_processing = []
+    if msg.content_type == "text" and msg.text:
+        lines_for_processing = msg.text.splitlines()
+    elif msg.content_type in ["photo", "document", "video", "audio"] and getattr(msg, "caption", None):
+        lines_for_processing = msg.caption.splitlines()
+
+    # --- 5. Обработка строк (учёт операций)
+    def process_lines(lines_list):
+        added = False
         for line in lines_list:
             line = line.strip()
             if not line:
@@ -758,82 +772,87 @@ def handle_message(msg):
                 continue
             m = num_re.search(line)
             note = line[m.end():].strip() if m else ""
-            raw_token = token
-            if raw_token.lstrip().startswith("+"):
+            if token.lstrip().startswith("+"):
                 final_amt = amt
-            elif raw_token.lstrip().startswith("-"):
+            elif token.lstrip().startswith("-"):
                 final_amt = amt
             else:
                 final_amt = -abs(amt)
-            add_record_to_chat(target_chat, final_amt, note, user_id)
-            added_any = True
-        return added_any
+            add_record_to_chat(chat_id, final_amt, note, user_id)
+            added = True
+        return added
 
-    # --- 6. Получаем строки для разбора ---
-    lines_for_processing = []
-    if msg.content_type == "text" and msg.text:
-        lines_for_processing = msg.text.splitlines()
-    elif msg.content_type in ["photo", "document", "video", "audio"] and getattr(msg, "caption", None):
-        lines_for_processing = msg.caption.splitlines()
-
-    # --- 7. Если есть строки — учитываем операции ---
+    added = False
     if lines_for_processing:
-        added = process_lines_and_record(lines_for_processing, chat_id)
-        if added:
-            # 💡 Если это личка бота — обновляем текущее окно, а не создаём новое
-            if msg.chat.type == "private":
-                try:
-                    # ищем предыдущее сообщение от бота (если есть)
-                    last_msg_id = msg.message_id - 1
-                    new_text = (
-                        f"✅ Записаны операции ({today_key}).\n"
-                        f"💰 Баланс: {get_chat_store(chat_id).get('balance',0)} ARS"
-                    )
-                    bot.edit_message_text(new_text, chat_id, last_msg_id, reply_markup=build_main_keyboard())
-                except Exception:
-                    bot.reply_to(
-                        msg,
-                        f"✅ Записано ({today_key}).\n💰 Баланс: {get_chat_store(chat_id).get('balance',0)} ARS",
-                        reply_markup=build_main_keyboard()
-                    )
-            else:
-                bot.reply_to(
-                    msg,
-                    f"✅ Записаны операции ({today_key}).\n💰 Баланс: {get_chat_store(chat_id).get('balance',0)} ARS",
-                    reply_markup=build_main_keyboard()
-                )
+        added = process_lines(lines_for_processing)
 
-    # --- 8. Пересылка сообщений владельца (без дублей) ---
+    # --- 6. Определяем активное окно текущего дня
+    active_msg_id = get_today_active_window(chat_id)
+    if not active_msg_id:
+        # создаём новое окно для новых суток
+        sent = bot.send_message(
+            chat_id,
+            f"📅 {today_key}\n💰 Баланс: {store.get('balance', 0)} ARS",
+            reply_markup=build_main_keyboard(chat_id)
+        )
+        set_today_active_window(chat_id, sent.message_id)
+        active_msg_id = sent.message_id
+    else:
+        # окно уже существует — просто обновляем
+        pass
+
+    # --- 7. Обновляем текущее окно (только одно)
+    try:
+        day_records = get_daily_records(chat_id, today_key)
+        if not day_records:
+            content = f"📅 {today_key}\nПока нет записей.\n💰 Баланс: {store.get('balance', 0)} ARS"
+        else:
+            lines = [f"📅 {today_key}", "📋 Операции:"]
+            for r in day_records[-15:]:
+                sign = "+" if r["amount"] > 0 else ""
+                lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+            lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
+            content = "\n".join(lines)
+        bot.edit_message_text(content, chat_id, active_msg_id, reply_markup=build_main_keyboard(chat_id))
+    except Exception as e:
+        log_error(f"Ошибка обновления окна: {e}")
+
+    # --- 8. Пересылка (если сообщение от владельца)
     if is_owner_msg:
         for target in list(data.get("forward_targets", [])):
             try:
                 t = int(target)
             except Exception:
                 continue
-            # не пересылаем в тот же чат
             if t == chat_id:
-                # если владелец пишет в целевом чате, копия идёт в личку владельца
+                # если владелец пишет в цель — копируем в личку владельцу
                 if owner_int and t != owner_int:
                     try:
-                        sent = bot.copy_message(owner_int, chat_id, msg.message_id)
+                        sent = bot.copy_message(chat_id=owner_int, from_chat_id=chat_id, message_id=msg.message_id)
                         if sent:
                             key = f"{sent.chat.id}:{sent.message_id}"
                             processed.append(key)
-                            data["processed_messages"] = processed[-1000:]
-                            save_data(data)
                     except Exception as e:
                         log_error(f"Ошибка пересылки владельцу: {e}")
                 continue
-            # обычная пересылка
             try:
-                sent = bot.copy_message(t, chat_id, msg.message_id)
+                sent = bot.copy_message(chat_id=t, from_chat_id=chat_id, message_id=msg.message_id)
                 if sent:
                     key = f"{sent.chat.id}:{sent.message_id}"
                     processed.append(key)
-                    data["processed_messages"] = processed[-1000:]
-                    save_data(data)
             except Exception as e:
                 log_error(f"Ошибка пересылки в {t}: {e}")
+
+    # --- 9. Сохраняем состояние
+    processed.append(msg_key)
+    if len(processed) > 1000:
+        processed = processed[-500:]
+    data["processed_messages"] = processed
+    save_data(data)
+
+# --------------------------------------------
+# ОТСЕК 8 Завершение обработки и переход к системным функциям
+# --------------------------------------------
 
 # --------------------------------------------
 # ОТСЕК 9 — Flask webhook endpoints и автоустановка
