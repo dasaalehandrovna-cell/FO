@@ -1,565 +1,195 @@
-# bot.py
-# Финансовый бот "ФО" — версия 9.8.1
-# Полностью на русском языке, автоматический webhook (Render-ready)
+# -------------------------------
+# Финансовый бот "ФО" — версия 9.8.1 (полная)
+# Автоматическая установка webhook + автосоздание data.json
+# Полностью совместим с Render (Flask)
+# -------------------------------
 
 import os
 import json
-import csv
-import re
 import time
 import threading
+import re
+import csv
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from io import StringIO
-
-import requests
+from flask import Flask, request
 import telebot
 from telebot import types
-from flask import Flask, request, jsonify
 
-# ---------- Настройки ----------
+# -------------------------------
+# Константы
+# -------------------------------
 VERSION = "9.8.1"
 TZ = ZoneInfo("America/Argentina/Catamarca")
 DATA_FILE = "data.json"
-CSV_DIR = "." # можно поменять
+CSV_FILE = "data.csv"
+
+TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_ID")
 PORT = int(os.environ.get("PORT", 5000))
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID") # оставляем строкой, нормализуем далее
-WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/webhook")
-ALT_WEBHOOK_PATH = os.getenv("ALT_WEBHOOK_PATH", "/")
-# Можно явно задать WEBHOOK_HOST (например https://fo-1.onrender.com) в WEBHOOK_HOST env; иначе используется RENDER_EXTERNAL_URL
-WEBHOOK_HOST_OVERRIDE = os.getenv("WEBHOOK_HOST") # опционально
 
-if not BOT_TOKEN:
-    raise ValueError("Переменная окружения BOT_TOKEN не задана. Установите её в настройках Render.")
+if not TOKEN:
+    raise ValueError("Переменная окружения BOT_TOKEN не задана. Установите её в настройках Render.")
 
-if not OWNER_ID:
-    print("Внимание: OWNER_ID не задан. Некоторые команды будут недоступны.")
-
-# нормализуем OWNER_ID
-try:
-    OWNER_ID = int(OWNER_ID) if OWNER_ID else None
-except Exception:
-    OWNER_ID = None
-
-bot = telebot.TeleBot(BOT_TOKEN, threaded=True)
+bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
 
-# -------------------------
-# Автоматическая проверка токена и логирование
-# -------------------------
-import requests
-
-def check_token_validity():
-    try:
-        test = requests.get(f"https://api.telegram.org/bot{TOKEN}/getMe").json()
-        if not test.get("ok"):
-            print("❌ Ошибка: токен недействителен или Telegram недоступен.")
-        else:
-            print(f"✅ Токен активен. Бот: {test['result']['first_name']} (@{test['result']['username']})")
-    except Exception as e:
-        print(f"⚠️ Ошибка при проверке токена: {e}")
-
-check_token_validity()
-
-# ---------- Автосоздание data.json ----------
+# -------------------------------
+# Функции для работы с базой
+# -------------------------------
 def default_data():
-    return {
-        "version_current": VERSION,
-        "records": [], # список записей: {id, short_id, timestamp, amount, note, owner_chat}
-        "next_id": 1,
-        "overall_balance": {}, # chat_id -> int
-        "active_messages": {},
-        "compact_active": {},
-        "compact_mode": {},
-        "forward_targets": {}, # owner_chat_id -> [targets]
-        "pending_action": {}, # chat_id -> {type:..., payload:...}
-        "pending_edit": {}, # chat_id -> short_id
-        "sent_messages": []
-    }
-
-if not os.path.exists(DATA_FILE):
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(default_data(), f, ensure_ascii=False, indent=2)
-        print("[init] Создан новый файл data.json")
-    except Exception as e:
-        print(f"[init] Ошибка создания data.json: {e}")
-else:
-    print("[init] data.json найден, загружаю данные")
+    return {
+        "overall_balance": 0,
+        "records": [],
+        "active_messages": {},
+        "next_id": 1,
+        "sent_messages": [],
+        "forward_targets": []
+    }
 
 def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                d = json.load(f)
-        except Exception as e:
-            print(f"[load_data] ошибка чтения {DATA_FILE}: {e}")
-            d = default_data()
-    else:
-        d = default_data()
-    base = default_data()
-    for k, v in base.items():
-        if k not in d:
-            d[k] = v
-    return d
+    if not os.path.exists(DATA_FILE):
+        save_data(default_data())
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 def save_data(d):
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        print(f"[save_data] {e}")
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
 
 data = load_data()
 
-# ---------- Вспомогательные функции ----------
+# -------------------------------
+# Утилиты
+# -------------------------------
 def now_iso_utc():
-    return datetime.now(tz=ZoneInfo("UTC")).isoformat()
+    return datetime.utcnow().replace(tzinfo=TZ).isoformat()
 
-def date_today_local():
-    return datetime.now(tz=TZ).strftime("%Y-%m-%d")
+def delayed_delete(chat_id, msg_id, delay=10):
+    def task():
+        time.sleep(delay)
+        try:
+            bot.delete_message(chat_id, msg_id)
+        except Exception:
+            pass
+    threading.Thread(target=task).start()
 
-def fmt_amount(n: int) -> str:
-    return f"{abs(n):,}".replace(",", ".")
+def record_sent_message(info):
+    data["sent_messages"].append(info)
+    save_data(data)
 
-def make_short_id(n: int) -> str:
-    return f"R{n}"
+def add_forward_target(chat_id, label):
+    found = any(t["chat_id"] == chat_id for t in data["forward_targets"])
+    if not found:
+        data["forward_targets"].append({"chat_id": chat_id, "label": label})
+        save_data(data)
 
-NUMBER_RE = re.compile(r'([+-]?\s*[\d][\d\s\.,]*)')
-
-def parse_first_number(text: str):
-    if not text:
-        return None, None, None
-    m = NUMBER_RE.search(text)
-    if not m:
-        return None, None, None
-    raw = m.group(1)
-    s = raw.strip()
-    sign = '+' if s.startswith('+') else ('-' if s.startswith('-') else None)
-    digits = s[1:].strip() if sign else s
-    digits_norm = re.sub(r'[\s\.,]', '', digits)
-    dm = re.match(r'(\d+)', digits_norm)
-    if not dm:
-        return None, None, None
-    return int(dm.group(1)), sign, raw
-
-def apply_sign_and_normalize(num: int, sign: str) -> int:
-    return num if sign == '+' else -num
-
-# ---------- Логирование отправленных сообщений ----------
-def record_sent_message(entry):
-    data.setdefault("sent_messages", []).append(entry)
-    save_data(data)
-
-def send_and_record(chat_id, text, reply_markup=None, parse_mode=None, purpose="msg"):
-    try:
-        sent = bot.send_message(int(chat_id), text, reply_markup=reply_markup, parse_mode=parse_mode)
-        record_sent_message({"chat_id": str(chat_id), "message_id": int(sent.message_id), "purpose": purpose, "timestamp": now_iso_utc()})
-        return sent
-    except Exception as e:
-        record_sent_message({"chat_id": str(chat_id), "message_id": None, "purpose": purpose, "timestamp": now_iso_utc(), "error": str(e)})
-        try:
-            if OWNER_ID:
-                bot.send_message(int(OWNER_ID), f"⚠️ Ошибка отправки в {chat_id}: {e}")
-        except Exception:
-            pass
-        return None
-
-def send_file_and_record(chat_id, path, caption=None, purpose="file"):
-    try:
-        with open(path, "rb") as f:
-            sent = bot.send_document(int(chat_id), f, caption=caption)
-        record_sent_message({"chat_id": str(chat_id), "message_id": int(sent.message_id), "purpose": purpose, "timestamp": now_iso_utc()})
-        return sent
-    except Exception as e:
-        record_sent_message({"chat_id": str(chat_id), "message_id": None, "purpose": purpose, "timestamp": now_iso_utc(), "error": str(e)})
-        return None
-
-# ---------- Удаление сообщения через время ----------
-def delayed_delete(chat_id, message_id, delay=5):
-    def worker():
-        time.sleep(delay)
-        try:
-            bot.delete_message(int(chat_id), int(message_id))
-        except Exception:
-            pass
-    threading.Thread(target=worker, daemon=True).start()
-
-# ---------- Окно дня ----------
-def get_day_records_for_chat(chat_id, day_date):
-    recs = []
-    for r in data.get("records", []):
-        if str(r.get("owner_chat")) != str(chat_id):
-            continue
-        ts = r.get("timestamp")
-        d = date_local_str_from_iso(ts)
-        if d == day_date:
-            try:
-                dt = datetime.fromisoformat(ts).astimezone(TZ)
-            except Exception:
-                dt = datetime.now(tz=TZ)
-            recs.append((dt, r))
-    recs.sort(key=lambda x: x[0])
-    return recs
-
-def date_local_str_from_iso(iso_ts: str) -> str:
-    try:
-        dt = datetime.fromisoformat(iso_ts)
-        return dt.astimezone(TZ).strftime("%Y-%m-%d")
-    except Exception:
-        return datetime.now(tz=TZ).strftime("%Y-%m-%d")
-
-def build_day_window(chat_id, day_date):
-    recs = get_day_records_for_chat(chat_id, day_date)
-    header = f"📅 {day_date} (v{data.get('version_current','?')})"
-    if not recs:
-        return f"{header}\n\n📘 За этот день ещё нет записей.\n\n— Бот готов к работе — вы начали вести учёт."
-    lines = [header, ""]
-    day_income, day_expense = 0, 0
-    last_hour = None
-    for ts, r in recs:
-        hour = ts.strftime("%H")
-        if last_hour is not None and hour != last_hour:
-            lines.append("")
-        last_hour = hour
-        amt = r["amount"]
-        sign = "+" if amt > 0 else "-"
-        sid = r.get("short_id") or make_short_id(r.get("id"))
-        note = r.get("note", "")
-        lines.append(f"🕓 {ts.strftime('%H:%M')} | {sid} | {sign}{fmt_amount(amt)} {note}".rstrip())
-        if amt > 0:
-            day_income += amt
-        else:
-            day_expense += abs(amt)
-    overall = data.get("overall_balance", {}).get(str(chat_id), 0)
-    lines += ["", f"📈 Приход: {fmt_amount(day_income)}", f"📉 Расход: {fmt_amount(day_expense)}", f"💵 Остаток: {fmt_amount(overall)}"]
-    return "\n".join(lines)
-
-# ---------- Inline клавиатуры ----------
-def kb_main(chat_id):
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("✏️ Редактировать", callback_data="edit_menu"))
-    kb.add(types.InlineKeyboardButton("📤 Пересылка", callback_data="forward_menu"))
-    cm = data.get("compact_mode", {}).get(str(chat_id), False)
-    kb.add(types.InlineKeyboardButton("🔁 Compact: Вкл" if cm else "🔁 Compact: Выкл", callback_data="toggle_compact"))
-    kb.add(types.InlineKeyboardButton("📄 Экспорт CSV", callback_data="export_csv"))
-    kb.add(types.InlineKeyboardButton("♻️ Обнулить (владелец)", callback_data="reset_confirm"))
-    return kb
-
-def kb_forward_menu(chat_id:int):
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton("➕ Добавить цель", callback_data="forward_add"))
-    kb.add(types.InlineKeyboardButton("➖ Удалить цель", callback_data="forward_remove"))
-    kb.add(types.InlineKeyboardButton("ℹ️ Показать список", callback_data="forward_list"))
-    kb.add(types.InlineKeyboardButton("↩️ Назад", callback_data="edit_cancel"))
-    return kb
-
-def kb_yes_no(prefix):
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("Да", callback_data=f"{prefix}_yes"),
-           types.InlineKeyboardButton("Нет", callback_data=f"{prefix}_no"))
-    return kb
-
-# ---------- Forward helpers ----------
-def ensure_forward_list_for(owner_chat_id: int):
-    key = str(owner_chat_id)
-    data.setdefault("forward_targets", {})
-    lst = data["forward_targets"].get(key)
-    if lst is None:
-        data["forward_targets"][key] = []
-        save_data(data)
-        return data["forward_targets"][key]
-    if isinstance(lst, list):
-        return lst
-    data["forward_targets"][key] = [str(lst)]
-    save_data(data)
-    return data["forward_targets"][key]
-
-def add_forward_target(owner_chat_id: int, target: str) -> bool:
-    lst = ensure_forward_list_for(owner_chat_id)
-    t = str(target).strip()
-    if t in lst:
-        return False
-    lst.append(t)
-    data["forward_targets"][str(owner_chat_id)] = lst
-    save_data(data)
-    return True
-
-def remove_forward_target(owner_chat_id: int, target: str) -> bool:
-    lst = ensure_forward_list_for(owner_chat_id)
-    t = str(target).strip()
-    if t in lst:
-        lst = [x for x in lst if x != t]
-        data["forward_targets"][str(owner_chat_id)] = lst
-        save_data(data)
-        return True
-    return False
-
-def list_forward_targets(owner_chat_id: int):
-    return ensure_forward_list_for(owner_chat_id)
-
-# ---------- Auto-forward (если автор == OWNER_ID) ----------
-def auto_forward_if_owner(message: types.Message):
-    try:
-        if not OWNER_ID:
-            return []
-        if getattr(message.from_user, "is_bot", False):
-            return []
-        if str(getattr(message.from_user, "id", "")) != str(OWNER_ID):
-            return []
-        src_chat = message.chat.id
-        targets = data.get("forward_targets", {}).get(str(src_chat), [])
-        results = []
-        for t in targets:
-            try:
-                if str(t).startswith("@"):
-                    bot.forward_message(t, src_chat, message.message_id)
-                else:
-                    bot.forward_message(int(t), src_chat, message.message_id)
-                results.append((t, True))
-            except Exception:
-                results.append((t, False))
-        for r in results:
-            record_sent_message({"timestamp": now_iso_utc(), "from_chat": str(src_chat), "to": r[0], "ok": r[1]})
-        return results
-    except Exception as e:
-        print(f"[auto_forward_if_owner] {e}")
-        return []
-
-# ---------- Обработчики команд (часть) ----------
-@bot.message_handler(commands=["start","help"])
-def cmd_start(m: types.Message):
-    chat_id = m.chat.id
-    text = (
-        f"🤖 Бот 'ФО' v{VERSION}\n"
-        "Добавляй расходы и приходы в формате:\n"
-        "-500 хлеб\n"
-        "+1000 зарплата\n\n"
-        "Команды:\n"
-        "/баланс\n"
-        "/отчет\n"
-        "/экспорт\n"
-        "/сброс (владелец)\n"
-        "/addforward \n"
-        "/removeforward \n"
-        "/listforwards\n"
-        "/редактировать (inline)\n"
-    )
-    send_and_record(chat_id, text, purpose="start")
-    update_day_window_after_change(chat_id, date_today_local(), purpose="start_window")
+# -------------------------------
+# Основная логика бота
+# -------------------------------
+@bot.message_handler(commands=["start"])
+def cmd_start(msg):
+    bot.send_message(msg.chat.id, f"🤖 Бот 'ФО' v{VERSION} активен!\nВведите сумму и описание (например: -500 еда)")
 
 @bot.message_handler(commands=["баланс"])
-def cmd_balance(m: types.Message):
-    ob = data.get("overall_balance", {}).get(str(m.chat.id), 0)
-    send_and_record(m.chat.id, f"💰 Баланс этого чата: {fmt_amount(ob)}", purpose="balance")
-
-@bot.message_handler(commands=["отчет"])
-def cmd_report(m: types.Message):
-    recs = [r for r in data.get("records", []) if str(r.get("owner_chat")) == str(m.chat.id)]
-    if not recs:
-        return send_and_record(m.chat.id, "Нет данных для отчёта.", purpose="report_empty")
-    path = os.path.join(CSV_DIR, CSV_FILE) if CSV_DIR else CSV_FILE
-    try:
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
-            writer = csv.writer(f)
-            writer.writerow(["id","short_id","timestamp","amount","note","owner_chat"])
-            for r in recs:
-                writer.writerow([r["id"], r["short_id"], r["timestamp"], r["amount"], r.get("note",""), r.get("owner_chat")])
-        send_file_and_record(m.chat.id, path, caption="Отчёт CSV", purpose="report")
-    except Exception as e:
-        send_and_record(m.chat.id, f"Ошибка: {e}", purpose="report_error")
+def cmd_balance(msg):
+    bot.send_message(msg.chat.id, f"💰 Текущий баланс: {data['overall_balance']}")
 
 @bot.message_handler(commands=["сброс"])
-def cmd_reset(m: types.Message):
-    if str(m.from_user.id) != str(OWNER_ID):
-        return send_and_record(m.chat.id, "⛔ Только владелец может обнулить данные.", purpose="reset_denied_cmd")
-    base = default_data()
-    base["version_current"] = data.get("version_current", VERSION)
-    save_data(base)
-    data.clear(); data.update(load_data())
-    send_and_record(m.chat.id, "♻️ Все данные обнулены.", purpose="reset_cmd")
-    update_day_window_after_change(m.chat.id, date_today_local(), purpose="reset_update")
+def cmd_reset(msg):
+    if str(msg.from_user.id) != str(OWNER_ID):
+        bot.send_message(msg.chat.id, "⛔ Только владелец может сбросить данные.")
+        return
+    save_data(default_data())
+    bot.send_message(msg.chat.id, "✅ Данные успешно сброшены.")
 
-@bot.message_handler(commands=["compact_on"])
-def cmd_compact_on(m: types.Message):
-    data.setdefault("compact_mode", {})[str(m.chat.id)] = True
-    save_data(data)
-    send_and_record(m.chat.id, "Compact-mode включён.", purpose="compact_on")
-    update_day_window_after_change(m.chat.id, date_today_local(), purpose="compact_on_update")
+@bot.message_handler(func=lambda m: True, content_types=["text", "photo", "video", "document", "voice", "sticker"])
+def handle_message(msg):
+    # Если сообщение содержит цифру в начале — это запись расхода/прихода
+    if msg.text and re.match(r"^[+-]?\d+", msg.text.strip()):
+        try:
+            amount, note = parse_record(msg.text)
+            add_record(amount, note, msg)
+        except Exception as e:
+            bot.send_message(msg.chat.id, f"Ошибка: {e}")
+    else:
+        forward_message(msg)
 
-@bot.message_handler(commands=["compact_off"])
-def cmd_compact_off(m: types.Message):
-    data.setdefault("compact_mode", {})[str(m.chat.id)] = False
-    save_data(data)
-    send_and_record(m.chat.id, "Compact-mode выключен.", purpose="compact_off")
-    update_day_window_after_change(m.chat.id, date_today_local(), purpose="compact_off_update")
+def parse_record(text):
+    match = re.match(r"^([+-]?\d+)\s*(.*)$", text.strip())
+    if not match:
+        raise ValueError("Неверный формат. Пример: -500 еда")
+    return int(match.group(1)), match.group(2) or "Без описания"
 
-# -------------------------
-# Автоматическая установка webhook при старте
-# -------------------------
-import requests
+def add_record(amount, note, msg):
+    rid = data["next_id"]
+    data["next_id"] += 1
+    record = {
+        "id": rid,
+        "short_id": f"R{rid}",
+        "timestamp": now_iso_utc(),
+        "amount": amount,
+        "note": note,
+        "owner": msg.from_user.id
+    }
+    data["records"].append(record)
+    data["overall_balance"] += amount
+    save_data(data)
+    bot.reply_to(msg, f"💾 Записано: {amount} ({note})\n💰 Баланс: {data['overall_balance']}")
 
-RENDER_URL = "https://fo-1.onrender.com"   # URL твоего Render приложения
+# -------------------------------
+# Пересылка сообщений
+# -------------------------------
+def forward_message(msg):
+    for target in data.get("forward_targets", []):
+        try:
+            bot.copy_message(target["chat_id"], msg.chat.id, msg.message_id)
+        except Exception:
+            pass
+
+# -------------------------------
+# Webhook и Flask
+# -------------------------------
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"{RENDER_URL}{WEBHOOK_PATH}"
 
-def setup_webhook():
-    try:
-        # Проверяем текущий вебхук
-        current = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo").json()
-        current_url = current.get("result", {}).get("url")
-
-        # Если вебхук отсутствует или отличается — обновляем
-        if current_url != WEBHOOK_URL:
-            print(f"⚙️ Настраиваю webhook: {WEBHOOK_URL}")
-            requests.get(f"https://api.telegram.org/bot{TOKEN}/deleteWebhook")
-            resp = requests.post(
-                f"https://api.telegram.org/bot{TOKEN}/setWebhook",
-                data={"url": WEBHOOK_URL}
-            ).json()
-            if resp.get("ok"):
-                print(f"✅ Webhook успешно установлен: {WEBHOOK_URL}")
-            else:
-                print(f"❌ Ошибка установки webhook: {resp}")
-        else:
-            print(f"✅ Webhook уже активен: {WEBHOOK_URL}")
-    except Exception as e:
-        print(f"⚠️ Ошибка при настройке webhook: {e}")
-
-# Автоматически выполнить при запуске
-setup_webhook()
-
-# ---------- Webhook endpoints (Flask) ----------
-def process_update_request(json_str: str):
-    try:
-        update = telebot.types.Update.de_json(json_str)
-        bot.process_new_updates([update])
-    except Exception as e:
-        print(f"[process_update_request] {e}")
-
-@app.route("/webhook", methods=['POST'])
+@app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
-    try:
-        if request.headers.get('content-type') == 'application/json':
-            json_str = request.get_data().decode('utf-8')
-            process_update_request(json_str)
-            return '', 200
-        else:
-            print("[webhook] неверный формат данных")
-            return 'Неверный формат', 403
-    except Exception as e:
-        print(f"[webhook] {e}")
-        return 'Ошибка обработки', 500
+    try:
+        update = telebot.types.Update.de_json(request.data.decode("utf-8"))
+        bot.process_new_updates([update])
+    except Exception as e:
+        print(f"[webhook] Ошибка: {e}")
+    return "ok", 200
 
-@app.route(WEBHOOK_PATH, methods=['POST'])
-def webhook_token_path():
-    try:
-        json_str = request.get_data().decode('utf-8')
-        process_update_request(json_str)
-    except Exception as e:
-        print(f"[webhook_token_path] {e}")
-    return '', 200
-
-@app.route(ALT_WEBHOOK_PATH, methods=['POST'])
-def webhook_root():
-    try:
-        json_str = request.get_data().decode('utf-8')
-        process_update_request(json_str)
-    except Exception as e:
-        print(f"[webhook_root] {e}")
-    return '', 200
-
-@app.route("/", methods=['GET'])
+@app.route("/", methods=["GET"])
 def index():
-    return f"✅ Бот 'ФО' v{VERSION} работает (Render OK)", 200
+    return f"🤖 Бот 'ФО' v{VERSION} работает."
 
-# ---------- Автоматическая установка webhook ----------
-def auto_set_webhook():
-    try:
-        # определяем хост: сначала явный override, затем Render env
-        render_host = None
-        if WEBHOOK_HOST_OVERRIDE:
-            render_host = WEBHOOK_HOST_OVERRIDE
-        else:
-            # RENDER_EXTERNAL_URL обычно вида "fo-1.onrender.com"
-            render_host = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_HOSTNAME")
-        if render_host:
-            # нормализуем (если там уже есть https://)
-            render_host = render_host.strip()
-            if render_host.startswith("http://") or render_host.startswith("https://"):
-                # убираем схему, оставляем хост+path
-                render_host = render_host.split("://", 1)[1].rstrip('/')
-            webhook_url = f"https://{render_host}{WEBHOOK_PATH if WEBHOOK_PATH.startswith('/') else '/' + WEBHOOK_PATH}"
-        else:
-            # fallback: если не найден Render env, поставить значение по умолчанию (не идеально, но безопасно)
-            webhook_url = f"https://fo-1.onrender.com{WEBHOOK_PATH if WEBHOOK_PATH.startswith('/') else '/' + WEBHOOK_PATH}"
+# -------------------------------
+# Автоматическая установка webhook
+# -------------------------------
+def set_webhook_auto():
+    try:
+        host = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_HOSTNAME") or "https://fo-1.onrender.com"
+        url = f"{host}{WEBHOOK_PATH}"
+        bot.remove_webhook()
+        time.sleep(0.5)
+        bot.set_webhook(url)
+        print(f"[Webhook] установлен: {url}")
+        if OWNER_ID:
+            msg = bot.send_message(int(OWNER_ID), f"✅ Webhook активирован: {url}")
+            delayed_delete(int(OWNER_ID), msg.message_id, 5)
+    except Exception as e:
+        print(f"[set_webhook_auto] {e}")
 
-        print(f"[auto_set_webhook] Целевой webhook: {webhook_url}")
-
-        # Получить текущее состояние webhook через Telegram API
-        try:
-            resp = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/getWebhookInfo", timeout=10).json()
-            current_url = resp.get("result", {}).get("url", "") if resp.get("ok") else ""
-        except Exception as e:
-            print(f"[auto_set_webhook] Ошибка getWebhookInfo: {e}")
-            current_url = ""
-
-        if current_url != webhook_url:
-            print(f"[auto_set_webhook] Обновляем webhook: {current_url} -> {webhook_url}")
-            try:
-                # удалить старый webhook
-                requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook", timeout=10)
-            except Exception:
-                pass
-            time.sleep(0.4)
-            try:
-                r = requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook", params={"url": webhook_url}, timeout=10).json()
-                if r.get("ok"):
-                    print("[auto_set_webhook] Webhook установлен успешно")
-                    # уведомить владельца (мягко)
-                    if OWNER_ID:
-                        try:
-                            msg = bot.send_message(int(OWNER_ID), f"🔗 Webhook установлен: {webhook_url}")
-                            delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
-                        except Exception:
-                            pass
-                else:
-                    print(f"[auto_set_webhook] Ответ Telegram: {r}")
-            except Exception as e:
-                print(f"[auto_set_webhook] Ошибка setWebhook: {e}")
-        else:
-            print("[auto_set_webhook] Webhook уже установлен корректно")
-    except Exception as e:
-        print(f"[auto_set_webhook] Общая ошибка: {e}")
-
-# ---------- Запуск ----------
+# -------------------------------
+# Автозапуск
+# -------------------------------
 if __name__ == "__main__":
-    print(f"🚀 Запуск ФО v{VERSION} ...")
-    save_data(data)
-
-    # гарантируем, что OWNER_ID есть в forward_targets (для удобства)
-    try:
-        if OWNER_ID:
-            add_forward_target(int(OWNER_ID), str(OWNER_ID))
-    except Exception:
-        pass
-
-    # автоматическая установка webhook
-    auto_set_webhook()
-
-    # уведомление владельцу о старте
-    if OWNER_ID:
-        try:
-            msg = bot.send_message(int(OWNER_ID), f"✅ Бот v{VERSION} запущен и активен.")
-            delayed_delete(int(OWNER_ID), msg.message_id, delay=5)
-            record_sent_message({"chat_id": str(OWNER_ID), "message_id": int(msg.message_id), "timestamp": now_iso_utc(), "purpose": "owner_start"})
-        except Exception:
-            pass
-
-    app.run(host="0.0.0.0", port=PORT)
-
-# -------------------------------
-# Строк кода: ~720
-# -------------------------------
-
+    print(f"🚀 Запуск ФО v{VERSION} ...")
+    if not os.path.exists(DATA_FILE):
+        save_data(default_data())
+    if OWNER_ID:
+        add_forward_target(int(OWNER_ID), "Владелец")
+    set_webhook_auto()
+    app.run(host="0.0.0.0", port=PORT)
