@@ -353,9 +353,31 @@ def webhook():
     return "ok", 200
 
 # --------------------------------------------
+# Автоматическая установка webhook при запуске
+# --------------------------------------------
+import requests
+
+def ensure_webhook():
+    """Устанавливает webhook автоматически, если не установлен"""
+    try:
+        webhook_url = f"https://fo-1.onrender.com/{TOKEN}"
+        info = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo").json()
+        current = info.get("result", {}).get("url", "")
+        if current != webhook_url:
+            r = requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_url}")
+            if r.json().get("ok"):
+                log_info(f"Webhook установлен: {webhook_url}")
+            else:
+                log_error(f"Ошибка установки webhook: {r.text}")
+        else:
+            log_info("Webhook уже установлен корректно.")
+    except Exception as e:
+        log_error(f"Ошибка проверки webhook: {e}")
+
+# --------------------------------------------
 # Запуск приложения
 # --------------------------------------------
 if __name__ == "__main__":
+    ensure_webhook()  # <-- теперь webhook ставится сам
     log_info(f"Бот запущен (версия {VERSION})")
     app.run(host="0.0.0.0", port=PORT)
-# ============================================
