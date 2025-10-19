@@ -684,9 +684,8 @@ def handle_callback(call):
         log_error(f"Ошибка обработки callback: {e}")
 
 
-
 # --------------------------------------------
-# ОТСЕК 8 — Обработка входящих сообщений и пересылка (единое окно по дню)
+# ОТСЕК 8 — Обработка входящих сообщений (одно окно в день)
 # --------------------------------------------
 @bot.message_handler(func=lambda m: True, content_types=[
     "text", "photo", "document", "voice", "video", "audio", "sticker"
@@ -697,17 +696,16 @@ def handle_message(msg):
 
     chat_id = msg.chat.id
     user_id = msg.from_user.id
-    chat_key = str(chat_id)
     today_key = get_today_key()
     store = get_chat_store(chat_id)
 
     # --- 1. Проверка состояния редактирования
-    user_states = data.setdefault("tracked_messages", {}).get(chat_key, {})
+    user_states = data.setdefault("tracked_messages", {}).get(str(chat_id), {})
     state = user_states.get(str(user_id))
     if state and state.get("action") == "edit_wait_value":
         rid = state.get("rid")
-        target_msg_id = state.get("msg_id")
-        lines = msg.text.splitlines() if msg.content_type == "text" and msg.text else []
+        target_msg_id = get_today_active_window(chat_id)
+        lines = msg.text.splitlines() if msg.text else []
         if not lines:
             bot.edit_message_text(
                 "Введите строку с числом, пример: +500 продажа.",
@@ -724,135 +722,110 @@ def handle_message(msg):
             return
         m = num_re.search(first_line)
         note = first_line[m.end():].strip() if m else ""
-        if token.lstrip().startswith("+"):
-            final_amt = amt
-        elif token.lstrip().startswith("-"):
-            final_amt = amt
-        else:
-            final_amt = -abs(amt)
+        final_amt = amt if token.lstrip().startswith("+") else -abs(amt)
         ok, updated = update_record_in_chat(chat_id, rid, final_amt, note)
         user_states.pop(str(user_id), None)
         save_data(data)
-        text = (f"✅ Запись R{rid} обновлена: {updated['amount']} — {updated.get('note','')}\n"
-                f"💰 Баланс: {get_chat_store(chat_id).get('balance',0)} ARS")
-        bot.edit_message_text(text, chat_id, target_msg_id, reply_markup=build_main_keyboard(chat_id))
+        if ok:
+            update_main_window(chat_id)
         return
 
-    # --- 2. Избегаем дублей
-    processed = data.setdefault("processed_messages", [])
+    # --- 2. Пропускаем дубли
     msg_key = f"{chat_id}:{msg.message_id}"
+    processed = data.setdefault("processed_messages", [])
     if msg_key in processed:
         return
 
     # --- 3. Определяем владельца
-    owner_int = None
-    if OWNER_ID:
-        try:
-            owner_int = int(OWNER_ID)
-        except Exception:
-            owner_int = None
+    owner_int = int(OWNER_ID) if OWNER_ID and OWNER_ID.isdigit() else None
     is_owner_msg = (owner_int is not None and user_id == owner_int)
 
-    # --- 4. Подготовка строк для обработки
-    lines_for_processing = []
+    # --- 4. Подготавливаем строки для учёта
+    lines = []
     if msg.content_type == "text" and msg.text:
-        lines_for_processing = msg.text.splitlines()
-    elif msg.content_type in ["photo", "document", "video", "audio"] and getattr(msg, "caption", None):
-        lines_for_processing = msg.caption.splitlines()
+        lines = msg.text.splitlines()
+    elif msg.caption:
+        lines = msg.caption.splitlines()
 
-    # --- 5. Обработка строк (учёт операций)
-    def process_lines(lines_list):
-        added = False
-        for line in lines_list:
-            line = line.strip()
-            if not line:
-                continue
-            amt, token = extract_first_number(line)
-            if amt is None:
-                continue
-            m = num_re.search(line)
-            note = line[m.end():].strip() if m else ""
-            if token.lstrip().startswith("+"):
-                final_amt = amt
-            elif token.lstrip().startswith("-"):
-                final_amt = amt
-            else:
-                final_amt = -abs(amt)
-            add_record_to_chat(chat_id, final_amt, note, user_id)
-            added = True
-        return added
-
+    # --- 5. Обработка записей (учёт)
     added = False
-    if lines_for_processing:
-        added = process_lines(lines_for_processing)
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        amt, token = extract_first_number(line)
+        if amt is None:
+            continue
+        m = num_re.search(line)
+        note = line[m.end():].strip() if m else ""
+        final_amt = amt if token.lstrip().startswith("+") else -abs(amt)
+        add_record_to_chat(chat_id, final_amt, note, user_id)
+        added = True
 
-    # --- 6. Определяем активное окно текущего дня
-    active_msg_id = get_today_active_window(chat_id)
-    if not active_msg_id:
-        # создаём новое окно для новых суток
-        sent = bot.send_message(
-            chat_id,
-            f"📅 {today_key}\n💰 Баланс: {store.get('balance', 0)} ARS",
-            reply_markup=build_main_keyboard(chat_id)
-        )
-        set_today_active_window(chat_id, sent.message_id)
-        active_msg_id = sent.message_id
-    else:
-        # окно уже существует — просто обновляем
-        pass
-
-    # --- 7. Обновляем текущее окно (только одно)
-    try:
-        day_records = get_daily_records(chat_id, today_key)
-        if not day_records:
-            content = f"📅 {today_key}\nПока нет записей.\n💰 Баланс: {store.get('balance', 0)} ARS"
-        else:
-            lines = [f"📅 {today_key}", "📋 Операции:"]
-            for r in day_records[-15:]:
-                sign = "+" if r["amount"] > 0 else ""
-                lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
-            lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
-            content = "\n".join(lines)
-        bot.edit_message_text(content, chat_id, active_msg_id, reply_markup=build_main_keyboard(chat_id))
-    except Exception as e:
-        log_error(f"Ошибка обновления окна: {e}")
-
-    # --- 8. Пересылка (если сообщение от владельца)
-    if is_owner_msg:
-        for target in list(data.get("forward_targets", [])):
-            try:
-                t = int(target)
-            except Exception:
-                continue
-            if t == chat_id:
-                # если владелец пишет в цель — копируем в личку владельцу
-                if owner_int and t != owner_int:
-                    try:
-                        sent = bot.copy_message(chat_id=owner_int, from_chat_id=chat_id, message_id=msg.message_id)
-                        if sent:
-                            key = f"{sent.chat.id}:{sent.message_id}"
-                            processed.append(key)
-                    except Exception as e:
-                        log_error(f"Ошибка пересылки владельцу: {e}")
-                continue
-            try:
-                sent = bot.copy_message(chat_id=t, from_chat_id=chat_id, message_id=msg.message_id)
-                if sent:
-                    key = f"{sent.chat.id}:{sent.message_id}"
-                    processed.append(key)
-            except Exception as e:
-                log_error(f"Ошибка пересылки в {t}: {e}")
-
-    # --- 9. Сохраняем состояние
+    # --- 6. Помечаем сообщение обработанным
     processed.append(msg_key)
     if len(processed) > 1000:
         processed = processed[-500:]
     data["processed_messages"] = processed
     save_data(data)
 
+    # --- 7. Обновляем активное окно
+    update_main_window(chat_id)
+
+    # --- 8. Пересылка сообщений от владельца
+    if is_owner_msg:
+        for target in data.get("forward_targets", []):
+            try:
+                t = int(target)
+            except Exception:
+                continue
+            if t == chat_id:
+                # если владелец пишет в цель — обновляем окно владельца, без дублей
+                update_main_window(owner_int)
+                continue
+            try:
+                sent = bot.copy_message(chat_id=t, from_chat_id=chat_id, message_id=msg.message_id)
+                key = f"{sent.chat.id}:{sent.message_id}"
+                processed.append(key)
+            except Exception as e:
+                log_error(f"Ошибка пересылки в {t}: {e}")
+        save_data(data)
+
+
 # --------------------------------------------
-# ОТСЕК 8 Завершение обработки и переход к системным функциям
+# Вспомогательная функция — обновление одного окна
 # --------------------------------------------
+def update_main_window(chat_id):
+    """Обновляет текущее окно чата по данным дня."""
+    today_key = get_today_key()
+    store = get_chat_store(chat_id)
+    active_id = get_today_active_window(chat_id)
+
+    # если активного окна нет — создаём одно и только одно (в начале дня)
+    if not active_id:
+        sent = bot.send_message(
+            chat_id,
+            f"📅 {today_key}\n💰 Баланс: {store.get('balance', 0)} ARS",
+            reply_markup=build_main_keyboard(chat_id)
+        )
+        set_today_active_window(chat_id, sent.message_id)
+        active_id = sent.message_id
+
+    # обновляем содержимое окна
+    try:
+        day_records = get_daily_records(chat_id, today_key)
+        if not day_records:
+            text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
+        else:
+            lines = [f"📅 {today_key}", "📋 Операции:"]
+            for r in day_records[-20:]:
+                sign = "+" if r["amount"] > 0 else ""
+                lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+            lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
+            text = "\n".join(lines)
+        bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
+    except Exception as e:
+        log_error(f"Ошибка при обновлении окна: {e}")
 
 # --------------------------------------------
 # ОТСЕК 9 — Flask webhook endpoints и автоустановка
