@@ -1,13 +1,11 @@
 # ============================================
-# Финансовый бот — версия 9.6.1.4
-# Forward: only OWNER -> forward_targets
-# Added commands: /myid, /chatid
+# Финансовый бот — версия 9.6.1.5
 # ============================================
-
-import os
+ import os
 import json
 import csv
 import logging
+import requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -19,13 +17,14 @@ from telebot import types
 # Настройки
 # --------------------------------------------
 TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID")  # оставляем в окружении (строка или число)
+OWNER_ID = os.getenv("OWNER_ID")  # строка или число
+APP_URL = os.getenv("APP_URL", "https://fo-1.onrender.com")  # URL приложения, используется для webhook
 TZ = ZoneInfo("America/Argentina/Catamarca")
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.6.1.4"
+VERSION = "9.6.1.5"
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен в переменных окружения!")
@@ -52,8 +51,7 @@ def log_info(msg):
 def log_error(msg):
     logging.error(msg)
 
-# короткая запись о старте
-log_info("Бот запущен")
+log_info(f"Старт приложения. Версия {VERSION}")
 
 # --------------------------------------------
 # Работа с данными
@@ -78,7 +76,6 @@ def load_data():
             d = default_data()
     else:
         d = default_data()
-    # гарантируем ключи
     for k, v in default_data().items():
         if k not in d:
             d[k] = v
@@ -93,7 +90,7 @@ def save_data(d):
 
 def export_to_csv(d):
     try:
-        with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+        with open(CSV_FILE, "w", newline='', encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow(["ID", "short_id", "timestamp", "amount", "note", "owner"])
             for r in d.get("records", []):
@@ -151,67 +148,75 @@ def add_record(amount, note, user_id):
     save_data(data)
     export_to_csv(data)
     if amount >= 0:
-        log_info(f"INCOME: +{amount} {note}")
+        log_info(f"ПРИХОД: +{amount} {note}")
     else:
-        log_info(f"EXPENSE: {amount} {note}")
+        log_info(f"РАСХОД: {amount} {note}")
     return rec
 
+def build_main_keyboard():
+    kb = types.InlineKeyboardMarkup()
+    kb.row(types.InlineKeyboardButton("💰 Баланс", callback_data="btn_balance"),
+           types.InlineKeyboardButton("📊 Отчёт", callback_data="btn_report"))
+    kb.row(types.InlineKeyboardButton("⚙️ Сброс", callback_data="btn_reset"),
+           types.InlineKeyboardButton("📨 Пересылка", callback_data="btn_forwards"))
+    kb.row(types.InlineKeyboardButton("📘 О коде", callback_data="btn_cod"))
+    return kb
+
 # --------------------------------------------
-# Команды: /start (латиница), /myid, /chatid, /balance, /report, /reset
+# Команды: /start, /myid, /chatid, /balance, /report, /reset, /cod
 # --------------------------------------------
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
     text = (
-        "Welcome to Financial Bot 💰\n\n"
-        "Commands:\n"
-        "/start – Show this help message\n"
-        "/myid – Show your user ID\n"
-        "/chatid – Show current chat ID\n"
-        "/balance – Show current balance\n"
-        "/report – Show last transactions\n"
-        "/reset – Clear all data (owner only)\n"
-        "/addforward <chat_id> – Add forwarding target (owner only)\n"
-        "/removeforward <chat_id> – Remove forwarding target (owner only)\n"
-        "/listforwards – List forwarding targets\n\n"
-        "To record a transaction send: +1000 sale  or  -500 fuel\n"
+        "👋 Добро пожаловать в Финансовый бот «ФО»\n\n"
+        "Команды (латиницей):\n"
+        "/start – показать справку\n"
+        "/myid – показать ваш user ID\n"
+        "/chatid – показать ID чата\n"
+        "/balance – показать текущий баланс\n"
+        "/report – показать последние операции\n"
+        "/reset – обнулить все данные (только владелец)\n"
+        "/addforward <chat_id> – добавить цель для пересылки (только владелец)\n"
+        "/removeforward <chat_id> – убрать цель пересылки (только владелец)\n"
+        "/listforwards – список целей пересылки\n"
+        "/cod – информация о версии и обновлениях\n\n"
+        "Для записи транзакции отправьте: +1000 зарплата  или  -500 бензин\n"
     )
-    bot.send_message(msg.chat.id, text)
+    bot.send_message(msg.chat.id, f"💬 Версия: {VERSION}\n\n{text}", reply_markup=build_main_keyboard())
 
 @bot.message_handler(commands=["myid"])
 def cmd_myid(msg):
-    # показывает ID пользователя, который вызвал команду
     uid = msg.from_user.id
-    bot.reply_to(msg, f"🆔 Your user ID: {uid}")
+    bot.reply_to(msg, f"🆔 Ваш user ID: {uid}")
 
 @bot.message_handler(commands=["chatid"])
 def cmd_chatid(msg):
     cid = msg.chat.id
-    bot.reply_to(msg, f"💬 Current chat ID: {cid}")
+    bot.reply_to(msg, f"💬 ID текущего чата: {cid}")
 
-@bot.message_handler(commands=["balance", "баланс"])
+@bot.message_handler(commands=["balance", "balans", "баланс"])
 def cmd_balance(msg):
-    bot.reply_to(msg, f"💰 Balance: {data.get('overall_balance',0)} ₽")
+    bot.reply_to(msg, f"💰 Баланс: {data.get('overall_balance',0)} ₽", reply_markup=build_main_keyboard())
 
-@bot.message_handler(commands=["report", "отчет"])
+@bot.message_handler(commands=["report", "otchet", "отчет"])
 def cmd_report(msg):
     recs = data.get("records", [])
     if not recs:
-        bot.send_message(msg.chat.id, "Пока нет операций.")
+        bot.send_message(msg.chat.id, "Пока нет операций.", reply_markup=build_main_keyboard())
         return
     text_lines = ["📋 Последние операции:"]
     for r in recs[-20:]:
         sign = "+" if r["amount"] > 0 else ""
         text_lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
-    bot.send_message(msg.chat.id, "\n".join(text_lines))
+    bot.send_message(msg.chat.id, "\n".join(text_lines), reply_markup=build_main_keyboard())
 
-@bot.message_handler(commands=["reset", "сброс"])
+@bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
     if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
-        bot.send_message(msg.chat.id, "Только владелец может сбрасывать данные.")
+        bot.send_message(msg.chat.id, "Только владелец может сбрасывать данные.", reply_markup=build_main_keyboard())
         return
     global data
     data = default_data()
-    # добавим OWNER_ID в forward_targets снова
     try:
         if OWNER_ID:
             data["forward_targets"].append(int(OWNER_ID))
@@ -219,32 +224,28 @@ def cmd_reset(msg):
         pass
     save_data(data)
     export_to_csv(data)
-    bot.send_message(msg.chat.id, "✅ Все данные сброшены.")
-    log_info("DATA RESET by owner")
+    bot.send_message(msg.chat.id, "✅ Все данные сброшены.", reply_markup=build_main_keyboard())
+    log_info("ДАННЫЕ ОБНУЛЕНЫ владельцем")
 
-# --------------------------------------------
-# Управление пересылкой (owner only)
-# --------------------------------------------
 @bot.message_handler(commands=["addforward"])
 def cmd_addforward(msg):
     if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
         return
     parts = msg.text.split()
     if len(parts) < 2:
-        bot.reply_to(msg, "Usage: /addforward <chat_id>")
+        bot.reply_to(msg, "Использование: /addforward <chat_id>")
         return
     try:
         cid = int(parts[1])
     except Exception:
-        bot.reply_to(msg, "Invalid chat_id (must be integer).")
+        bot.reply_to(msg, "Неверный chat_id (должно быть число).")
         return
     if cid in data["forward_targets"]:
-        bot.reply_to(msg, "This chat is already in forwarding list.")
+        bot.reply_to(msg, "Этот чат уже в списке пересылки.")
         return
     data["forward_targets"].append(cid)
     save_data(data)
-    bot.reply_to(msg, f"✅ Forward target added: {cid}")
-    log_info(f"FORWARD ADD: {cid}")
+    bot.reply_to(msg, f"✅ Цель пересылки добавлена: {cid}")
 
 @bot.message_handler(commands=["removeforward"])
 def cmd_removeforward(msg):
@@ -252,69 +253,103 @@ def cmd_removeforward(msg):
         return
     parts = msg.text.split()
     if len(parts) < 2:
-        bot.reply_to(msg, "Usage: /removeforward <chat_id>")
+        bot.reply_to(msg, "Использование: /removeforward <chat_id>")
         return
     try:
         cid = int(parts[1])
     except Exception:
-        bot.reply_to(msg, "Invalid chat_id (must be integer).")
+        bot.reply_to(msg, "Неверный chat_id (должно быть число).")
         return
     if cid not in data["forward_targets"]:
-        bot.reply_to(msg, "This chat is not in forwarding list.")
+        bot.reply_to(msg, "Этот чат не в списке пересылки.")
         return
     data["forward_targets"].remove(cid)
     save_data(data)
-    bot.reply_to(msg, f"✅ Forward target removed: {cid}")
-    log_info(f"FORWARD REMOVE: {cid}")
+    bot.reply_to(msg, f"✅ Цель пересылки удалена: {cid}")
 
 @bot.message_handler(commands=["listforwards"])
 def cmd_listforwards(msg):
     if not data["forward_targets"]:
-        bot.reply_to(msg, "Forwarding list is empty.")
+        bot.reply_to(msg, "Список пересылки пуст.", reply_markup=build_main_keyboard())
         return
-    text = "📨 Forward targets:\n" + "\n".join(map(str, data["forward_targets"]))
-    bot.reply_to(msg, text)
+    text = "📨 Цели пересылки:\n" + "\n".join(map(str, data["forward_targets"]))
+    bot.reply_to(msg, text, reply_markup=build_main_keyboard())
+
+@bot.message_handler(commands=["cod"])
+def cmd_cod(msg):
+    text = (
+        f"📘 Информация о коде — версия {VERSION}\n\n"
+        "Краткое структурное описание:\n"
+        "- Интерфейс полностью на русском языке\n"
+        "- Команды остаются на латинице\n"
+        "- Добавлены inline-кнопки для быстрого доступа\n"
+        "- Автоматическая установка webhook при запуске\n"
+        "- Пересылка сообщений от владельца в указанные чаты\n\n"
+        "Последнее обновление: Добавлена автоматическая постановка webhook, русский интерфейс, кнопки, команда /cod."
+    )
+    bot.send_message(msg.chat.id, text, reply_markup=build_main_keyboard())
+
+# --------------------------------------------
+# Обработка callback'ов от inline-кнопок
+# --------------------------------------------
+@bot.callback_query_handler(func=lambda c: True)
+def handle_callback(call):
+    try:
+        data_cd = call.data
+        if data_cd == "btn_balance":
+            bot.answer_callback_query(call.id, text=f"Баланс: {data.get('overall_balance',0)} ₽")
+            bot.send_message(call.message.chat.id, f"💰 Баланс: {data.get('overall_balance',0)} ₽", reply_markup=build_main_keyboard())
+        elif data_cd == "btn_report":
+            recs = data.get("records", [])
+            if not recs:
+                bot.send_message(call.message.chat.id, "Пока нет операций.", reply_markup=build_main_keyboard())
+                bot.answer_callback_query(call.id, text="Нет операций")
+                return
+            text_lines = ["📋 Последние операции:"]
+            for r in recs[-20:]:
+                sign = "+" if r["amount"] > 0 else ""
+                text_lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+            bot.send_message(call.message.chat.id, "\n".join(text_lines), reply_markup=build_main_keyboard())
+            bot.answer_callback_query(call.id)
+        elif data_cd == "btn_reset":
+            # подтверждение сброса
+            if str(call.from_user.id) != str(OWNER_ID):
+                bot.answer_callback_query(call.id, text="Только владелец может сбрасывать данные.")
+                return
+            bot.send_message(call.message.chat.id, "Вы уверены? Отправьте /reset для подтверждения.", reply_markup=build_main_keyboard())
+            bot.answer_callback_query(call.id)
+        elif data_cd == "btn_forwards":
+            if not data.get("forward_targets"):
+                bot.send_message(call.message.chat.id, "Список пересылки пуст. Добавьте цель: /addforward <chat_id>", reply_markup=build_main_keyboard())
+            else:
+                bot.send_message(call.message.chat.id, "📨 Цели пересылки:\n" + "\n".join(map(str, data["forward_targets"])), reply_markup=build_main_keyboard())
+            bot.answer_callback_query(call.id)
+        elif data_cd == "btn_cod":
+            bot.answer_callback_query(call.id)
+            cmd_cod(call.message)
+        else:
+            bot.answer_callback_query(call.id)
+    except Exception as e:
+        log_error(f"Ошибка обработки callback: {e}")
 
 # --------------------------------------------
 # Обработка входящих сообщений и пересылка
 # --------------------------------------------
 @bot.message_handler(func=lambda m: True, content_types=["text", "photo", "document", "voice", "video", "audio", "sticker"])
 def handle_message(msg):
-    """
-    Пересылаем только если сообщение отправил OWNER_ID.
-    Также, если текст и соответствует транзакции, добавляем запись.
-    """
-    # Если from_user отсутствует или message от бота — игнорируем
+    # Игнорируем сообщения от ботов и без from_user
     if not getattr(msg, "from_user", None):
         return
     if msg.from_user.is_bot:
         return
 
-    # Проверяем — только OWNER_ID разрешён пересылать
-    if OWNER_ID is None:
-        # если OWNER_ID не задан, ничего не пересылаем
-        pass
-    else:
-        try:
-            owner_int = int(OWNER_ID)
-        except Exception:
-            owner_int = None
-        # если это сообщение от владельца — будем копировать в targets
-        is_from_owner = (owner_int is not None and msg.from_user.id == owner_int)
-        # иначе — не пересылаем
-        if not is_from_owner:
-            # если сообщение не от владельца, но это текст — можем учесть как транзакцию?
-            # по заданию: учёт расходов должен вестись — поэтому позволяем добавлять записи от любого,
-            # но пересылка только от владельца. (Если нужно иначе — можно изменить.)
-            # Обработка транзакций ниже выполняется для всех текстов.
-            pass
-
-    # Обработка транзакции (для текстовых сообщений) — учёт выполняется всегда
+    # Обработка транзакции (для текстовых сообщений)
     if msg.content_type == "text" and msg.text:
         amount, note = parse_transaction(msg.text)
         if amount is not None:
             rec = add_record(amount, note, msg.from_user.id)
-            bot.reply_to(msg, f"✅ Записано: {amount} {note}\nБаланс: {data.get('overall_balance',0)} ₽")
+            bot.reply_to(msg, f"✅ Записано: {amount} {note}\nБаланс: {data.get('overall_balance',0)} ₽", reply_markup=build_main_keyboard())
+            return
 
     # Пересылка: только если сообщение от владельца
     if OWNER_ID:
@@ -323,14 +358,12 @@ def handle_message(msg):
         except Exception:
             owner_int = None
         if owner_int is not None and msg.from_user.id == owner_int:
-            # копируем сообщение в каждый target, кроме самого владельца
             for target in data.get("forward_targets", []):
                 try:
                     if int(target) == owner_int:
                         continue
-                    # copy_message сохраняет оригинальный вид (без "forwarded from")
                     bot.copy_message(chat_id=int(target), from_chat_id=msg.chat.id, message_id=msg.message_id)
-                    log_info(f"FORWARD: owner message copied to {target}")
+                    log_info(f"Переслано сообщение владельца в {target}")
                 except Exception as e:
                     log_error(f"Ошибка пересылки в {target}: {e}")
 
@@ -339,12 +372,11 @@ def handle_message(msg):
 # --------------------------------------------
 @app.route("/", methods=["GET"])
 def index():
-    return f"Bot version {VERSION} running."
+    return f"Бот версия {VERSION} запущен."
 
-@app.route(f"/{TOKEN}", methods=["POST"])
+@app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        # read and process update
         raw = request.stream.read().decode("utf-8")
         update = telebot.types.Update.de_json(raw)
         bot.process_new_updates([update])
@@ -355,29 +387,45 @@ def webhook():
 # --------------------------------------------
 # Автоматическая установка webhook при запуске
 # --------------------------------------------
-import requests
-
 def ensure_webhook():
-    """Устанавливает webhook автоматически, если не установлен"""
     try:
-        webhook_url = f"https://fo-1.onrender.com/{TOKEN}"
-        info = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo").json()
+        webhook_url = f"{APP_URL.rstrip('/')}/webhook"
+        info = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo", timeout=10).json()
         current = info.get("result", {}).get("url", "")
         if current != webhook_url:
-            r = requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook?url={webhook_url}")
-            if r.json().get("ok"):
+            r = requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params={"url": webhook_url}, timeout=10)
+            try:
+                jr = r.json()
+            except Exception:
+                jr = {"ok": False, "description": r.text}
+            if jr.get("ok"):
                 log_info(f"Webhook установлен: {webhook_url}")
             else:
-                log_error(f"Ошибка установки webhook: {r.text}")
+                log_error(f"Ошибка установки webhook: {jr}")
         else:
             log_info("Webhook уже установлен корректно.")
     except Exception as e:
-        log_error(f"Ошибка проверки webhook: {e}")
+        log_error(f"Ошибка проверки/установки webhook: {e}")
+
+def notify_owner_start():
+    if OWNER_ID is None:
+        return
+    try:
+        owner_int = int(OWNER_ID)
+    except Exception:
+        return
+    try:
+        text = f"💬 Финансовый бот — версия {VERSION} запущен ✅"
+        bot.send_message(owner_int, text, reply_markup=build_main_keyboard())
+        log_info("Уведомление владельцу отправлено.")
+    except Exception as e:
+        log_error(f"Не удалось отправить уведомление владельцу: {e}")
 
 # --------------------------------------------
 # Запуск приложения
 # --------------------------------------------
 if __name__ == "__main__":
-    ensure_webhook()  # <-- теперь webhook ставится сам
+    ensure_webhook()
+    notify_owner_start()
     log_info(f"Бот запущен (версия {VERSION})")
     app.run(host="0.0.0.0", port=PORT)
