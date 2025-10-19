@@ -141,101 +141,49 @@ if OWNER_ID:
         data["forward_targets"].append(owner_int)
         save_data(data)
 
+
 # --------------------------------------------
-# ОТСЕК 4 — Вспомогательные функции (парсинг, чат-менеджмент)
+# ОТСЕК 4 — Команды
 # --------------------------------------------
-# Разбор первой найденной цифры в строке (с учётом знаков и пробелов)
-num_re = re.compile(r'([+-]?\s*\d+)')
-
-def extract_first_number(s):
+@bot.message_handler(commands=["start"])
+def cmd_start(msg):
     """
-    Ищет первое вхождение числа в строке. Возвращает (amount:int, raw_token:str) или (None, None)
-    Правила:
-    - допускается пробел между знаком и цифрой: "+ 100" или "-  50"
-    - возвращаемое число учитывает знак
+    Команда /start — показывает приветствие и главное меню.
+    Работает также при нажатии на кнопку 🚀 Старт.
     """
-    if not s:
-        return None, None
-    m = num_re.search(s)
-    if not m:
-        return None, None
-    token = m.group(1)
-    # удаляем пробелы внутри токена
-    token_clean = token.replace(" ", "")
-    try:
-        amt = int(token_clean)
-    except Exception:
-        return None, None
-    return amt, token.strip()
+    text = (
+        f"🚀 Финансовый бот запущен (версия {VERSION})\n\n"
+        "Доступные команды:\n"
+        "/balance – показать баланс\n"
+        "/report – последние операции\n"
+        "/edit – редактировать запись\n"
+        "/reset – сбросить все данные (только владелец)\n"
+        "/cod – описание кода и обновления\n\n"
+        "Чтобы добавить запись, отправьте сообщение вида:\n"
+        "+1000 продажа  или  -500 еда"
+    )
+    bot.send_message(msg.chat.id, text, reply_markup=build_main_keyboard())
 
-def get_chat_store(chat_id):
-    """Возвращает или инициализирует структуру данных для чата"""
-    chat_id = str(chat_id)
-    if chat_id not in data["chats"]:
-        data["chats"][chat_id] = {
-            "balance": 0,
-            "records": [],
-            "next_id": 1
-        }
-        save_data(data)
-    return data["chats"][chat_id]
 
-def add_record_to_chat(chat_id, amount, note, owner):
-    store = get_chat_store(chat_id)
-    ts = datetime.now(TZ).isoformat()
-    rid = store.get("next_id", 1)
-    rec = {
-        "id": rid,
-        "short_id": f"R{rid}",
-        "timestamp": ts,
-        "amount": amount,
-        "note": note,
-        "owner": owner
-    }
-    store.setdefault("records", []).append(rec)
-    store["balance"] = store.get("balance", 0) + amount
-    store["next_id"] = rid + 1
-    save_data(data)
-    export_to_csv(data)
-    if amount >= 0:
-        log_info(f"[CHAT {chat_id}] ПРИХОД: +{amount} {note}")
-    else:
-        log_info(f"[CHAT {chat_id}] РАСХОД: {amount} {note}")
-    return rec
-
-def delete_record_in_chat(chat_id, rec_id):
-    store = get_chat_store(chat_id)
-    recs = store.get("records", [])
-    to_del = None
-    for r in recs:
-        if r["id"] == rec_id or str(r["id"]) == str(rec_id) or r["short_id"] == f"R{rec_id}":
-            to_del = r
-            break
-    if not to_del:
-        return False, None
-    recs.remove(to_del)
-    store["balance"] = sum([r["amount"] for r in recs])
-    save_data(data)
-    export_to_csv(data)
-    return True, to_del
-
-def update_record_in_chat(chat_id, rec_id, new_amount, new_note):
-    store = get_chat_store(chat_id)
-    recs = store.get("records", [])
-    found = None
-    for r in recs:
-        if r["id"] == rec_id or str(r["id"]) == str(rec_id) or r["short_id"] == f"R{rec_id}":
-            found = r
-            break
-    if not found:
-        return False, None
-    found["amount"] = new_amount
-    found["note"] = new_note
-    # recompute balance
-    store["balance"] = sum([r["amount"] for r in recs])
-    save_data(data)
-    export_to_csv(data)
-    return True, found
+@bot.message_handler(commands=["cod"])
+def cmd_cod(msg):
+    """
+    Команда /cod — краткое описание текущей версии и нововведений.
+    """
+    description = (
+        f"📘 Финансовый бот — версия {VERSION}\n"
+        "--------------------------------------\n"
+        "🔹 Полный перевод интерфейса на русский\n"
+        "🔹 Кнопочное редактирование и удаление транзакций\n"
+        "🔹 Отдельный учёт по каждому чату\n"
+        "🔹 Удобная команда /addforward (перешли сообщение — чат добавится)\n"
+        "🔹 Учёт пересланных сообщений в расчётах\n"
+        "🔹 Обновлённое меню с кнопкой 🚀 Старт\n"
+        "🔹 Улучшенные логи и структура кода\n"
+        "--------------------------------------\n"
+        "📂 Разработано специально под Render Webhook.\n"
+    )
+    bot.send_message(msg.chat.id, description, reply_markup=build_main_keyboard())
 
 # --------------------------------------------
 # ОТСЕК 5 — Клавиатуры и кнопки
