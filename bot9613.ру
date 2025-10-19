@@ -20,9 +20,9 @@ from telebot import types
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_ID")
 TZ = ZoneInfo("America/Argentina/Catamarca")
-DATA_FILE = "data9.6.1.3.json"
-CSV_FILE = "data9.6.1.3.csv"
-LOG_FILE = "log9.6.1.3.txt"
+DATA_FILE = "data9613.json"
+CSV_FILE = "data9613.csv"
+LOG_FILE = "log9613.txt"
 PORT = int(os.environ.get("PORT", 5000))
 VERSION = "9.6.1.3"
 
