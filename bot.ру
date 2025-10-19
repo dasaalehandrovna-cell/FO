@@ -1,185 +1,195 @@
-# === КОД №9.6 ===
-# Telegram-бот "ФО" (Flask + webhook)
-# Версия с безопасным удалением сообщений (без дублирования)
+# -------------------------------
+# Финансовый бот "ФО" — версия 9.8.1 (полная)
+# Автоматическая установка webhook + автосоздание data.json
+# Полностью совместим с Render (Flask)
+# -------------------------------
 
 import os
 import json
 import time
 import threading
-from datetime import datetime, date
+import re
+import csv
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from flask import Flask, request
 import telebot
 from telebot import types
 
+# -------------------------------
+# Константы
+# -------------------------------
+VERSION = "9.8.1"
+TZ = ZoneInfo("America/Argentina/Catamarca")
+DATA_FILE = "data981.json"
+CSV_FILE = "data981.csv"
+
+TOKEN = os.getenv("BOT_TOKEN")
+OWNER_ID = os.getenv("OWNER_ID")
+PORT = int(os.environ.get("PORT", 5000))
+
+if not TOKEN:
+    raise ValueError("Переменная окружения BOT_TOKEN не задана. Установите её в настройках Render.")
+
+bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-bot = telebot.TeleBot(BOT_TOKEN)
 
-DATA_FILE = "data.json"
-CSV_FILE = "data.csv"
-STATE_FILE = "state.json"
+# -------------------------------
+# Функции для работы с базой
+# -------------------------------
+def default_data():
+    return {
+        "overall_balance": 0,
+        "records": [],
+        "active_messages": {},
+        "next_id": 1,
+        "sent_messages": [],
+        "forward_targets": []
+    }
 
-# ---------- Хранилище состояний сообщений ----------
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r") as f:
-            return json.load(f)
-    return {"last_message_id": None, "last_message_date": None}
-
-def save_state(state):
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f)
-
-state = load_state()
-
-# ---------- Работа с данными ----------
 def load_data():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            return json.load(f)
-    return {"balance": 0, "records": []}
+    if not os.path.exists(DATA_FILE):
+        save_data(default_data())
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+def save_data(d):
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
 
-def export_to_csv(data):
-    with open(CSV_FILE, "w", encoding="utf-8") as f:
-        f.write("Дата,Время,Тип,Сумма,Описание,Баланс\n")
-        for r in data["records"]:
-            f.write(f"{r['date']},{r['time']},{r['type']},{r['amount']},{r['desc']},{r['balance']}\n")
+data = load_data()
 
-# ---------- Формирование окна учёта ----------
-def format_report(data):
-    today = date.today().strftime("%d.%m.%Y")
-    text = f"📊 <b>Учёт за {today}</b>\n\n"
-    for r in data["records"]:
-        text += f"{r['time']} — {r['type']} {r['amount']} ({r['desc']})\n"
-    text += f"\n💰 <b>Баланс:</b> {data['balance']}"
-    return text
+# -------------------------------
+# Утилиты
+# -------------------------------
+def now_iso_utc():
+    return datetime.utcnow().replace(tzinfo=TZ).isoformat()
 
-def send_new_report(chat_id, data):
-    """Отправляет новое окно и удаляет старое (с задержкой)."""
-    global state
-    text = format_report(data)
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("Редактировать", callback_data="edit"))
-    markup.add(types.InlineKeyboardButton("Удалить всё", callback_data="reset"))
-    markup.add(types.InlineKeyboardButton("Экспорт CSV", callback_data="export_csv"))
-    markup.add(types.InlineKeyboardButton("Пересылка", callback_data="forward_setup"))
-
-    msg = bot.send_message(chat_id, text, parse_mode="HTML", reply_markup=markup)
-
-    last_message_id = state.get("last_message_id")
-    state["last_message_id"] = msg.message_id
-    state["last_message_date"] = date.today().isoformat()
-    save_state(state)
-
-    # Безопасное удаление предыдущего через 5 секунд
-    if last_message_id:
-        threading.Timer(5.0, lambda: safe_delete(chat_id, last_message_id)).start()
-
-def safe_delete(chat_id, msg_id):
-    try:
-        bot.delete_message(chat_id, msg_id)
-    except Exception:
-        pass
-
-# ---------- Обработка входящих сообщений ----------
-@bot.message_handler(content_types=["text"])
-def handle_message(message):
-    chat_id = message.chat.id
-    data = load_data()
-    text = message.text.strip()
-
-    if text.startswith("+") or text.startswith("-"):
+def delayed_delete(chat_id, msg_id, delay=10):
+    def task():
+        time.sleep(delay)
         try:
-            sign = 1 if text.startswith("+") else -1
-            parts = text[1:].strip().split(maxsplit=1)
-            amount = int(parts[0])
-            desc = parts[1] if len(parts) > 1 else ""
-            data["balance"] += amount * sign
-
-            record = {
-                "date": date.today().strftime("%d.%m.%Y"),
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "type": "Приход" if sign == 1 else "Расход",
-                "amount": amount,
-                "desc": desc,
-                "balance": data["balance"],
-            }
-            data["records"].append(record)
-            save_data(data)
-            export_to_csv(data)
-            send_new_report(chat_id, data)
+            bot.delete_message(chat_id, msg_id)
         except Exception:
-            bot.send_message(chat_id, "Ошибка в формате данных.")
-    else:
-        # Просто обновить окно
-        send_new_report(chat_id, data)
+            pass
+    threading.Thread(target=task).start()
 
-# ---------- Кнопки ----------
-@bot.callback_query_handler(func=lambda call: True)
-def callback_handler(call):
-    chat_id = call.message.chat.id
-    data = load_data()
+def record_sent_message(info):
+    data["sent_messages"].append(info)
+    save_data(data)
 
-    if call.data == "reset":
-        confirm_markup = types.InlineKeyboardMarkup()
-        confirm_markup.add(types.InlineKeyboardButton("✅ Да", callback_data="confirm_reset"))
-        confirm_markup.add(types.InlineKeyboardButton("❌ Нет", callback_data="cancel"))
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=confirm_markup)
+def add_forward_target(chat_id, label):
+    found = any(t["chat_id"] == chat_id for t in data["forward_targets"])
+    if not found:
+        data["forward_targets"].append({"chat_id": chat_id, "label": label})
+        save_data(data)
 
-    elif call.data == "confirm_reset":
-        save_data({"balance": 0, "records": []})
-        export_to_csv({"balance": 0, "records": []})
-        send_new_report(chat_id, {"balance": 0, "records": []})
+# -------------------------------
+# Основная логика бота
+# -------------------------------
+@bot.message_handler(commands=["start"])
+def cmd_start(msg):
+    bot.send_message(msg.chat.id, f"🤖 Бот 'ФО' v{VERSION} активен!\nВведите сумму и описание (например: -500 еда)")
 
-    elif call.data == "cancel":
-        send_new_report(chat_id, data)
+@bot.message_handler(commands=["баланс"])
+def cmd_balance(msg):
+    bot.send_message(msg.chat.id, f"💰 Текущий баланс: {data['overall_balance']}")
 
-    elif call.data == "export_csv":
-        if os.path.exists(CSV_FILE):
-            bot.send_document(chat_id, open(CSV_FILE, "rb"))
+@bot.message_handler(commands=["сброс"])
+def cmd_reset(msg):
+    if str(msg.from_user.id) != str(OWNER_ID):
+        bot.send_message(msg.chat.id, "⛔ Только владелец может сбросить данные.")
+        return
+    save_data(default_data())
+    bot.send_message(msg.chat.id, "✅ Данные успешно сброшены.")
 
-    elif call.data == "forward_setup":
-        markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("Ввести ID чата", callback_data="forward_enter"))
-        markup.add(types.InlineKeyboardButton("Отмена", callback_data="cancel"))
-        bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=markup)
-
-    elif call.data == "forward_enter":
-        bot.send_message(chat_id, "Введите ID чата для пересылки сообщений (или 'отмена').")
-        bot.register_next_step_handler(call.message, process_forward_chat_id)
-
-def process_forward_chat_id(message):
-    chat_id = message.chat.id
-    text = message.text.strip()
-    if text.lower() == "отмена":
-        data = load_data()
-        send_new_report(chat_id, data)
-    else:
+@bot.message_handler(func=lambda m: True, content_types=["text", "photo", "video", "document", "voice", "sticker"])
+def handle_message(msg):
+    # Если сообщение содержит цифру в начале — это запись расхода/прихода
+    if msg.text and re.match(r"^[+-]?\d+", msg.text.strip()):
         try:
-            forward_id = int(text)
-            with open("forward_chat.json", "w") as f:
-                json.dump({"chat_id": forward_id}, f)
-            bot.send_message(chat_id, f"✅ Сообщения будут пересылаться в чат ID: {forward_id}")
-        except ValueError:
-            bot.send_message(chat_id, "Неверный формат ID. Введите число.")
+            amount, note = parse_record(msg.text)
+            add_record(amount, note, msg)
+        except Exception as e:
+            bot.send_message(msg.chat.id, f"Ошибка: {e}")
+    else:
+        forward_message(msg)
 
-# ---------- Flask Webhook ----------
-@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def parse_record(text):
+    match = re.match(r"^([+-]?\d+)\s*(.*)$", text.strip())
+    if not match:
+        raise ValueError("Неверный формат. Пример: -500 еда")
+    return int(match.group(1)), match.group(2) or "Без описания"
+
+def add_record(amount, note, msg):
+    rid = data["next_id"]
+    data["next_id"] += 1
+    record = {
+        "id": rid,
+        "short_id": f"R{rid}",
+        "timestamp": now_iso_utc(),
+        "amount": amount,
+        "note": note,
+        "owner": msg.from_user.id
+    }
+    data["records"].append(record)
+    data["overall_balance"] += amount
+    save_data(data)
+    bot.reply_to(msg, f"💾 Записано: {amount} ({note})\n💰 Баланс: {data['overall_balance']}")
+
+# -------------------------------
+# Пересылка сообщений
+# -------------------------------
+def forward_message(msg):
+    for target in data.get("forward_targets", []):
+        try:
+            bot.copy_message(target["chat_id"], msg.chat.id, msg.message_id)
+        except Exception:
+            pass
+
+# -------------------------------
+# Webhook и Flask
+# -------------------------------
+WEBHOOK_PATH = "/webhook"
+
+@app.route(WEBHOOK_PATH, methods=["POST"])
 def webhook():
-    update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "OK", 200
+    try:
+        update = telebot.types.Update.de_json(request.data.decode("utf-8"))
+        bot.process_new_updates([update])
+    except Exception as e:
+        print(f"[webhook] Ошибка: {e}")
+    return "ok", 200
 
-@app.route("/")
+@app.route("/", methods=["GET"])
 def index():
-    bot.remove_webhook()
-    bot.set_webhook(url=f"https://{request.host}/{BOT_TOKEN}")
-    return "Webhook установлен", 200
+    return f"🤖 Бот 'ФО' v{VERSION} работает."
 
+# -------------------------------
+# Автоматическая установка webhook
+# -------------------------------
+def set_webhook_auto():
+    try:
+        host = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("RENDER_EXTERNAL_HOSTNAME") or "https://fo-1.onrender.com"
+        url = f"{host}{WEBHOOK_PATH}"
+        bot.remove_webhook()
+        time.sleep(0.5)
+        bot.set_webhook(url)
+        print(f"[Webhook] установлен: {url}")
+        if OWNER_ID:
+            msg = bot.send_message(int(OWNER_ID), f"✅ Webhook активирован: {url}")
+            delayed_delete(int(OWNER_ID), msg.message_id, 5)
+    except Exception as e:
+        print(f"[set_webhook_auto] {e}")
 
+# -------------------------------
+# Автозапуск
+# -------------------------------
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    print(f"🚀 Запуск ФО v{VERSION} ...")
+    if not os.path.exists(DATA_FILE):
+        save_data(default_data())
+    if OWNER_ID:
+        add_forward_target(int(OWNER_ID), "Владелец")
+    set_webhook_auto()
+    app.run(host="0.0.0.0", port=PORT)
