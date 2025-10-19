@@ -828,66 +828,47 @@ def update_main_window(chat_id):
         log_error(f"Ошибка при обновлении окна: {e}")
 
 # --------------------------------------------
-# ОТСЕК 9 — Flask webhook endpoints и автоустановка
+# ОТСЕК 9 — Автоматическое создание окна нового дня (с версией кода)
 # --------------------------------------------
-@app.route("/", methods=["GET"])
-def index():
-    return f"Бот версия {VERSION} запущен."
 
-@app.route("/webhook", methods=["POST"])
-def webhook():
-    try:
-        raw = request.stream.read().decode("utf-8")
-        update = telebot.types.Update.de_json(raw)
-        bot.process_new_updates([update])
-    except Exception as e:
-        log_error(f"Ошибка в webhook: {e}")
-    return "ok", 200
+VERSION = "9.8.1.1"
 
-def ensure_webhook():
-    try:
-        webhook_url = f"{APP_URL.rstrip('/')}/webhook"
-        info = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo", timeout=10).json()
-        current = info.get("result", {}).get("url", "")
-        if current != webhook_url:
-            r = requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params={"url": webhook_url}, timeout=10)
-            try:
-                jr = r.json()
-            except Exception:
-                jr = {"ok": False, "description": r.text}
-            if jr.get("ok"):
-                log_info(f"Webhook установлен: {webhook_url}")
-            else:
-                log_error(f"Ошибка установки webhook: {jr}")
-        else:
-            log_info("Webhook уже установлен корректно.")
-    except Exception as e:
-        log_error(f"Ошибка проверки/установки webhook: {e}")
+def schedule_daily_window_creation():
+    """Фоновая задача: следит за сменой суток и создаёт новое окно в каждом чате."""
+    def task():
+        last_day = get_today_key()
+        while True:
+            time.sleep(60)  # проверяем каждую минуту
+            current_day = get_today_key()
+            if current_day != last_day:
+                # Смена суток — создаём новое окно для всех чатов, где были операции
+                for chat_id_str in list(data.get("chats", {}).keys()):
+                    try:
+                        chat_id = int(chat_id_str)
+                    except Exception:
+                        continue
+                    # Текст нового окна
+                    text = (
+                        f"🗓 {current_day}\n"
+                        f"🤖 Версия бота: {VERSION}\n\n"
+                        f"💰 Баланс: {get_chat_store(chat_id).get('balance', 0)} ARS"
+                    )
+                    try:
+                        sent = bot.send_message(
+                            chat_id,
+                            text,
+                            reply_markup=build_main_keyboard(chat_id)
+                        )
+                        set_today_active_window(chat_id, sent.message_id)
+                        log_info(f"Создано новое окно дня {current_day} для чата {chat_id}")
+                    except Exception as e:
+                        log_error(f"Не удалось создать окно дня для {chat_id}: {e}")
+                last_day = current_day
 
-def notify_owner_start():
-    if OWNER_ID is None:
-        return
-    try:
-        owner_int = int(OWNER_ID)
-    except Exception:
-        return
-    try:
-        text = f"💬 Финансовый бот — версия {VERSION} запущен ✅"
-        bot.send_message(owner_int, text, reply_markup=build_main_keyboard())
-        log_info("Уведомление владельцу отправлено.")
-    except Exception as e:
-        log_error(f"Не удалось отправить уведомление владельцу: {e}")
+    thread = threading.Thread(target=task, daemon=True)
+    thread.start()
 
 # --------------------------------------------
-# ОТСЕК 10 — Запуск приложения
+# Автозапуск фоновой задачи при старте бота
 # --------------------------------------------
-if __name__ == "__main__":
-    ensure_webhook()
-    notify_owner_start()
-    log_info(f"Бот запущен (версия {VERSION})")
-    app.run(host="0.0.0.0", port=PORT)
-
-# ============================================
-# Конец кода — версия 9.6.1.6
-# Всего строк: 655
-# ============================================
+schedule_daily_window_creation()
