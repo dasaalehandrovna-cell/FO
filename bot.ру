@@ -238,19 +238,13 @@ def update_record_in_chat(chat_id, rec_id, new_amount, new_note):
     return True, found
 
 # --------------------------------------------
-# ОТСЕК 5 — Клавиатуры и кнопки
+# ОТСЕК 5 — Клавиатуры и кнопки (компактная версия)
 # --------------------------------------------
 from telebot import types
 
 def build_main_keyboard():
     """
-    Главное меню:
-    - Баланс
-    - Отчёт
-    - Редактировать
-    - Сброс
-    - Старт
-    - О коде
+    Главное меню с кнопками в одну строку.
     """
     kb = types.InlineKeyboardMarkup()
     kb.row(
@@ -261,7 +255,6 @@ def build_main_keyboard():
         types.InlineKeyboardButton("✏️ Редактировать", callback_data="btn_edit"),
         types.InlineKeyboardButton("⚙️ Сброс", callback_data="btn_reset")
     )
-    # заменено: вместо кнопки «Пересылка» — «Старт»
     kb.row(
         types.InlineKeyboardButton("🚀 Старт", callback_data="btn_start"),
         types.InlineKeyboardButton("📘 О коде", callback_data="btn_cod")
@@ -271,8 +264,7 @@ def build_main_keyboard():
 
 def build_edit_list_keyboard(chat_id):
     """
-    Создаёт список кнопок для редактирования и удаления транзакций.
-    Используется в /edit и при нажатии на ✏️ Редактировать.
+    Список транзакций с кнопками ✏ и 🗑 в одну строку.
     """
     store = get_chat_store(chat_id)
     kb = types.InlineKeyboardMarkup()
@@ -282,14 +274,13 @@ def build_edit_list_keyboard(chat_id):
         return kb
 
     for r in records:
-        text = f"{r['short_id']}: {r['amount']} — {r.get('note','')}"
-        # две кнопки в одной строке: ✏️ Редактировать и 🗑 Удалить
-        row = [
-            types.InlineKeyboardButton("✏️", callback_data=f"edit_select:{r['id']}"),
+        sign = "+" if r["amount"] > 0 else ""
+        label = f"{r['short_id']}: {sign}{r['amount']} {r.get('note','')}"
+        kb.row(
+            types.InlineKeyboardButton(label, callback_data=f"noop_row:{r['id']}"),
+            types.InlineKeyboardButton("✏", callback_data=f"edit_select:{r['id']}"),
             types.InlineKeyboardButton("🗑", callback_data=f"delete_record:{r['id']}")
-        ]
-        kb.add(types.InlineKeyboardButton(text, callback_data=f"noop_row:{r['id']}"))
-        kb.row(*row)
+        )
     return kb
 
 # 6--------------------------------------------
@@ -456,85 +447,95 @@ def cmd_delete(msg):
         bot.reply_to(msg, "Запись не найдена.", reply_markup=build_main_keyboard())
 
 
-
-
 # --------------------------------------------
-# ОТСЕК 7 — Обработка callback'ов (кнопки)
+# ОТСЕК 7 — Обработка callback'ов (в одном окне)
 # --------------------------------------------
 @bot.callback_query_handler(func=lambda c: True)
 def handle_callback(call):
     try:
         data_cd = call.data
+        cid = call.message.chat.id
+        mid = call.message.message_id
 
-        # --- Кнопка 💰 Баланс
+        # --- 💰 Баланс
         if data_cd == "btn_balance":
-            store = get_chat_store(call.message.chat.id)
-            bot.answer_callback_query(call.id, text=f"Баланс: {store.get('balance',0)} ₽")
-            bot.send_message(call.message.chat.id, f"💰 Баланс этого чата: {store.get('balance',0)} ₽", reply_markup=build_main_keyboard())
-
-        # --- Кнопка 📊 Отчёт
-        elif data_cd == "btn_report":
-            cmd_report(call.message)
+            store = get_chat_store(cid)
+            text = f"💰 Баланс этого чата: {store.get('balance', 0)} ₽"
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard())
             bot.answer_callback_query(call.id)
 
-        # --- Кнопка ⚙️ Сброс
+        # --- 📊 Отчёт
+        elif data_cd == "btn_report":
+            recs = get_chat_store(cid).get("records", [])
+            if not recs:
+                text = "📋 Пока нет операций."
+            else:
+                text_lines = ["📋 Последние операции:"]
+                for r in recs[-20:]:
+                    sign = "+" if r["amount"] > 0 else ""
+                    text_lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+                text = "\n".join(text_lines)
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard())
+            bot.answer_callback_query(call.id)
+
+        # --- ⚙️ Сброс
         elif data_cd == "btn_reset":
             if str(call.from_user.id) != str(OWNER_ID):
                 bot.answer_callback_query(call.id, text="Только владелец может сбрасывать данные.")
                 return
-            bot.send_message(call.message.chat.id, "Вы уверены? Отправьте /reset для подтверждения.", reply_markup=build_main_keyboard())
+            data["chat_stores"][str(cid)] = {"records": [], "balance": 0}
+            save_data(data)
+            text = "✅ Все данные этого чата сброшены."
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard())
             bot.answer_callback_query(call.id)
 
-        # --- Кнопка ✏️ Редактировать
+        # --- ✏️ Редактировать
         elif data_cd == "btn_edit":
-            kb = build_edit_list_keyboard(call.message.chat.id)
-            if not kb.keyboard or len(kb.keyboard) == 0:
-                bot.send_message(call.message.chat.id, "Нет записей для редактирования в этом чате.", reply_markup=build_main_keyboard())
-                bot.answer_callback_query(call.id)
-                return
-            bot.send_message(call.message.chat.id, "Выберите запись для редактирования или удаления:", reply_markup=kb)
+            kb = build_edit_list_keyboard(cid)
+            text = "Выберите запись для редактирования или удаления:"
+            bot.edit_message_text(text, cid, mid, reply_markup=kb)
             bot.answer_callback_query(call.id)
 
-        # --- Кнопка 🚀 Старт
+        # --- 🚀 Старт
         elif data_cd == "btn_start":
             cmd_start(call.message)
             bot.answer_callback_query(call.id)
 
-        # --- Кнопка 📘 О коде
+        # --- 📘 О коде
         elif data_cd == "btn_cod":
-            bot.answer_callback_query(call.id)
             cmd_cod(call.message)
+            bot.answer_callback_query(call.id)
 
-        # --- Кнопка выбора транзакции (редактировать)
+        # --- ✏ Выбор для редактирования
         elif data_cd.startswith("edit_select:"):
             rid = int(data_cd.split(":")[1])
             chat_state = data.setdefault("tracked_messages", {})
-            chat_key = str(call.message.chat.id)
+            chat_key = str(cid)
             user_states = chat_state.setdefault(chat_key, {})
             user_states[str(call.from_user.id)] = {"action": "edit_wait_value", "rid": rid}
             save_data(data)
-            bot.send_message(
-                call.message.chat.id,
-                f"Введите новое значение для R{rid} (например: +500 продажа)\nили нажмите 🗑 Удалить для удаления.",
-                reply_markup=build_main_keyboard()
-            )
+            text = f"Введите новое значение для R{rid} (например: +500 продажа)"
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard())
             bot.answer_callback_query(call.id)
 
-        # --- Новая кнопка 🗑 Удалить запись
+        # --- 🗑 Удаление записи
         elif data_cd.startswith("delete_record:"):
             rid = int(data_cd.split(":")[1])
-            ok, rec = delete_record_in_chat(call.message.chat.id, rid)
+            ok, rec = delete_record_in_chat(cid, rid)
             if ok:
-                bot.send_message(call.message.chat.id, f"✅ Запись R{rid} удалена. Баланс обновлён: {get_chat_store(call.message.chat.id).get('balance',0)} ₽", reply_markup=build_main_keyboard())
-                bot.answer_callback_query(call.id, text=f"R{rid} удалена.")
+                text = f"✅ Запись R{rid} удалена.\nБаланс обновлён: {get_chat_store(cid).get('balance',0)} ₽"
             else:
-                bot.answer_callback_query(call.id, text="Запись не найдена.")
+                text = "⚠️ Запись не найдена."
+            bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard())
+            bot.answer_callback_query(call.id)
 
         else:
             bot.answer_callback_query(call.id)
 
     except Exception as e:
         log_error(f"Ошибка обработки callback: {e}")
+
+
 
 
 # 8--------------------------------------------
