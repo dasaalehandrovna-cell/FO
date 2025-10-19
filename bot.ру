@@ -798,40 +798,41 @@ def handle_message(msg):
 # Вспомогательная функция — обновление одного окна
 # --------------------------------------------
 def update_main_window(chat_id):
-    """Обновляет текущее окно чата по данным дня (строго одно окно в день)."""
+    """Обновляет текущее окно чата по данным дня, не создавая новое."""
     today_key = get_today_key()
     store = get_chat_store(chat_id)
     active_id = get_today_active_window(chat_id)
 
+    # Попытка редактировать существующее окно
     text = ""
-    day_records = get_daily_records(chat_id, today_key)
-    if not day_records:
-        text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
-    else:
-        lines = [f"📅 {today_key}", "📋 Операции:"]
-        for r in day_records[-20:]:
-            sign = "+" if r["amount"] > 0 else ""
-            lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
-        lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
-        text = "\n".join(lines)
-
-    # --- если активного окна нет (новый день или первая запись)
-    if not active_id:
-        sent = bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
-        set_today_active_window(chat_id, sent.message_id)
-        log_info(f"Создано окно дня {today_key} для чата {chat_id}")
-        return
-
-    # --- если окно есть — пробуем обновить
     try:
-        bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
+        day_records = get_daily_records(chat_id, today_key)
+        if not day_records:
+            text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
+        else:
+            lines = [f"📅 {today_key}", "📋 Операции:"]
+            for r in day_records[-20:]:
+                sign = "+" if r["amount"] > 0 else ""
+                lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+            lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
+            text = "\n".join(lines)
+
+        # если активное окно есть — обновляем его
+        if active_id:
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
+        else:
+            # если активного окна нет — ищем последнее сообщение бота в этом чате
+            messages = get_chat_store(chat_id).get("records", [])
+            if messages:
+                # не создаём новое окно — просто пытаемся обновить последнее
+                possible_id = get_today_active_window(chat_id)
+                if possible_id:
+                    bot.edit_message_text(text, chat_id, possible_id, reply_markup=build_main_keyboard(chat_id))
+            else:
+                # ничего не делаем, чтобы не спамить
+                log_info(f"Нет окна для редактирования в чате {chat_id}")
     except Exception as e:
-        log_error(f"Не удалось обновить окно ({e}), создаю новое.")
-        try:
-            sent = bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
-            set_today_active_window(chat_id, sent.message_id)
-        except Exception as e2:
-            log_error(f"Ошибка при создании нового окна: {e2}")
+        log_error(f"Ошибка при обновлении окна (без создания нового): {e}")
 
 # --------------------------------------------
 # ОТСЕК 9 — Автоматическое создание окна нового дня (с версией кода)
