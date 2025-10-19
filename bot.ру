@@ -292,169 +292,65 @@ def build_edit_list_keyboard(chat_id):
         kb.row(*row)
     return kb
 
-
 # --------------------------------------------
-# ОТСЕК 6 — Команды (основные)
+# ОТСЕК 6 — Управление пересылкой (улучшенная версия)
 # --------------------------------------------
-@bot.message_handler(commands=["start"])
-def cmd_start(msg):
-    text = (
-        "👋 Добро пожаловать в Финансовый бот «ФО»\n\n"
-        "Команды (латиницей):\n"
-        "/start – показать справку\n"
-        "/myid – показать ваш user ID\n"
-        "/chatid – показать ID чата\n"
-        "/balance – показать текущий баланс (для текущего чата)\n"
-        "/report – показать последние операции (для текущего чата)\n"
-        "/reset – обнулить все данные (только владелец)\n"
-        "/addforward <chat_id> – добавить цель для пересылки (только владелец)\n"
-        "/removeforward <chat_id> – убрать цель пересылки (только владелец)\n"
-        "/listforwards – список целей пересылки\n"
-        "/cod – информация о версии и обновлениях\n"
-        "/edit – редактирование транзакций (список и выбор)\n"
-        "/delete <номер> – удалить запись по номеру\n\n"
-        "Для записи транзакции отправьте одну или несколько строк, каждая строка отдельный учёт.\n"
-        "Примеры:\n+1000 зарплата\n-123 хлеб\n200 сок\n"
-    )
-    bot.send_message(msg.chat.id, f"💬 Версия: {VERSION}\n\n{text}", reply_markup=build_main_keyboard())
-
-@bot.message_handler(commands=["myid"])
-def cmd_myid(msg):
-    uid = msg.from_user.id
-    bot.reply_to(msg, f"🆔 Ваш user ID: {uid}")
-
-@bot.message_handler(commands=["chatid"])
-def cmd_chatid(msg):
-    cid = msg.chat.id
-    bot.reply_to(msg, f"💬 ID текущего чата: {cid}")
-
-@bot.message_handler(commands=["balance"])
-def cmd_balance(msg):
-    store = get_chat_store(msg.chat.id)
-    bot.reply_to(msg, f"💰 Баланс этого чата: {store.get('balance',0)} ₽", reply_markup=build_main_keyboard())
-
-@bot.message_handler(commands=["report"])
-def cmd_report(msg):
-    store = get_chat_store(msg.chat.id)
-    recs = store.get("records", [])
-    if not recs:
-        bot.send_message(msg.chat.id, "Пока нет операций в этом чате.", reply_markup=build_main_keyboard())
-        return
-    text_lines = ["📋 Последние операции этого чата:"]
-    for r in recs[-50:]:
-        sign = "+" if r["amount"] > 0 else ""
-        text_lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
-    bot.send_message(msg.chat.id, "\n".join(text_lines), reply_markup=build_main_keyboard())
-
-@bot.message_handler(commands=["reset"])
-def cmd_reset(msg):
-    if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
-        bot.send_message(msg.chat.id, "Только владелец может сбрасывать данные.", reply_markup=build_main_keyboard())
-        return
-    global data
-    data = default_data()
-    try:
-        if OWNER_ID:
-            data["forward_targets"].append(int(OWNER_ID))
-    except Exception:
-        pass
-    save_data(data)
-    export_to_csv(data)
-    bot.send_message(msg.chat.id, "✅ Все данные сброшены.", reply_markup=build_main_keyboard())
-    log_info("ДАННЫЕ ОБНУЛЕНЫ владельцем")
 
 @bot.message_handler(commands=["addforward"])
 def cmd_addforward(msg):
+    """
+    ✅ Новый вариант: можно просто переслать сообщение из нужного чата,
+    и бот сам добавит этот chat_id в список пересылки.
+    Также остаётся возможность вручную ввести ID.
+    """
     if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
+        bot.reply_to(msg, "Команду может выполнять только владелец.")
         return
+
+    # вариант с аргументом
     parts = msg.text.split()
-    if len(parts) < 2:
-        bot.reply_to(msg, "Использование: /addforward <chat_id>")
+    if len(parts) > 1:
+        try:
+            cid = int(parts[1])
+        except Exception:
+            bot.reply_to(msg, "Неверный формат chat_id (должен быть числом).")
+            return
+        if cid in data["forward_targets"]:
+            bot.reply_to(msg, "Этот чат уже есть в списке пересылки.")
+            return
+        data["forward_targets"].append(cid)
+        save_data(data)
+        bot.reply_to(msg, f"✅ Добавлен новый чат в пересылку: {cid}")
+        log_info(f"FORWARD ADD (manual): {cid}")
         return
-    try:
-        cid = int(parts[1])
-    except Exception:
-        bot.reply_to(msg, "Неверный chat_id (должно быть число).")
-        return
-    if cid in data["forward_targets"]:
-        bot.reply_to(msg, "Этот чат уже в списке пересылки.")
-        return
-    data["forward_targets"].append(cid)
-    save_data(data)
-    bot.reply_to(msg, f"✅ Цель пересылки добавлена: {cid}")
 
-@bot.message_handler(commands=["removeforward"])
-def cmd_removeforward(msg):
-    if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
-        return
-    parts = msg.text.split()
-    if len(parts) < 2:
-        bot.reply_to(msg, "Использование: /removeforward <chat_id>")
-        return
-    try:
-        cid = int(parts[1])
-    except Exception:
-        bot.reply_to(msg, "Неверный chat_id (должно быть число).")
-        return
-    if cid not in data["forward_targets"]:
-        bot.reply_to(msg, "Этот чат не в списке пересылки.")
-        return
-    data["forward_targets"].remove(cid)
-    save_data(data)
-    bot.reply_to(msg, f"✅ Цель пересылки удалена: {cid}")
+    # вариант без аргумента — ждём пересланное сообщение
+    bot.reply_to(msg, "Перешлите сюда сообщение из чата, который нужно добавить в пересылку.")
 
-@bot.message_handler(commands=["listforwards"])
-def cmd_listforwards(msg):
-    if not data["forward_targets"]:
-        bot.reply_to(msg, "Список пересылки пуст.", reply_markup=build_main_keyboard())
-        return
-    text = "📨 Цели пересылки:\n" + "\n".join(map(str, data["forward_targets"]))
-    bot.reply_to(msg, text, reply_markup=build_main_keyboard())
 
-@bot.message_handler(commands=["cod"])
-def cmd_cod(msg):
-    text = (
-        f"📘 Информация о коде — версия {VERSION}\n\n"
-        "Краткое структурное описание:\n"
-        "- Интерфейс полностью на русском языке\n"
-        "- Команды остаются на латинице\n"
-        "- Добавлены inline-кнопки для быстрого доступа\n"
-        "- Автоматическая установка webhook при запуске\n"
-        "- Пересылка сообщений от владельца в указанные чаты (без эха)\n"
-        "- Отдельный учёт по каждому чату\n"
-        "- Редактирование записей через /edit и /delete\n"
-        "- Каждая строка сообщения = отдельная запись\n\n"
-        "Последнее обновление: добавлена версия 9.6.1.6 — сегментированный учёт, улучшенная пересылка, редактирование."
-    )
-    bot.send_message(msg.chat.id, text, reply_markup=build_main_keyboard())
+@bot.message_handler(func=lambda m: m.forward_from_chat is not None or m.forward_from is not None)
+def handle_forwarded_for_addforward(msg):
+    """
+    Если владелец пересылает сообщение из чата — добавляем этот чат в пересылку.
+    Если обычное пересланное сообщение содержит сумму — учитываем как транзакцию.
+    """
+    # --- Если сообщение от владельца и переслано из чата
+    if str(msg.from_user.id) == str(OWNER_ID) and msg.forward_from_chat:
+        chat_id = msg.forward_from_chat.id
+        if chat_id not in data["forward_targets"]:
+            data["forward_targets"].append(chat_id)
+            save_data(data)
+            bot.reply_to(msg, f"✅ Чат добавлен в список пересылки: {chat_id}")
+            log_info(f"FORWARD ADD (via forward): {chat_id}")
+            return
 
-@bot.message_handler(commands=["edit"])
-def cmd_edit(msg):
-    kb = build_edit_list_keyboard(msg.chat.id)
-    if not kb.keyboard:
-        bot.reply_to(msg, "Нет записей для редактирования в этом чате.", reply_markup=build_main_keyboard())
-        return
-    bot.send_message(msg.chat.id, "Выберите запись для редактирования:", reply_markup=kb)
+    # --- Учитываем пересланное сообщение как транзакцию (в личке бота)
+    if msg.text:
+        amount, note = parse_transaction(msg.text)
+        if amount is not None:
+            rec = add_record(amount, note, msg.from_user.id)
+            bot.reply_to(msg, f"✅ Учтено (из пересланного): {amount} {note}\nБаланс: {data.get('overall_balance',0)} ₽")
 
-@bot.message_handler(commands=["delete"])
-def cmd_delete(msg):
-    parts = msg.text.split()
-    if len(parts) < 2:
-        bot.reply_to(msg, "Использование: /delete <номер или Rномер>")
-        return
-    token = parts[1].strip()
-    if token.upper().startswith("R"):
-        token = token[1:]
-    try:
-        rid = int(token)
-    except Exception:
-        bot.reply_to(msg, "Неверный номер записи.")
-        return
-    ok, rec = delete_record_in_chat(msg.chat.id, rid)
-    if ok:
-        bot.reply_to(msg, f"✅ Запись R{rid} удалена. Баланс обновлён: {get_chat_store(msg.chat.id).get('balance',0)} ₽", reply_markup=build_main_keyboard())
-    else:
-        bot.reply_to(msg, "Запись не найдена.", reply_markup=build_main_keyboard())
 
 # --------------------------------------------
 # ОТСЕК 7 — Обработка callback'ов (кнопки)
