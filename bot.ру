@@ -271,18 +271,28 @@ def build_main_keyboard():
 
 def build_edit_list_keyboard(chat_id):
     """
-    Создаёт список кнопок для редактирования транзакций.
-    Используется и командой /edit, и кнопкой ✏️ Редактировать.
+    Создаёт список кнопок для редактирования и удаления транзакций.
+    Используется в /edit и при нажатии на ✏️ Редактировать.
     """
     store = get_chat_store(chat_id)
     kb = types.InlineKeyboardMarkup()
-    if not store.get("records"):
+    records = store.get("records", [])[-20:]
+    if not records:
         kb.add(types.InlineKeyboardButton("Нет записей", callback_data="noop"))
         return kb
-    for r in store.get("records", [])[-20:]:
+
+    for r in records:
         text = f"{r['short_id']}: {r['amount']} — {r.get('note','')}"
-        kb.add(types.InlineKeyboardButton(text, callback_data=f"edit_select:{r['id']}"))
+        # две кнопки в одной строке: ✏️ Редактировать и 🗑 Удалить
+        row = [
+            types.InlineKeyboardButton("✏️", callback_data=f"edit_select:{r['id']}"),
+            types.InlineKeyboardButton("🗑", callback_data=f"delete_record:{r['id']}")
+        ]
+        kb.add(types.InlineKeyboardButton(text, callback_data=f"noop_row:{r['id']}"))
+        kb.row(*row)
     return kb
+
+
 # --------------------------------------------
 # ОТСЕК 6 — Команды (основные)
 # --------------------------------------------
@@ -480,7 +490,7 @@ def handle_callback(call):
                 bot.send_message(call.message.chat.id, "Нет записей для редактирования в этом чате.", reply_markup=build_main_keyboard())
                 bot.answer_callback_query(call.id)
                 return
-            bot.send_message(call.message.chat.id, "Выберите запись для редактирования:", reply_markup=kb)
+            bot.send_message(call.message.chat.id, "Выберите запись для редактирования или удаления:", reply_markup=kb)
             bot.answer_callback_query(call.id)
 
         # --- Кнопка 🚀 Старт
@@ -493,18 +503,9 @@ def handle_callback(call):
             bot.answer_callback_query(call.id)
             cmd_cod(call.message)
 
-        # --- Кнопка выбора транзакции из списка редактирования
+        # --- Кнопка выбора транзакции (редактировать)
         elif data_cd.startswith("edit_select:"):
-            parts = data_cd.split(":")
-            if len(parts) < 2:
-                bot.answer_callback_query(call.id, "Ошибка данных.")
-                return
-            try:
-                rid = int(parts[1])
-            except Exception:
-                bot.answer_callback_query(call.id, "Неверный номер.")
-                return
-            # сохраняем состояние пользователя
+            rid = int(data_cd.split(":")[1])
             chat_state = data.setdefault("tracked_messages", {})
             chat_key = str(call.message.chat.id)
             user_states = chat_state.setdefault(chat_key, {})
@@ -512,10 +513,20 @@ def handle_callback(call):
             save_data(data)
             bot.send_message(
                 call.message.chat.id,
-                f"Введите новое значение для R{rid} (например: +500 продажа)\nили используйте /delete {rid}",
+                f"Введите новое значение для R{rid} (например: +500 продажа)\nили нажмите 🗑 Удалить для удаления.",
                 reply_markup=build_main_keyboard()
             )
             bot.answer_callback_query(call.id)
+
+        # --- Новая кнопка 🗑 Удалить запись
+        elif data_cd.startswith("delete_record:"):
+            rid = int(data_cd.split(":")[1])
+            ok, rec = delete_record_in_chat(call.message.chat.id, rid)
+            if ok:
+                bot.send_message(call.message.chat.id, f"✅ Запись R{rid} удалена. Баланс обновлён: {get_chat_store(call.message.chat.id).get('balance',0)} ₽", reply_markup=build_main_keyboard())
+                bot.answer_callback_query(call.id, text=f"R{rid} удалена.")
+            else:
+                bot.answer_callback_query(call.id, text="Запись не найдена.")
 
         else:
             bot.answer_callback_query(call.id)
