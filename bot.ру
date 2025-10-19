@@ -16,6 +16,8 @@ import csv              # ✅ добавлен явный импорт CSV
 import logging
 import requests
 import re
+import threading
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -796,36 +798,40 @@ def handle_message(msg):
 # Вспомогательная функция — обновление одного окна
 # --------------------------------------------
 def update_main_window(chat_id):
-    """Обновляет текущее окно чата по данным дня."""
+    """Обновляет текущее окно чата по данным дня (строго одно окно в день)."""
     today_key = get_today_key()
     store = get_chat_store(chat_id)
     active_id = get_today_active_window(chat_id)
 
-    # если активного окна нет — создаём одно и только одно (в начале дня)
-    if not active_id:
-        sent = bot.send_message(
-            chat_id,
-            f"📅 {today_key}\n💰 Баланс: {store.get('balance', 0)} ARS",
-            reply_markup=build_main_keyboard(chat_id)
-        )
-        set_today_active_window(chat_id, sent.message_id)
-        active_id = sent.message_id
+    text = ""
+    day_records = get_daily_records(chat_id, today_key)
+    if not day_records:
+        text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
+    else:
+        lines = [f"📅 {today_key}", "📋 Операции:"]
+        for r in day_records[-20:]:
+            sign = "+" if r["amount"] > 0 else ""
+            lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+        lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
+        text = "\n".join(lines)
 
-    # обновляем содержимое окна
+    # --- если активного окна нет (новый день или первая запись)
+    if not active_id:
+        sent = bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
+        set_today_active_window(chat_id, sent.message_id)
+        log_info(f"Создано окно дня {today_key} для чата {chat_id}")
+        return
+
+    # --- если окно есть — пробуем обновить
     try:
-        day_records = get_daily_records(chat_id, today_key)
-        if not day_records:
-            text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
-        else:
-            lines = [f"📅 {today_key}", "📋 Операции:"]
-            for r in day_records[-20:]:
-                sign = "+" if r["amount"] > 0 else ""
-                lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
-            lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
-            text = "\n".join(lines)
         bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
     except Exception as e:
-        log_error(f"Ошибка при обновлении окна: {e}")
+        log_error(f"Не удалось обновить окно ({e}), создаю новое.")
+        try:
+            sent = bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
+            set_today_active_window(chat_id, sent.message_id)
+        except Exception as e2:
+            log_error(f"Ошибка при создании нового окна: {e2}")
 
 # --------------------------------------------
 # ОТСЕК 9 — Автоматическое создание окна нового дня (с версией кода)
@@ -836,34 +842,37 @@ VERSION = "9.8.1.1"
 def schedule_daily_window_creation():
     """Фоновая задача: следит за сменой суток и создаёт новое окно в каждом чате."""
     def task():
-        last_day = get_today_key()
-        while True:
-            time.sleep(60)  # проверяем каждую минуту
-            current_day = get_today_key()
-            if current_day != last_day:
-                # Смена суток — создаём новое окно для всех чатов, где были операции
-                for chat_id_str in list(data.get("chats", {}).keys()):
-                    try:
-                        chat_id = int(chat_id_str)
-                    except Exception:
-                        continue
-                    # Текст нового окна
-                    text = (
-                        f"🗓 {current_day}\n"
-                        f"🤖 Версия бота: {VERSION}\n\n"
-                        f"💰 Баланс: {get_chat_store(chat_id).get('balance', 0)} ARS"
-                    )
-                    try:
-                        sent = bot.send_message(
-                            chat_id,
-                            text,
-                            reply_markup=build_main_keyboard(chat_id)
-                        )
-                        set_today_active_window(chat_id, sent.message_id)
-                        log_info(f"Создано новое окно дня {current_day} для чата {chat_id}")
-                    except Exception as e:
-                        log_error(f"Не удалось создать окно дня для {chat_id}: {e}")
-                last_day = current_day
+        try:
+            last_day = get_today_key()
+            while True:
+                try:
+                    time.sleep(60)  # проверяем каждую минуту
+                    current_day = get_today_key()
+                    if current_day != last_day:
+                        # Смена суток — создаём новое окно для всех чатов
+                        for chat_id_str in list(data.get("chats", {}).keys()):
+                            try:
+                                chat_id = int(chat_id_str)
+                            except Exception:
+                                continue
+                            text = (
+                                f"🗓 {current_day}\n"
+                                f"🤖 Версия бота: {VERSION}\n\n"
+                                f"💰 Баланс: {get_chat_store(chat_id).get('balance', 0)} ARS"
+                            )
+                            try:
+                                sent = bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
+                                set_today_active_window(chat_id, sent.message_id)
+                                log_info(f"Создано новое окно дня {current_day} для чата {chat_id}")
+                            except Exception as e:
+                                log_error(f"Не удалось создать окно дня для {chat_id}: {e}")
+                        last_day = current_day
+                except Exception as loop_exc:
+                    # Если что-то пошло не так внутри цикла — логируем и продолжаем (чтобы поток не умер)
+                    log_error(f"Ошибка в daily loop: {loop_exc}")
+                    time.sleep(5)
+        except Exception as e:
+            log_error(f"Фатальная ошибка фоновой задачи schedule_daily_window_creation: {e}")
 
     thread = threading.Thread(target=task, daemon=True)
     thread.start()
