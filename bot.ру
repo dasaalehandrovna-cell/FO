@@ -308,7 +308,7 @@ def build_edit_list_keyboard(chat_id):
     return kb
 
 # -----------------------------
-# ОТСЕК 8 — Команды (исправлено: теперь редактирует текущее окно)
+# ОТСЕК 8 — Команды (исправлено: теперь редактирует текущее окно с логами)
 # -----------------------------
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
@@ -332,22 +332,35 @@ def cmd_start(msg):
         "📌 Все операции отображаются в одном активном окне этого чата."
     )
 
-    # Проверяем, есть ли уже активное окно
     today_key = datetime.now(tz=TZ).strftime("%Y-%m-%d")
     msg_info = data["active_messages"].get(today_key)
 
-    if msg_info and msg_info.get("chat_id") == chat_id:
-        # Если окно уже существует — просто редактируем его
-        try:
-            bot.edit_message_text(
-                f"💬 Версия: {VERSION}\n\n{text}",
-                chat_id=chat_id,
-                message_id=msg_info["message_id"],
-                reply_markup=build_main_keyboard(chat_id),
-            )
-            return
-        except Exception as e:
-            print(f"[Редактирование /start]: {e}")
+    reason_new_window = None
+    if not msg_info:
+        reason_new_window = "Нет активного окна на сегодня"
+    elif msg_info.get("chat_id") != chat_id:
+        reason_new_window = f"chat_id текущего сообщения ({chat_id}) != chat_id окна ({msg_info.get('chat_id')})"
+
+    if reason_new_window:
+        print(f"[cmd_start] Создаём новое окно: {reason_new_window}")
+        sent = bot.send_message(
+            chat_id,
+            f"💬 Версия: {VERSION}\n\n{text}\n\n🆔 Уникальный ID окна: {time.time()}",
+            reply_markup=build_main_keyboard(chat_id),
+        )
+        data["active_messages"][today_key] = {"chat_id": chat_id, "message_id": sent.message_id}
+        save_data(data)
+        return
+
+    try:
+        bot.edit_message_text(
+            f"💬 Версия: {VERSION}\n\n{text}\n\n🆔 Уникальный ID окна: {msg_info['message_id']}",
+            chat_id=chat_id,
+            message_id=msg_info["message_id"],
+            reply_markup=build_main_keyboard(chat_id),
+        )
+    except Exception as e:
+        print(f"[Редактирование /start]: {e}")
 
     # Если окна нет — создаём новое и запоминаем
     sent = bot.send_message(
@@ -736,10 +749,10 @@ def handle_message(msg):
         save_data(data)
 
 # -----------------------------
-# ОТСЕК 11 — обновление/создание окна (ядро одноокнового режима)
+# ОТСЕК 11 — обновление/создание окна (ядро одноокнового режима) с логами
 # -----------------------------
 def update_or_send_today_window(chat_id):
-    """Ключевая функция: обновляет активное окно дня (edit_message_text) или создаёт ОДНО сообщение."""
+    """Ключевая функция: обновляет активное окно дня (edit_message_text) или создаёт ОДНО сообщение с логами"""
     today_key = get_today_key()
     active_id = get_today_active_window(chat_id)
     store = get_chat_store(chat_id)
@@ -765,8 +778,8 @@ def update_or_send_today_window(chat_id):
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
             return
         except Exception as e:
-            # например, сообщение удалено пользователем — удаляем запись active и создаём новое
-            log_error(f"edit_message_text failed for chat {chat_id}, id {active_id}: {e}")
+            log_error(f"[update_or_send_today_window] edit_message_text failed for chat {chat_id}, id {active_id}: {e}")
+            print(f"[update_or_send_today_window] Причина создания нового окна: редактирование не удалось, сообщение могло быть удалено пользователем")
             # удаляем сломанный active id
             try:
                 if get_today_key() in data.get("active_messages", {}):
@@ -775,12 +788,13 @@ def update_or_send_today_window(chat_id):
             except:
                 pass
 
-    # если нет active_id — отправляем новое и запоминаем
+    # если нет active_id или редактирование не удалось — отправляем новое
     try:
-        sent = bot.send_message(chat_id, text, reply_markup=kb)
+        sent = bot.send_message(chat_id, f"{text}\n\n🆔 Уникальный ID окна: {time.time()}", reply_markup=kb)
         set_today_active_window(chat_id, sent.message_id)
+        print(f"[update_or_send_today_window] Создано новое окно для чата {chat_id}, message_id={sent.message_id}")
     except Exception as e:
-        log_error(f"Не удалось создать окно дня для {chat_id}: {e}")
+        log_error(f"[update_or_send_today_window] Не удалось создать окно дня для {chat_id}: {e}")
 
 # -----------------------------
 # ОТСЕК 12 — Удаление устаревших active_messages (опционально)
