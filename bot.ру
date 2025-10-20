@@ -308,10 +308,11 @@ def build_edit_list_keyboard(chat_id):
     return kb
 
 # -----------------------------
-# ОТСЕК 8 — Команды (start, help, управление пересылкой)
+# ОТСЕК 8 — Команды (исправлено: теперь редактирует текущее окно)
 # -----------------------------
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
+    chat_id = msg.chat.id
     text = (
         "👋 Добро пожаловать в Финансовый бот «ФО»\n\n"
         "📋 Команды:\n"
@@ -323,13 +324,39 @@ def cmd_start(msg):
         "/reset — обнулить данные (владелец)\n\n"
         "📤 Пересылка:\n"
         "/addforward <chat_id> — добавить цель пересылки\n"
-        "/removeforward <chat_id> — удалить цель пересылки\n        /listforwards — список целей\n\n"
+        "/removeforward <chat_id> — удалить цель пересылки\n"
+        "/listforwards — список целей\n\n"
         "💡 Для записи: отправьте строку с суммой, например:\n"
         "+1000 зарплата\n"
         "-200 хлеб\n\n"
-        "📌 Все операции будут отображаться в одном активном окне (сообщении) этого чата."
+        "📌 Все операции отображаются в одном активном окне этого чата."
     )
-    bot.send_message(msg.chat.id, f"💬 Версия: {VERSION}\n\n" + text, reply_markup=build_main_keyboard(msg.chat.id))
+
+    # Проверяем, есть ли уже активное окно
+    today_key = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    msg_info = data["active_messages"].get(today_key)
+
+    if msg_info and msg_info.get("chat_id") == chat_id:
+        # Если окно уже существует — просто редактируем его
+        try:
+            bot.edit_message_text(
+                f"💬 Версия: {VERSION}\n\n{text}",
+                chat_id=chat_id,
+                message_id=msg_info["message_id"],
+                reply_markup=build_main_keyboard(chat_id),
+            )
+            return
+        except Exception as e:
+            print(f"[Редактирование /start]: {e}")
+
+    # Если окна нет — создаём новое и запоминаем
+    sent = bot.send_message(
+        chat_id,
+        f"💬 Версия: {VERSION}\n\n{text}",
+        reply_markup=build_main_keyboard(chat_id),
+    )
+    data["active_messages"][today_key] = {"chat_id": chat_id, "message_id": sent.message_id}
+    save_data(data)
 
 @bot.message_handler(commands=["myid"])
 def cmd_myid(msg):
@@ -342,19 +369,20 @@ def cmd_chatid(msg):
 @bot.message_handler(commands=["balance"])
 def cmd_balance(msg):
     store = get_chat_store(msg.chat.id)
-    bot.reply_to(msg, f"💰 Баланс этого чата: {store.get('balance', 0)} ARS", reply_markup=build_main_keyboard(msg.chat.id))
+    text = f"💰 Баланс этого чата: {store.get('balance', 0)} ARS"
+    update_or_edit_window(msg.chat.id, text)
 
 @bot.message_handler(commands=["report"])
 def cmd_report(msg):
     recs = get_daily_records(msg.chat.id)
     if not recs:
-        bot.send_message(msg.chat.id, "Пока нет операций за сегодня.", reply_markup=build_main_keyboard(msg.chat.id))
+        update_or_edit_window(msg.chat.id, "Пока нет операций за сегодня.")
         return
     lines = ["📋 Последние операции сегодня:"]
     for r in recs[-50:]:
         sign = "+" if r["amount"] > 0 else ""
         lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
-    bot.send_message(msg.chat.id, "\n".join(lines), reply_markup=build_main_keyboard(msg.chat.id))
+    update_or_edit_window(msg.chat.id, "\n".join(lines))
 
 @bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
@@ -363,7 +391,6 @@ def cmd_reset(msg):
         return
     global data
     data = default_data()
-    # re-add owner to forward targets
     try:
         if OWNER_ID:
             data["forward_targets"].append(int(OWNER_ID))
@@ -371,10 +398,12 @@ def cmd_reset(msg):
         pass
     save_data(data)
     export_to_csv(data)
-    bot.send_message(msg.chat.id, "✅ Все данные сброшены.", reply_markup=build_main_keyboard(msg.chat.id))
+    update_or_edit_window(msg.chat.id, "✅ Все данные сброшены.")
     log_info("ДАННЫЕ ОБНУЛЕНЫ владельцем")
 
-# Forward commands (owner only)
+# -----------------------------
+# Управление пересылкой (без изменений)
+# -----------------------------
 @bot.message_handler(commands=["addforward"])
 def cmd_addforward(msg):
     if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
@@ -418,10 +447,35 @@ def cmd_removeforward(msg):
 @bot.message_handler(commands=["listforwards"])
 def cmd_listforwards(msg):
     if not data["forward_targets"]:
-        bot.reply_to(msg, "Список пересылки пуст.", reply_markup=build_main_keyboard(msg.chat.id))
+        update_or_edit_window(msg.chat.id, "Список пересылки пуст.")
         return
     text = "📨 Цели пересылки:\n" + "\n".join(map(str, data["forward_targets"]))
-    bot.reply_to(msg, text, reply_markup=build_main_keyboard(msg.chat.id))
+    update_or_edit_window(msg.chat.id, text)
+
+# -----------------------------
+# Вспомогательная функция для редактирования окна
+# -----------------------------
+def update_or_edit_window(chat_id, text):
+    """Редактирует активное окно, не создавая новое"""
+    today_key = datetime.now(tz=TZ).strftime("%Y-%m-%d")
+    msg_info = data["active_messages"].get(today_key)
+    if not msg_info or msg_info.get("chat_id") != chat_id:
+        # если нет активного — создаём новое и запоминаем
+        sent = bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
+        data["active_messages"][today_key] = {"chat_id": chat_id, "message_id": sent.message_id}
+        save_data(data)
+        return
+
+    # если есть — редактируем
+    try:
+        bot.edit_message_text(
+            text,
+            chat_id=chat_id,
+            message_id=msg_info["message_id"],
+            reply_markup=build_main_keyboard(chat_id)
+        )
+    except Exception as e:
+        print(f"[update_or_edit_window]: {e}")
 
 # -----------------------------
 # ОТСЕК 9 — Обработка inline callback'ов
