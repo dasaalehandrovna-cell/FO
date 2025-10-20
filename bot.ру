@@ -270,9 +270,9 @@ def extract_first_number(s):
     return amt, token.strip()
 
 # -----------------------------
-# ОТСЕК 7 — Клавиатуры и кнопки (сохраняем вид старого бота)
+# ОТСЕК 7 — Клавиатуры и кнопки (обновлено с подтверждением сброса)
 # -----------------------------
-def build_main_keyboard(chat_id=None):
+def build_main_keyboard(chat_id=None, confirm_reset=False):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.add(
         types.InlineKeyboardButton("💰 Баланс", callback_data="btn_balance"),
@@ -280,8 +280,16 @@ def build_main_keyboard(chat_id=None):
     )
     kb.add(
         types.InlineKeyboardButton("✏️ Редактировать", callback_data="btn_edit"),
-        types.InlineKeyboardButton("⚙️ Сброс", callback_data="btn_reset"),
     )
+    if confirm_reset:
+        kb.add(
+            types.InlineKeyboardButton("✅ Подтвердить сброс", callback_data="confirm_reset"),
+            types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_reset")
+        )
+    else:
+        kb.add(
+            types.InlineKeyboardButton("⚙️ Сброс", callback_data="btn_reset"),
+        )
     kb.add(
         types.InlineKeyboardButton("🚀 Старт", callback_data="btn_start"),
         types.InlineKeyboardButton("📘 О коде", callback_data="btn_cod"),
@@ -293,24 +301,7 @@ def build_main_keyboard(chat_id=None):
     kb.add(types.InlineKeyboardButton(balance_text or "💰 0 ARS", callback_data="noop"))
     return kb
 
-def build_edit_list_keyboard(chat_id):
-    store = get_chat_store(chat_id)
-    kb = types.InlineKeyboardMarkup()
-    records = store.get("records", [])[-20:]
-    if not records:
-        kb.add(types.InlineKeyboardButton("Нет записей", callback_data="noop"))
-        kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="btn_start"))
-        return kb
-    for r in records:
-        sign = "+" if r["amount"] > 0 else ""
-        label = f"{r['short_id']}: {sign}{r['amount']} ARS {r.get('note','')}"
-        kb.row(
-            types.InlineKeyboardButton(label, callback_data=f"noop_row:{r['id']}"),
-            types.InlineKeyboardButton("✏", callback_data=f"edit_select:{r['id']}"),
-            types.InlineKeyboardButton("🗑", callback_data=f"delete_record:{r['id']}")
-        )
-    kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="btn_start"))
-    return kb
+
 
 # -----------------------------
 # ОТСЕК 8 — Команды (исправлено: теперь редактирует текущее окно с логами)
@@ -496,7 +487,7 @@ def update_or_edit_window(chat_id, text):
         print(f"[update_or_edit_window]: {e}")
 
 # -----------------------------
-# ОТСЕК 9 — Обработка inline callback'ов
+# ОТСЕК 9 — Обработка inline callback'ов с подтверждением сброса
 # -----------------------------
 @bot.callback_query_handler(func=lambda c: True)
 def handle_callback(call):
@@ -505,11 +496,16 @@ def handle_callback(call):
         cid = call.message.chat.id
         mid = call.message.message_id
 
+        # Проверка прав
+        if str(call.from_user.id) != str(OWNER_ID):
+            if data_cd in ("btn_reset", "confirm_reset", "cancel_reset"):
+                bot.answer_callback_query(call.id, "Только владелец может выполнять это действие.")
+                return
+
         # Баланс
         if data_cd == "btn_balance":
             store = get_chat_store(cid)
             text = f"💰 Текущий баланс этого чата: {store.get('balance', 0)} ARS"
-            # редактируем активное окно (если есть), иначе обычный ответ
             active_id = get_today_active_window(cid)
             if active_id:
                 try:
@@ -541,11 +537,19 @@ def handle_callback(call):
                 bot.send_message(cid, text, reply_markup=build_main_keyboard(cid))
             bot.answer_callback_query(call.id)
 
-        # Сброс
+        # Сброс — сначала подтверждение
         elif data_cd == "btn_reset":
-            if str(call.from_user.id) != str(OWNER_ID):
-                bot.answer_callback_query(call.id, text="Только владелец может сбрасывать данные.")
-                return
+            kb = build_main_keyboard(cid, confirm_reset=True)
+            text = "⚠️ Вы точно хотите сбросить все данные чата?"
+            try:
+                bot.edit_message_text(text, cid, mid, reply_markup=kb)
+            except:
+                bot.send_message(cid, text, reply_markup=kb)
+            bot.answer_callback_query(call.id)
+
+        # Подтверждение сброса
+        elif data_cd == "confirm_reset":
+            # очищаем данные чата
             chat_store = data["chats"].get(str(cid))
             if chat_store:
                 chat_store["records"] = []
@@ -554,6 +558,15 @@ def handle_callback(call):
                 chat_store["next_id"] = 1
             save_data(data)
             text = "✅ Все данные этого чата сброшены."
+            try:
+                bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
+            except:
+                bot.send_message(cid, text, reply_markup=build_main_keyboard(cid))
+            bot.answer_callback_query(call.id)
+
+        # Отмена сброса
+        elif data_cd == "cancel_reset":
+            text = "❌ Сброс отменён."
             try:
                 bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
             except:
@@ -597,51 +610,18 @@ def handle_callback(call):
                 bot.send_message(cid, info_text, reply_markup=build_main_keyboard(cid))
             bot.answer_callback_query(call.id)
 
-        # Выбрать запись (редактирование) — переходим в state
-        elif data_cd.startswith("edit_select:"):
-            rid = int(data_cd.split(":")[1])
-            chat_state = data.setdefault("tracked_messages", {})
-            chat_key = str(cid)
-            user_states = chat_state.setdefault(chat_key, {})
-            user_states[str(call.from_user.id)] = {
-                "action": "edit_wait_value",
-                "rid": rid,
-                "msg_id": mid
-            }
-            save_data(data)
-            text = f"Введите новое значение для R{rid} (например: +500 продажа)"
-            try:
-                bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
-            except:
-                bot.send_message(cid, text, reply_markup=build_main_keyboard(cid))
-            bot.answer_callback_query(call.id)
-
-        # Удаление записи
-        elif data_cd.startswith("delete_record:"):
-            rid = int(data_cd.split(":")[1])
-            ok, rec = delete_record_in_chat(cid, rid)
-            if ok:
-                text = f"✅ Запись R{rid} удалена.\n💰 Баланс обновлён: {get_chat_store(cid).get('balance', 0)} ARS"
-            else:
-                text = "⚠️ Запись не найдена."
-            try:
-                bot.edit_message_text(text, cid, mid, reply_markup=build_main_keyboard(cid))
-            except:
-                bot.send_message(cid, text, reply_markup=build_main_keyboard(cid))
-            bot.answer_callback_query(call.id)
-
         # Назад / noop
         elif data_cd in ("btn_back", "noop"):
             try:
                 bot.edit_message_reply_markup(cid, mid, reply_markup=build_main_keyboard(cid))
             except:
                 bot.answer_callback_query(call.id)
+
         else:
             bot.answer_callback_query(call.id)
 
     except Exception as e:
         log_error(f"Ошибка обработки callback: {e}")
-
 # -----------------------------
 # ОТСЕК 10 — Обработка входящих сообщений (одно окно, без дублирования)
 # Исправленная версия
