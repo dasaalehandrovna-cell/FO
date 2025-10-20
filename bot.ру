@@ -644,12 +644,12 @@ def handle_callback(call):
 
 # -----------------------------
 # ОТСЕК 10 — Обработка входящих сообщений (одно окно, без дублирования)
+# Исправленная версия
 # -----------------------------
 @bot.message_handler(func=lambda m: True, content_types=[
     "text", "photo", "document", "voice", "video", "audio", "sticker"
 ])
 def handle_message(msg):
-    # игнорируем ботов и системные сообщения
     if not getattr(msg, "from_user", None) or msg.from_user.is_bot:
         return
 
@@ -662,7 +662,6 @@ def handle_message(msg):
     state = user_states.get(str(user_id))
     if state and state.get("action") == "edit_wait_value":
         rid = state.get("rid")
-        target_msg_id = get_today_active_window(chat_id)
         lines = msg.text.splitlines() if msg.text else []
         if not lines:
             bot.send_message(chat_id, "Введите строку с числом, например: +500 продажа.", reply_markup=build_main_keyboard(chat_id))
@@ -676,7 +675,6 @@ def handle_message(msg):
         note = first_line[m.end():].strip() if m else ""
         final_amt = amt if token.lstrip().startswith("+") else -abs(amt)
         ok, updated = update_record_in_chat(chat_id, rid, final_amt, note)
-        # clear state
         user_states.pop(str(user_id), None)
         save_data(data)
         if ok:
@@ -745,15 +743,15 @@ def handle_message(msg):
 
 # -----------------------------
 # ОТСЕК 11 — обновление/создание окна (ядро одноокнового режима)
+# Исправленная версия: дубликаты окна не создаются
 # -----------------------------
 def update_or_send_today_window(chat_id):
-    """Редактирует существующее окно дня, не создавая дубликатов"""
+    """Редактирует существующее окно дня, не создавая дубликаты."""
     today_key = get_today_key()
-    active_id = get_today_active_window(chat_id)
     store = get_chat_store(chat_id)
     day_records = store.get("daily_records", {}).get(today_key, [])
 
-    # формируем текст окна
+    # Формируем текст окна
     if not day_records:
         text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
     else:
@@ -765,22 +763,19 @@ def update_or_send_today_window(chat_id):
         text = "\n".join(lines)
 
     kb = build_main_keyboard(chat_id)
+    today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
+    active_id = today_msgs.get(str(chat_id))
 
-    # если есть активное окно — редактируем его
     if active_id:
+        # Попытка редактировать существующее окно
         try:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-            return
         except Exception as e:
-            log_error(f"[update_or_send_today_window] редактирование не удалось для chat {chat_id}, id {active_id}: {e}")
-            # удаляем старый active_id, чтобы создать новое
-            try:
-                data["active_messages"].get(today_key, {}).pop(str(chat_id), None)
-                save_data(data)
-            except:
-                pass
+            log_error(f"[update_or_send_today_window] редактирование не удалось: {e}")
+            # Если редактирование не удалось, НЕ создаём новое окно, просто логируем
+        return
 
-    # если нет активного окна или редактирование не удалось — создаём новое
+    # Если активного окна нет, создаём одно
     try:
         sent = bot.send_message(chat_id, text, reply_markup=kb)
         set_today_active_window(chat_id, sent.message_id)
