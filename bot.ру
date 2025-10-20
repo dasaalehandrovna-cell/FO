@@ -270,54 +270,36 @@ def extract_first_number(s):
     return amt, token.strip()
 
 # -----------------------------
-# ОТСЕК 7 — Клавиатуры и кнопки (компактная версия)
+# ОТСЕК 7 — Компактная клавиатура (с подтверждением сброса)
 # -----------------------------
-def build_main_keyboard(chat_id=None):
-    kb = types.InlineKeyboardMarkup(row_width=3)  # три кнопки в ряд
-
-    # первый ряд
-    kb.add(
-        types.InlineKeyboardButton("💰 Баланс", callback_data="btn_balance"),
-        types.InlineKeyboardButton("📊 Отчёт", callback_data="btn_report"),
-        types.InlineKeyboardButton("✏️ Редактировать", callback_data="btn_edit")
+def build_main_keyboard(chat_id=None, confirm_reset=False):
+    kb = types.InlineKeyboardMarkup(row_width=3)
+    # Основные действия
+    kb.row(
+        types.InlineKeyboardButton("💰баланс", callback_data="btn_balance"),
+        types.InlineKeyboardButton("📊отчёт", callback_data="btn_report"),
+        types.InlineKeyboardButton("✏️изменить", callback_data="btn_edit")
     )
-
-    # второй ряд
-    kb.add(
-        types.InlineKeyboardButton("⚙️ Сброс", callback_data="btn_reset"),
-        types.InlineKeyboardButton("🚀 Старт", callback_data="btn_start"),
-        types.InlineKeyboardButton("📘 О коде", callback_data="btn_cod")
+    # Сброс с подтверждением
+    if confirm_reset:
+        kb.row(
+            types.InlineKeyboardButton("✅ Да", callback_data="confirm_reset"),
+            types.InlineKeyboardButton("❌ Нет", callback_data="cancel_reset")
+        )
+    else:
+        kb.row(types.InlineKeyboardButton("⚙️обнулить данные", callback_data="btn_reset"))
+    # Доп. кнопки
+    kb.row(
+        types.InlineKeyboardButton("🚀", callback_data="btn_start"),
+        types.InlineKeyboardButton("ℹ️", callback_data="btn_cod"),
     )
-
-    # третий ряд — общий баланс (одна большая кнопка)
+    # Баланс
     balance_text = ""
     if chat_id is not None:
         store = get_chat_store(chat_id)
         balance_text = f"💰 {store.get('balance', 0)} ARS"
     kb.add(types.InlineKeyboardButton(balance_text or "💰 0 ARS", callback_data="noop"))
-
     return kb
-
-
-def build_edit_list_keyboard(chat_id):
-    store = get_chat_store(chat_id)
-    kb = types.InlineKeyboardMarkup()
-    records = store.get("records", [])[-20:]
-    if not records:
-        kb.add(types.InlineKeyboardButton("Нет записей", callback_data="noop"))
-        kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="btn_start"))
-        return kb
-    for r in records:
-        sign = "+" if r["amount"] > 0 else ""
-        label = f"{r['short_id']}: {sign}{r['amount']} ARS {r.get('note','')}"
-        kb.row(
-            types.InlineKeyboardButton(label, callback_data=f"noop_row:{r['id']}"),
-            types.InlineKeyboardButton("✏", callback_data=f"edit_select:{r['id']}"),
-            types.InlineKeyboardButton("🗑", callback_data=f"delete_record:{r['id']}")
-        )
-    kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="btn_start"))
-    return kbх
-
 # -----------------------------
 # ОТСЕК 8 — Команды (исправлено: теперь редактирует текущее окно с логами)
 # -----------------------------
