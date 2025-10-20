@@ -316,7 +316,7 @@ def build_edit_list_keyboard(chat_id):
             types.InlineKeyboardButton("🗑", callback_data=f"delete_record:{r['id']}")
         )
     kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="btn_start"))
-    return kb
+    return kbх
 
 # -----------------------------
 # ОТСЕК 8 — Команды (исправлено: теперь редактирует текущее окно с логами)
