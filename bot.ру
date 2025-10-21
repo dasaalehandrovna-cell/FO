@@ -1,5 +1,5 @@
 # ============================================
-# Финансовый бот — финальная версия с обновлениями
+# Финансовый бот — финальная версия с автоучётом
 # ============================================
 
 # -----------------------------
@@ -20,7 +20,7 @@ DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.6.1.8"
+VERSION = "9.6.1.7"
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
@@ -97,6 +97,9 @@ def set_today_active_window(chat_id,message_id):
 # -----------------------------
 # 5. Работа с записями
 # -----------------------------
+def format_amount(amount):
+    return f"+{amount:,}" if amount>0 else f"{amount:,}"
+
 def add_record_to_chat(chat_id,amount,note,owner):
     store=get_chat_store(chat_id)
     rid=data.get("next_id",1)
@@ -105,12 +108,11 @@ def add_record_to_chat(chat_id,amount,note,owner):
     store.setdefault("records",[]).append(rec)
     day=get_today_key()
     store.setdefault("daily_records",{}).setdefault(day,[]).append(rec)
-    store["balance"]=store.get("balance",0)+amount
-    data["overall_balance"]=data.get("overall_balance",0)+amount
+    store["balance"]=sum([r["amount"] for r in store.get("records",[])])
+    data["overall_balance"]=sum([r["amount"] for r in data.get("records",[])])
     data["next_id"]=rid+1
     save_data(data)
-    try: export_to_csv(data)
-    except: pass
+    export_to_csv(data)
     return rec
 
 def update_record_in_chat(chat_id,rid,new_amount,new_note):
@@ -161,8 +163,7 @@ def export_to_csv(d):
             for cid,cdata in d.get("chats",{}).items():
                 for day_key,records in cdata.get("daily_records",{}).items():
                     for r in records:
-                        writer.writerow([cid,r.get("id"),r.get("short_id"),r.get("timestamp"),
-                                         r.get("amount"),r.get("note"),r.get("owner"),day_key])
+                        writer.writerow([cid,r.get("id"),r.get("short_id"),r.get("timestamp"),format_amount(r.get("amount")),r.get("note"),r.get("owner"),day_key])
     except Exception as e: log_error(f"Ошибка экспорта CSV: {e}")
 
 # -----------------------------
@@ -193,7 +194,7 @@ def build_main_keyboard(chat_id=None, confirm_reset=False):
     balance_text = ""
     if chat_id is not None:
         store = get_chat_store(chat_id)
-        balance_text = f"💰 {store.get('balance',0)} ARS"
+        balance_text = f"💰 {format_amount(store.get('balance',0))} ARS"
     kb.add(types.InlineKeyboardButton(balance_text or "💰 0 ARS", callback_data="noop"))
     return kb
 
@@ -206,13 +207,13 @@ def update_or_send_today_window(chat_id, extra_text=None):
     day_records = store.get("daily_records", {}).get(today_key, [])
 
     if not day_records:
-        text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance',0)} ARS"
+        text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {format_amount(store.get('balance',0))} ARS"
     else:
         lines = [f"📅 {today_key}", "📋 Операции:"]
         for r in day_records[-50:]:
-            sign = "+" if r["amount"] > 0 else ""
-            lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
-        lines.append(f"\n💰 Баланс: {store.get('balance',0)} ARS")
+            sign = "+" if r["amount"]>0 else ""
+            lines.append(f"{r['short_id']}: {sign}{r['amount']:,} — {r.get('note','')}")
+        lines.append(f"\n💰 Баланс: {format_amount(store.get('balance',0))} ARS")
         text = "\n".join(lines)
 
     if extra_text:
@@ -258,21 +259,21 @@ def handle_message(msg):
         update_or_send_today_window(chat_id)
         return
 
-    # 8.2 Сообщение от других пользователей в личку владельца
+    # 8.2 Сообщения от других пользователей → личка владельца
     if chat_id != OWNER_ID and OWNER_ID:
         try:
             bot.send_message(OWNER_ID, f"Сообщение от {msg.from_user.first_name} ({chat_id}):\n{text}")
         except:
             log_error(f"Не удалось переслать сообщение в личку владельца: {chat_id}")
 
-    # 8.3 Авто-добавление записей из всех строк
+    # 8.3 Проверка редактирования
     wait_action = store.get("edit_wait")
     if wait_action is None:
+        # 8.4 Авто-добавление записей
         lines = text.splitlines()
         any_added = False
         for line in lines:
-            clean_line = re.sub(r"[ \.,’‘\"]", "", line)
-            if not clean_line: continue
+            clean_line = re.sub(r"[ .,‘’]", "", line)
             match = re.match(r"([+-]?\d+)", clean_line)
             if match:
                 try:
@@ -288,7 +289,8 @@ def handle_message(msg):
             update_or_send_today_window(chat_id)
         return
 
-    # 8.4 Редактирование
+    # Остальные действия: редактирование, удаление, пересылка
+    # 8.5 Редактирование
     if wait_action == "change_id":
         try:
             rid = int(text.strip())
@@ -299,6 +301,7 @@ def handle_message(msg):
             update_or_send_today_window(chat_id, extra_text="❌ Неверный ID. Попробуйте снова.")
         return
 
+    # 8.6 Изменение значения
     if wait_action == "change_value":
         rid = store.get("edit_target")
         if not rid: store["edit_wait"] = None; return
@@ -317,7 +320,7 @@ def handle_message(msg):
         store["edit_target"] = None
         return
 
-    # 8.5 Удаление
+    # 8.7 Удаление записи
     if wait_action == "delete_id":
         try:
             rid = int(text.strip())
@@ -325,36 +328,8 @@ def handle_message(msg):
             if success:
                 update_or_send_today_window(chat_id, extra_text=f"✅ Запись {rid} удалена")
             else:
-                                update_or_send_today_window(chat_id, extra_text=f"❌ Запись {rid} не найдена")
-        except:
-            update_or_send_today_window(chat_id, extra_text="❌ Некорректный ID. Попробуйте снова.")
-        store["edit_wait"] = None
-        return
-
-    # 8.6 Установка target для пересылки
-    if wait_action == "set_forward_target":
-        try:
-            target_chat_id = int(text.strip())
-            store["forward_target"] = target_chat_id
-            store["edit_wait"] = None
-            update_or_send_today_window(chat_id, extra_text=f"✅ Сообщения из вашей лички будут пересылаться в чат {target_chat_id}")
-        except:
-            update_or_send_today_window(chat_id, extra_text="❌ Неверный ID чата. Попробуйте снова.")
-        return
-
-    # 8.7 Пересылка текста
-    if wait_action == "forward_msg_text":
-        target_chat_id = store.get("forward_target")
-        if not target_chat_id: store["edit_wait"] = None; return
-        try:
-            bot.send_message(target_chat_id, text)
-            update_or_send_today_window(chat_id, extra_text=f"✅ Сообщение успешно переслано в чат {target_chat_id}")
-        except:
-            update_or_send_today_window(chat_id, extra_text="❌ Не удалось переслать сообщение")
-        store["edit_wait"] = None
-        store["forward_target"] = None
-        return
-
+                update_or_send_today_window(chat_id, extra_text=f"❌ Запись {rid} не найдена")
+        except
 # -----------------------------
 # 9 — Команда /start
 # -----------------------------
