@@ -1,12 +1,11 @@
 # ============================================
-# Финансовый бот — версия 9.6.1.7
-# Полная версия (гибрид 9.6.1.6 + одноокновый режим)
-# Интерфейс полностью на русском, команды латиницей
+# Финансовый бот (версия 9.6.1.8)
+# Минимальные изменения, чтобы:
+#  - все кнопки работали в одном окне,
+#  - редактирование было исправлено,
+#  - при запуске приходили уведомления владельцу.
 # ============================================
 
-# -----------------------------
-# ОТСЕК 1 — Импорты и настройки
-# -----------------------------
 import os
 import json
 import csv
@@ -18,31 +17,28 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import telebot
-from flask import Flask, request
 from telebot import types
+from flask import Flask, request
 
-# --------------------------------------------
-# Настройки окружения и константы
-# --------------------------------------------
+# -----------------------------
+# Конфигурация
+# -----------------------------
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_ID")
 APP_URL = os.getenv("APP_URL", "https://fo-1.onrender.com")
-TZ = ZoneInfo("America/Argentina/Catamarca")
-DATA_FILE = "data.json"
-CSV_FILE = "data.csv"
-LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.6.1.7"
+TZ = ZoneInfo("America/Argentina/Catamarca")
 
 if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен!")
+    raise ValueError("Не установлен BOT_TOKEN")
 
 bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
 
-# -----------------------------
-# ОТСЕК 2 — Логирование
-# -----------------------------
+DATA_FILE = "data.json"
+CSV_FILE = "data.csv"
+LOG_FILE = "log.txt"
+
 logging.basicConfig(
     level=logging.INFO,
     format="[{asctime}] {levelname}: {message}",
@@ -52,337 +48,80 @@ logging.basicConfig(
         logging.StreamHandler()
     ]
 )
-
-def log_info(msg):
-    logging.info(msg)
-
-def log_error(msg):
-    logging.error(msg)
-
-log_info(f"Старт приложения. Версия {VERSION}")
+logger = logging.getLogger(__name__)
 
 # -----------------------------
-# ОТСЕК 3 — Структура данных и IO
+# Работа с файлами
 # -----------------------------
-def default_data():
-    return {
-        "overall_balance": 0,
-        "records": [],
-        "chats": {},
-        "active_messages": {},
-        "processed_messages": [],
-        "forward_targets": [],
-        "tracked_messages": {},
-        "next_id": 1
-    }
-
 def load_data():
     if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                d = json.load(f)
-        except Exception as e:
-            log_error(f"Ошибка загрузки data.json: {e}")
-            d = default_data()
-    else:
-        d = default_data()
-    base = default_data()
-    for k, v in base.items():
-        if k not in d:
-            d[k] = v
-    return d
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {
+        "chats": {},
+        "overall_balance": 0,
+        "next_id": 1,
+        "active_messages": {},
+        "tracked_messages": {},
+        "records": []
+    }
 
-def save_data(d):
-    try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            json.dump(d, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log_error(f"Ошибка сохранения data.json: {e}")
+def save_data():
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 data = load_data()
 
-if OWNER_ID:
-    try:
-        oi = int(OWNER_ID)
-        if oi not in data.get("forward_targets", []):
-            data["forward_targets"].append(oi)
-            save_data(data)
-    except Exception:
-        pass
-
 # -----------------------------
-# ОТСЕК 4 — Вспомогательные функции по чату/дате
+# Вспомогательные функции
 # -----------------------------
-def get_today_key():
+def get_today():
     return datetime.now(TZ).strftime("%Y-%m-%d")
 
-def get_chat_store(chat_id):
+def get_chat(chat_id):
     cid = str(chat_id)
     if cid not in data["chats"]:
         data["chats"][cid] = {
             "balance": 0,
             "records": [],
-            "next_id": 1,
-            "daily_records": {},
-            "active_windows": {}
+            "daily_records": {}
         }
-        save_data(data)
+        save_data()
     return data["chats"][cid]
 
-def get_today_active_window(chat_id):
-    today = get_today_key()
-    day_map = data["active_messages"].get(today, {})
-    return day_map.get(str(chat_id))
+def set_active_window(chat_id, msg_id):
+    today = get_today()
+    data["active_messages"].setdefault(today, {})[str(chat_id)] = msg_id
+    save_data()
 
-def set_today_active_window(chat_id, message_id):
-    today = get_today_key()
-    if "active_messages" not in data:
-        data["active_messages"] = {}
-    if today not in data["active_messages"]:
-        data["active_messages"][today] = {}
-    data["active_messages"][today][str(chat_id)] = message_id
-    save_data(data)
+def get_active_window(chat_id):
+    today = get_today()
+    return data.get("active_messages", {}).get(today, {}).get(str(chat_id))
 
 # -----------------------------
-# ОТСЕК 5 — Работа с записями
+# Клавиатуры
 # -----------------------------
-def add_record_to_chat(chat_id, amount, note, owner):
-    store = get_chat_store(chat_id)
-    rid = data.get("next_id", 1)
-    rec = {
-        "id": rid,
-        "short_id": f"R{rid}",
-        "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
-        "amount": amount,
-        "note": note,
-        "owner": owner
-    }
-    data.setdefault("records", []).append(rec)
-    store.setdefault("records", []).append(rec)
-    day = get_today_key()
-    store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
-    store["balance"] = store.get("balance", 0) + amount
-    data["overall_balance"] = data.get("overall_balance", 0) + amount
-    data["next_id"] = rid + 1
-    save_data(data)
-    try:
-        export_to_csv(data)
-    except Exception:
-        pass
-    return rec
-
-def update_record_in_chat(chat_id, rid, new_amount, new_note):
-    store = get_chat_store(chat_id)
-    found = None
-    for r in store.get("records", []):
-        if r["id"] == rid:
-            diff = new_amount - r["amount"]
-            r["amount"] = new_amount
-            r["note"] = new_note
-            found = r
-            break
-    if found:
-        for day_recs in store.get("daily_records", {}).values():
-            for r in day_recs:
-                if r["id"] == rid:
-                    r.update(found)
-        store["balance"] = sum([x["amount"] for x in store.get("records", [])])
-        data["overall_balance"] = sum([x["amount"] for x in data.get("records", [])])
-        save_data(data)
-        export_to_csv(data)
-        return True, found
-    return False, None
-
-def delete_record_in_chat(chat_id, rid):
-    store = get_chat_store(chat_id)
-    removed = None
-    for r in list(store.get("records", [])):
-        if r["id"] == rid or str(r["id"]) == str(rid) or r.get("short_id") == f"R{rid}":
-            removed = r
-            store["records"].remove(r)
-            break
-    if removed:
-        for day_key, recs in store.get("daily_records", {}).items():
-            store["daily_records"][day_key] = [x for x in recs if x["id"] != rid]
-        store["balance"] = sum([x["amount"] for x in store.get("records", [])])
-        data["records"] = [x for x in data.get("records", []) if x["id"] != rid]
-        data["overall_balance"] = sum([x["amount"] for x in data.get("records", [])])
-        save_data(data)
-        export_to_csv(data)
-        return True, removed
-    return False, None
-
-def get_daily_records(chat_id, day_key=None):
-    store = get_chat_store(chat_id)
-    if not day_key:
-        day_key = get_today_key()
-    return store.get("daily_records", {}).get(day_key, [])
-
-def export_to_csv(d):
-    try:
-        with open(CSV_FILE, "w", newline='', encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["chat_id","ID","short_id","timestamp","amount","note","owner","day_key"])
-            for cid, cdata in d.get("chats", {}).items():
-                for day_key, records in cdata.get("daily_records", {}).items():
-                    for r in records:
-                        writer.writerow([cid, r.get("id"), r.get("short_id"), r.get("timestamp"),
-                                         r.get("amount"), r.get("note"), r.get("owner"), day_key])
-    except Exception as e:
-        log_error(f"Ошибка экспорта CSV: {e}")
-
-# -----------------------------
-# ОТСЕК 6 — Регулярные вспом. (парсинг чисел)
-# -----------------------------
-num_re = re.compile(r'([+-]?\s*\d+)')
-
-def extract_first_number(s):
-    if not s:
-        return None, None
-    m = num_re.search(s)
-    if not m:
-        return None, None
-    token = m.group(1)
-    token_clean = token.replace(" ", "")
-    try:
-        amt = int(token_clean)
-    except:
-        return None, None
-    return amt, token.strip()
-
-# -----------------------------
-# ОТСЕК 7 — Компактная клавиатура
-# -----------------------------
-def build_main_keyboard(chat_id=None, confirm_reset=False):
+def build_main_keyboard(chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
-        types.InlineKeyboardButton("💰баланс", callback_data="btn_balance"),
-        types.InlineKeyboardButton("📊отчёт", callback_data="btn_report"),
-        types.InlineKeyboardButton("✏️изменить", callback_data="btn_edit")
+        types.InlineKeyboardButton("💰 баланс", callback_data="btn_balance"),
+        types.InlineKeyboardButton("📊 отчёт", callback_data="btn_report"),
+        types.InlineKeyboardButton("✏️ изменить", callback_data="btn_edit")
     )
-    if confirm_reset:
-        kb.row(
-            types.InlineKeyboardButton("✅ Да", callback_data="confirm_reset"),
-            types.InlineKeyboardButton("❌ Нет", callback_data="cancel_reset")
-        )
-    else:
-        kb.row(types.InlineKeyboardButton("⚙️обнулить данные", callback_data="btn_reset"))
     kb.row(
-        types.InlineKeyboardButton("🚀", callback_data="btn_start"),
-        types.InlineKeyboardButton("ℹ️", callback_data="btn_cod"),
+        types.InlineKeyboardButton("⚙️ обнулить", callback_data="btn_reset"),
+        types.InlineKeyboardButton("ℹ️", callback_data="btn_info")
     )
-    balance_text = ""
-    if chat_id is not None:
-        store = get_chat_store(chat_id)
-        balance_text = f"💰 {store.get('balance', 0)} ARS"
-    kb.add(types.InlineKeyboardButton(balance_text or "💰 0 ARS", callback_data="noop"))
+    bal = 0
+    if chat_id:
+        bal = get_chat(chat_id)["balance"]
+    kb.add(types.InlineKeyboardButton(f"💰 {bal} ARS", callback_data="noop"))
     return kb
 
 # -----------------------------
-# ОТСЕК 8 — Обновление/создание окна
+# Обновление окна
 # -----------------------------
-def update_or_send_today_window(chat_id):
-    today_key = get_today_key()
-    store = get_chat_store(chat_id)
-    day_records = store.get("daily_records", {}).get(today_key, [])
-
-    if not day_records:
-        text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
-    else:
-        lines = [f"📅 {today_key}", "📋 Операции:"]
-        for r in day_records[-50:]:
-            sign = "+" if r["amount"] > 0 else ""
-            lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
-        lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
-        text = "\n".join(lines)
-
-    kb = build_main_keyboard(chat_id)
-    today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
-    active_id = today_msgs.get(str(chat_id))
-
-    if active_id:
-        try:
-            bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-        except Exception as e:
-            log_error(f"[update_or_send_today_window] редактирование не удалось: {e}")
-        return
-
-    try:
-        sent = bot.send_message(chat_id, text, reply_markup=kb)
-        set_today_active_window(chat_id, sent.message_id)
-        log_info(f"[update_or_send_today_window] Создано новое окно для чата {chat_id}, message_id={sent.message_id}")
-    except Exception as e:
-        log_error(f"[update_or_send_today_window] Не удалось создать окно для chat {chat_id}: {e}")
-
-# -----------------------------
-# ОТСЕК 9 — Callback кнопок
-# -----------------------------
-# ... сюда вставляем обработку кнопок handle_callback из твоего предыдущего кода с исправлениями ...
-# (включая btn_balance, btn_report, btn_edit, btn_reset и т.д.)
-# -----------------------------
-# -----------------------------
-# ОТСЕК 10 — Входящие сообщения
-# -----------------------------
-# ... сюда вставляем handle_message с поддержкой edit_wait_value и авто-редактирования окна ...
-
-# -----------------------------
-# ОТСЕК 13 — Flask webhook и web endpoints
-# -----------------------------
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "OK", 200
-
-@app.route("/", methods=["GET"])
-def index():
-    return f"Финансовый бот «ФО» — версия {VERSION} работает", 200
-
-# -----------------------------
-# ОТСЕК 14 — Webhook установка и запуск
-# -----------------------------
-def set_webhook():
-    url = f"{APP_URL}/{TOKEN}"
-    try:
-        bot.remove_webhook()
-        time.sleep(0.5)
-        bot.set_webhook(url=url)
-        log_info(f"Webhook установлен: {url}")
-    except Exception as e:
-        log_error(f"Не удалось установить webhook: {e}")
-
-# -----------------------------
-# ОТСЕК 15 — Планировщик смены дня
-# -----------------------------
-def schedule_daily_window_creation():
-    def task():
-        last_day = get_today_key()
-        while True:
-            try:
-                time.sleep(60)
-                current_day = get_today_key()
-                if current_day != last_day:
-                    for chat_id_str in list(data.get("chats", {}).keys()):
-                        try:
-                            chat_id = int(chat_id_str)
-                        except:
-                            continue
-                        try:
-                            update_or_send_today_window(chat_id)
-                        except Exception as e:
-                            log_error(f"Ошибка при создании окна нового дня для {chat_id}: {e}")
-                    last_day = current_day
-            except Exception as e:
-                log_error(f"Ошибка в daily loop: {e}")
-                time.sleep(5)
-    thread = threading.Thread(target=task, daemon=True)
-    thread.start()
-
-# -----------------------------
-# ОТСЕК 16 — Запуск
-# -----------------------------
-if __name__ == "__main__":
-    set_webhook()
-    schedule_daily_window_creation()
-    log_info(f"Бот ФО версии {VERSION} запущен")
-    app.run(host="0.0.0.0", port=PORT)
+def update_window(chat_id):
+    today = get_today()
+    chat = get_chat(chat_id)
+    recs =
