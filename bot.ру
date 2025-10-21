@@ -233,65 +233,77 @@ def update_or_send_today_window(chat_id):
         log_error(f"[update_or_send_today_window] Не удалось создать окно для chat {chat_id}: {e}")
 
 # -----------------------------
-# ОТСЕК 8 — Входящие сообщения
+# ОТСЕК 8 — Входящие сообщения (автоматическое добавление)
 # -----------------------------
 @bot.message_handler(func=lambda m: True)
 def handle_message(msg):
-    chat_id=msg.chat.id
-    text=msg.text
-    store=get_chat_store(chat_id)
-    wait_action=store.get("edit_wait")
+    chat_id = msg.chat.id
+    text = msg.text.strip()
+    store = get_chat_store(chat_id)
+    wait_action = store.get("edit_wait")
 
-    if wait_action=="add":
-        parts=text.strip().split(" ",1)
-        if not parts: return
+    # --- Если пользователь редактирует / удаляет ---
+    if wait_action == "change_id":
         try:
-            amount=int(parts[0])
-            note=parts[1] if len(parts)>1 else ""
-        except: return
-        add_record_to_chat(chat_id,amount,note,msg.from_user.id)
-        store["edit_wait"]=None
-        update_or_send_today_window(chat_id)
-        bot.send_message(chat_id,"✅ Запись добавлена",reply_markup=None,disable_notification=True)
-
-    elif wait_action=="change_id":
-        try:
-            rid=int(text.strip())
-            store["edit_wait"]="change_value"
-            store["edit_target"]=rid
-            bot.send_message(chat_id,f"Введите новую сумму и заметку для записи {rid}:")
+            rid = int(text)
+            store["edit_wait"] = "change_value"
+            store["edit_target"] = rid
+            bot.send_message(chat_id, f"Введите новую сумму и заметку для записи {rid}:")
         except:
-            bot.send_message(chat_id,"Неверный ID. Попробуйте снова.")
+            bot.send_message(chat_id, "Неверный ID. Попробуйте снова.")
+        return
 
-    elif wait_action=="change_value":
-        rid=store.get("edit_target")
-        if not rid: store["edit_wait"]=None; return
-        parts=text.strip().split(" ",1)
-        if not parts: return
+    elif wait_action == "change_value":
+        rid = store.get("edit_target")
+        if not rid:
+            store["edit_wait"] = None
+            return
+        parts = text.split(" ", 1)
         try:
-            amount=int(parts[0])
-            note=parts[1] if len(parts)>1 else ""
-        except: return
-        success,_=update_record_in_chat(chat_id,rid,amount,note)
-        if success: bot.send_message(chat_id,f"✅ Запись {rid} изменена",reply_markup=None,disable_notification=True)
-        else: bot.send_message(chat_id,f"❌ Запись {rid} не найдена")
-        store["edit_wait"]=None
-        store["edit_target"]=None
+            amount = int(parts[0])
+            note = parts[1] if len(parts) > 1 else ""
+        except:
+            bot.send_message(chat_id, "Неверный формат. Пример: 120 продукты")
+            return
+        success, _ = update_record_in_chat(chat_id, rid, amount, note)
+        if success:
+            bot.send_message(chat_id, f"✅ Запись {rid} изменена")
+        else:
+            bot.send_message(chat_id, f"❌ Запись {rid} не найдена")
+        store["edit_wait"] = None
+        store["edit_target"] = None
         update_or_send_today_window(chat_id)
+        return
 
-    elif wait_action=="delete_id":
-        try: rid=int(text.strip())
-        except: return
-        success,_=delete_record_in_chat(chat_id,rid)
-        if success: bot.send_message(chat_id,f"✅ Запись {rid} удалена",reply_markup=None,disable_notification=True)
-        else: bot.send_message(chat_id,f"❌ Запись {rid} не найдена")
-        store["edit_wait"]=None
+    elif wait_action == "delete_id":
+        try:
+            rid = int(text)
+        except:
+            bot.send_message(chat_id, "Введите ID для удаления (например: 3)")
+            return
+        success, _ = delete_record_in_chat(chat_id, rid)
+        if success:
+            bot.send_message(chat_id, f"✅ Запись {rid} удалена")
+        else:
+            bot.send_message(chat_id, f"❌ Запись {rid} не найдена")
+        store["edit_wait"] = None
         update_or_send_today_window(chat_id)
+        return
 
-    else:
-        today_key=get_today_key()
-        active_id=data.get("active_messages",{}).get(today_key,{}).get(str(chat_id))
-        if not active_id: update_or_send_today_window(chat_id)
+    # --- Если не редактирование — сразу пробуем записать сумму ---
+    parts = text.split(" ", 1)
+    try:
+        amount = int(parts[0])
+        note = parts[1] if len(parts) > 1 else ""
+        add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+        bot.send_message(chat_id, "✅ Запись добавлена", disable_notification=True)
+        update_or_send_today_window(chat_id)
+    except:
+        # Если сообщение не похоже на сумму — просто обновим окно
+        today_key = get_today_key()
+        active_id = data.get("active_messages", {}).get(today_key, {}).get(str(chat_id))
+        if not active_id:
+            update_or_send_today_window(chat_id)
 
 # -----------------------------
 # ОТСЕК 9 — Flask webhook
