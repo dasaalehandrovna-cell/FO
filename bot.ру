@@ -234,7 +234,7 @@ def update_or_send_today_window(chat_id, extra_text=None):
             log_error(f"[update_or_send_today_window] Не удалось создать окно для chat {chat_id}: {e}")
 
 # -----------------------------
-# ОТСЕК 8 — Обработка сообщений и авто-внесение
+# ОТСЕК 8 — Обработка сообщений
 # -----------------------------
 @bot.message_handler(func=lambda m: True)
 def handle_message(msg):
@@ -242,29 +242,40 @@ def handle_message(msg):
     text = msg.text
     store = get_chat_store(chat_id)
 
-    # --- Пересылка владельцем ---
+    # --- Пересылка сообщений владельцем (ЛС) ---
     if chat_id == OWNER_ID and msg.chat.type == "private":
         target_chat_id = store.get("forward_target")
         if target_chat_id:
-            try: bot.send_message(target_chat_id, text)
-            except: update_or_send_today_window(chat_id, extra_text="❌ Не удалось переслать сообщение")
-            store["forward_target"] = None
-        update_or_send_today_window(chat_id)
-        return
+            try:
+                bot.send_message(target_chat_id, text)
+                store["forward_target"] = None
+                update_or_send_today_window(chat_id, extra_text=f"✅ Сообщение переслано в чат {target_chat_id}")
+                return
+            except:
+                update_or_send_today_window(chat_id, extra_text="❌ Не удалось переслать сообщение")
+                return
+        # если forward_target нет — продолжаем к авто-внесению
 
-    # --- Сообщение от других пользователей ---
+    # --- Сообщение от других пользователей пересылаем в личку владельца ---
     if chat_id != OWNER_ID and OWNER_ID:
-        try: bot.send_message(OWNER_ID, f"Сообщение от {msg.from_user.first_name} ({chat_id}):\n{text}")
-        except: log_error(f"Не удалось переслать сообщение в личку владельца: {chat_id}")
+        try:
+            bot.send_message(
+                OWNER_ID,
+                f"Сообщение от {msg.from_user.first_name} ({chat_id}):\n{text}"
+            )
+        except:
+            log_error(f"Не удалось переслать сообщение в личку владельца: {chat_id}")
 
-    # --- Редактирование ---
+    # --- Проверка состояния редактирования ---
     wait_action = store.get("edit_wait")
+
     if wait_action is None:
-        # Авто-внесение чисел из всех строк
+        # Авто-добавление записей из всех строк
         lines = text.splitlines()
         any_added = False
         for line in lines:
-            clean_line = re.sub(r"[ .,‘’]", "", line)
+            clean_line = line.replace(" ","").replace(".","").replace(",","").replace("’","").replace("‘","")
+            if not clean_line: continue
             match = re.match(r"([+-]?\d+)", clean_line)
             if match:
                 try:
@@ -272,15 +283,79 @@ def handle_message(msg):
                     note = line[match.end():].strip()
                     add_record_to_chat(chat_id, amount, note, msg.from_user.id)
                     any_added = True
-                except: continue
+                except:
+                    continue
         if any_added:
             update_or_send_today_window(chat_id, extra_text="✅ Записи добавлены")
         else:
             update_or_send_today_window(chat_id)
         return
 
-    # --- Дальнейшие состояния редактирования/удаления/пересылки ---
-    # (оставляем как есть из предыдущего кода)
+    # --- Редактирование и удаление ---
+    if wait_action == "change_id":
+        try:
+            rid = int(text.strip())
+            store["edit_wait"] = "change_value"
+            store["edit_target"] = rid
+            update_or_send_today_window(chat_id, extra_text=f"Введите новую сумму и заметку для записи {rid}")
+        except:
+            update_or_send_today_window(chat_id, extra_text="❌ Неверный ID. Попробуйте снова.")
+        return
+
+    elif wait_action == "change_value":
+        rid = store.get("edit_target")
+        if not rid: store["edit_wait"] = None; return
+        parts = text.strip().split(" ",1)
+        try:
+            amount = int(parts[0])
+            note = parts[1] if len(parts)>1 else ""
+            success,_ = update_record_in_chat(chat_id,rid,amount,note)
+            if success:
+                update_or_send_today_window(chat_id, extra_text=f"✅ Запись {rid} изменена")
+            else:
+                update_or_send_today_window(chat_id, extra_text=f"❌ Запись {rid} не найдена")
+        except:
+            update_or_send_today_window(chat_id, extra_text="❌ Некорректный ввод. Попробуйте снова.")
+        store["edit_wait"] = None
+        store["edit_target"] = None
+        return
+
+    elif wait_action == "delete_id":
+        try:
+            rid = int(text.strip())
+            success,_ = delete_record_in_chat(chat_id,rid)
+            if success:
+                update_or_send_today_window(chat_id, extra_text=f"✅ Запись {rid} удалена")
+            else:
+                update_or_send_today_window(chat_id, extra_text=f"❌ Запись {rid} не найдена")
+        except:
+            update_or_send_today_window(chat_id, extra_text="❌ Некорректный ID. Попробуйте снова.")
+        store["edit_wait"] = None
+        return
+
+    # --- Установка target для пересылки ---
+    if wait_action == "set_forward_target":
+        try:
+            target_chat_id = int(text.strip())
+            store["forward_target"] = target_chat_id
+            store["edit_wait"] = None
+            update_or_send_today_window(chat_id, extra_text=f"✅ Сообщения из вашей лички будут пересылаться в чат {target_chat_id}")
+        except:
+            update_or_send_today_window(chat_id, extra_text="❌ Неверный ID чата. Попробуйте снова.")
+        return
+
+    # --- Отправка текста для пересылки ---
+    if wait_action == "forward_msg_text":
+        target_chat_id = store.get("forward_target")
+        if not target_chat_id: store["edit_wait"] = None; return
+        try:
+            bot.send_message(target_chat_id, text)
+            update_or_send_today_window(chat_id, extra_text=f"✅ Сообщение успешно переслано в чат {target_chat_id}")
+        except:
+            update_or_send_today_window(chat_id, extra_text="❌ Не удалось переслать сообщение")
+        store["edit_wait"] = None
+        store["forward_target"] = None
+        return
 
 # -----------------------------
 # Команда /start
