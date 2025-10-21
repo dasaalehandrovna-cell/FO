@@ -320,16 +320,23 @@ def handle_message(msg):
         store["edit_target"] = None
         return
 
+    # -----------------------------
     # 8.7 Удаление записи
+    # -----------------------------
     if wait_action == "delete_id":
         try:
             rid = int(text.strip())
-            success,_ = delete_record_in_chat(chat_id,rid)
+            success, _ = delete_record_in_chat(chat_id, rid)
             if success:
                 update_or_send_today_window(chat_id, extra_text=f"✅ Запись {rid} удалена")
             else:
                 update_or_send_today_window(chat_id, extra_text=f"❌ Запись {rid} не найдена")
-        except
+        except Exception as e:
+            update_or_send_today_window(chat_id, extra_text=f"⚠️ Ошибка: {e}")
+        store["edit_wait"] = None
+        store["edit_target"] = None
+        return
+
 # -----------------------------
 # 9 — Команда /start
 # -----------------------------
