@@ -103,75 +103,126 @@ def set_today_active_window(chat_id,message_id):
     save_data(data)
 
 # -----------------------------
-# ОТСЕК 5 — Работа с записями
+# ОТСЕК 5 — Работа с записями (с типом "приход"/"расход")
 # -----------------------------
-def add_record_to_chat(chat_id,amount,note,owner):
-    store=get_chat_store(chat_id)
-    rid=data.get("next_id",1)
-    rec={"id":rid,"short_id":f"R{rid}","timestamp":datetime.now(TZ).isoformat(timespec="seconds"),"amount":amount,"note":note,"owner":owner}
-    data.setdefault("records",[]).append(rec)
-    store.setdefault("records",[]).append(rec)
-    day=get_today_key()
-    store.setdefault("daily_records",{}).setdefault(day,[]).append(rec)
-    store["balance"]=store.get("balance",0)+amount
-    data["overall_balance"]=data.get("overall_balance",0)+amount
-    data["next_id"]=rid+1
+def add_record_to_chat(chat_id, amount, note, owner):
+    store = get_chat_store(chat_id)
+    rid = data.get("next_id", 1)
+
+    rec_type = "приход" if amount > 0 else "расход"
+    rec = {
+        "id": rid,
+        "short_id": f"R{rid}",
+        "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+        "amount": amount,
+        "note": note,
+        "owner": owner,
+        "type": rec_type
+    }
+
+    data.setdefault("records", []).append(rec)
+    store.setdefault("records", []).append(rec)
+
+    day = get_today_key()
+    store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
+
+    # Балансы
+    store["balance"] = store.get("balance", 0) + amount
+    data["overall_balance"] = data.get("overall_balance", 0) + amount
+    data["next_id"] = rid + 1
+
     save_data(data)
-    try: export_to_csv(data)
-    except: pass
+    try:
+        export_to_csv(data)
+    except Exception as e:
+        log_error(f"Ошибка экспорта CSV: {e}")
     return rec
 
-def update_record_in_chat(chat_id,rid,new_amount,new_note):
-    store=get_chat_store(chat_id)
-    found=None
-    for r in store.get("records",[]):
-        if r["id"]==rid:
-            diff=new_amount-r["amount"]
-            r["amount"]=new_amount
-            r["note"]=new_note
-            found=r
+
+def update_record_in_chat(chat_id, rid, new_amount, new_note):
+    store = get_chat_store(chat_id)
+    found = None
+
+    for r in store.get("records", []):
+        if r["id"] == rid:
+            diff = new_amount - r["amount"]
+            r["amount"] = new_amount
+            r["note"] = new_note
+            r["type"] = "приход" if new_amount > 0 else "расход"
+            found = r
             break
+
     if found:
-        for day_recs in store.get("daily_records",{}).values():
+        for day_recs in store.get("daily_records", {}).values():
             for r in day_recs:
-                if r["id"]==rid:
+                if r["id"] == rid:
                     r.update(found)
-        store["balance"]=sum([x["amount"] for x in store.get("records",[])])
-        data["overall_balance"]=sum([x["amount"] for x in data.get("records",[])])
+
+        # Пересчёт балансов
+        store["balance"] = sum([x["amount"] for x in store.get("records", [])])
+        data["overall_balance"] = sum([x["amount"] for x in data.get("records", [])])
+
         save_data(data)
         export_to_csv(data)
-        return True,found
-    return False,None
+        return True, found
+    return False, None
 
-def delete_record_in_chat(chat_id,rid):
-    store=get_chat_store(chat_id)
-    removed=None
-    for r in list(store.get("records",[])):
-        if r["id"]==rid or str(r["id"])==str(rid) or r.get("short_id")==f"R{rid}":
-            removed=r
+
+def delete_record_in_chat(chat_id, rid):
+    store = get_chat_store(chat_id)
+    removed = None
+
+    for r in list(store.get("records", [])):
+        if r["id"] == rid or str(r["id"]) == str(rid) or r.get("short_id") == f"R{rid}":
+            removed = r
             store["records"].remove(r)
             break
+
     if removed:
-        for day_key,recs in store.get("daily_records",{}).items():
-            store["daily_records"][day_key]=[x for x in recs if x["id"]!=rid]
-        store["balance"]=sum([x["amount"] for x in store.get("records",[])])
-        data["records"]=[x for x in data.get("records",[]) if x["id"]!=rid]
-        data["overall_balance"]=sum([x["amount"] for x in data.get("records",[])])
+        for day_key, recs in store.get("daily_records", {}).items():
+            store["daily_records"][day_key] = [x for x in recs if x["id"] != rid]
+
+        store["balance"] = sum([x["amount"] for x in store.get("records", [])])
+        data["records"] = [x for x in data.get("records", []) if x["id"] != rid]
+        data["overall_balance"] = sum([x["amount"] for x in data.get("records", [])])
+
         save_data(data)
         export_to_csv(data)
-        return True,removed
-    return False,None
+        return True, removed
+    return False, None
+
 
 def export_to_csv(d):
     try:
-        with open(CSV_FILE,"w",newline='',encoding="utf-8") as f:
-            writer=csv.writer(f)
-            writer.writerow(["chat_id","ID","short_id","timestamp","amount","note","owner","day_key"])
-            for cid,cdata in d.get("chats",{}).items():
-                for day_key,records in cdata.get("daily_records",{}).items():
+        with open(CSV_FILE, "w", newline='', encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                "chat_id",
+                "ID",
+                "short_id",
+                "timestamp",
+                "amount",
+                "note",
+                "owner",
+                "type",
+                "day_key"
+            ])
+            for cid, cdata in d.get("chats", {}).items():
+                for day_key, records in cdata.get("daily_records", {}).items():
                     for r in records:
-                        writer.writerow([cid,r.get("id"),r.get("short_id"),r.get("timestamp"),r.get("amount"),r.get("note"),r.get("owner"),day_key])
-    except Exception as e: log_error(f"Ошибка экспорта CSV: {e}")
+                        writer.writerow([
+                            cid,
+                            r.get("id"),
+                            r.get("short_id"),
+                            r.get("timestamp"),
+                            r.get("amount"),
+                            r.get("note"),
+                            r.get("owner"),
+                            r.get("type"),
+                            day_key
+                        ])
+    except Exception as e:
+        log_error(f"Ошибка экспорта CSV: {e}")
 
 # -----------------------------
 # ОТСЕК 6 — Компактная клавиатура
@@ -233,7 +284,7 @@ def update_or_send_today_window(chat_id):
         log_error(f"[update_or_send_today_window] Не удалось создать окно для chat {chat_id}: {e}")
 
 # -----------------------------
-# ОТСЕК 8 — Входящие сообщения (автоматическое добавление)
+# ОТСЕК 8 — Входящие сообщения (автоматическая запись, приход/расход, многострочный ввод)
 # -----------------------------
 @bot.message_handler(func=lambda m: True)
 def handle_message(msg):
@@ -242,7 +293,9 @@ def handle_message(msg):
     store = get_chat_store(chat_id)
     wait_action = store.get("edit_wait")
 
-    # --- Если пользователь редактирует / удаляет ---
+    # =========================
+    # --- Режимы редактирования ---
+    # =========================
     if wait_action == "change_id":
         try:
             rid = int(text)
@@ -260,7 +313,7 @@ def handle_message(msg):
             return
         parts = text.split(" ", 1)
         try:
-            amount = int(parts[0])
+            amount = int(parts[0].replace(" ", "").replace(",", "").replace(";", "").replace("'", "").replace('"', ""))
             note = parts[1] if len(parts) > 1 else ""
         except:
             bot.send_message(chat_id, "Неверный формат. Пример: 120 продукты")
@@ -290,16 +343,46 @@ def handle_message(msg):
         update_or_send_today_window(chat_id)
         return
 
-    # --- Если не редактирование — сразу пробуем записать сумму ---
-    parts = text.split(" ", 1)
-    try:
-        amount = int(parts[0])
+    # =========================
+    # --- Автоматическое добавление ---
+    # =========================
+    lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
+    added = 0
+
+    for line in lines:
+        parts = line.split(" ", 1)
+        if not parts:
+            continue
+
+        raw_amount = parts[0]
         note = parts[1] if len(parts) > 1 else ""
+
+        # Очистка числовой части: пробелы, запятые, точки и прочие разделители
+        cleaned = raw_amount.replace(" ", "").replace(",", "").replace(".", "").replace(";", "").replace("'", "").replace('"', "")
+        if not cleaned:
+            continue
+
+        sign = 1
+        if cleaned.startswith("+"):
+            cleaned = cleaned[1:]
+            sign = 1
+        elif cleaned.startswith("-"):
+            cleaned = cleaned[1:]
+            sign = -1
+
+        try:
+            amount = int(cleaned) * sign
+        except:
+            continue  # пропускаем некорректную строку
+
         add_record_to_chat(chat_id, amount, note, msg.from_user.id)
-        bot.send_message(chat_id, "✅ Запись добавлена", disable_notification=True)
+        added += 1
+
+    if added > 0:
+        bot.send_message(chat_id, f"✅ Добавлено записей: {added}", disable_notification=True)
         update_or_send_today_window(chat_id)
-    except:
-        # Если сообщение не похоже на сумму — просто обновим окно
+    else:
+        # Если ни одна строка не подошла — просто обновим окно
         today_key = get_today_key()
         active_id = data.get("active_messages", {}).get(today_key, {}).get(str(chat_id))
         if not active_id:
