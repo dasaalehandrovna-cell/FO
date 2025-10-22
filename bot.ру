@@ -229,13 +229,14 @@ def build_edit_keyboard():
     return kb
 
 # -----------------------------
-# ОТСЕК 7 — Обновление/создание окна
+# ОТСЕК 7 — Обновление/создание окна (всё в одном сообщении)
 # -----------------------------
 def update_or_send_today_window(chat_id):
     today_key = get_today_key()
     store = get_chat_store(chat_id)
     day_records = store.get("daily_records", {}).get(today_key, [])
 
+    # Формируем текст окна
     if not day_records:
         text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
     else:
@@ -247,19 +248,24 @@ def update_or_send_today_window(chat_id):
         text = "\n".join(lines)
 
     kb = build_main_keyboard(chat_id)
+
+    # --- ВСЁ ПРОИСХОДИТ В ОДНОМ ОКНЕ ---
     today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
     active_id = today_msgs.get(str(chat_id))
 
-    if active_id:
-        try:
+    try:
+        if active_id:
+            # Пытаемся обновить существующее сообщение
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-        except Exception:
+        else:
+            # Если нет активного окна — создаём одно и запоминаем
             sent = bot.send_message(chat_id, text, reply_markup=kb)
             set_today_active_window(chat_id, sent.message_id)
-        return
-
-    sent = bot.send_message(chat_id, text, reply_markup=kb)
-    set_today_active_window(chat_id, sent.message_id)
+    except Exception as e:
+        # Если сообщение удалено пользователем или ошибка — создаём новое окно и запоминаем его
+        log_error(f"Ошибка при обновлении окна: {e}")
+        sent = bot.send_message(chat_id, text, reply_markup=kb)
+        set_today_active_window(chat_id, sent.message_id)
 
 # -----------------------------
 # ОТСЕК 8 — Callback кнопок
