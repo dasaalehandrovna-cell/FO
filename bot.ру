@@ -241,6 +241,7 @@ def build_edit_keyboard():
 # -----------------------------
 # ОТСЕК 7 — Обновление/создание окна
 # -----------------------------
+
 def update_or_send_today_window(chat_id):
     today_key = get_today_key()
     store = get_chat_store(chat_id)
@@ -272,21 +273,21 @@ def update_or_send_today_window(chat_id):
         text = "\n".join(lines)
 
     kb = build_main_keyboard(chat_id)
-    today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
-    active_id = today_msgs.get(str(chat_id))
+    # Получаем актуальный active_id
+    active_id = get_today_active_window(chat_id)
 
-    # Обновляем текущее окно
     if active_id:
         try:
+            # Пытаемся редактировать текущее сообщение
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
         except Exception:
+            # Если сообщение удалено — создаём новое и сохраняем его как активное
             sent = bot.send_message(chat_id, text, reply_markup=kb)
             set_today_active_window(chat_id, sent.message_id)
-        return
-
-    # Если окна ещё нет — создаём новое
-    sent = bot.send_message(chat_id, text, reply_markup=kb)
-    set_today_active_window(chat_id, sent.message_id)
+    else:
+        # Если ещё нет окна — создаём новое
+        sent = bot.send_message(chat_id, text, reply_markup=kb)
+        set_today_active_window(chat_id, sent.message_id)
 
 # -----------------------------
 # ОТСЕК 8 — Callback кнопок
@@ -295,6 +296,7 @@ def update_or_send_today_window(chat_id):
 def handle_callback(call):
     chat_id = call.message.chat.id
     store = get_chat_store(chat_id)
+    active_id = get_today_active_window(chat_id)
 
     if call.data in ["btn_balance", "btn_report"]:
         update_or_send_today_window(chat_id)
@@ -307,7 +309,12 @@ def handle_callback(call):
             bot.send_message(chat_id, f"❌ Ошибка при отправке CSV: {e}")
 
     elif call.data == "btn_edit":
-        bot.edit_message_text("Выберите действие:", chat_id, call.message.message_id, reply_markup=build_edit_keyboard())
+        # Редактируем текущее окно, не создавая нового
+        try:
+            bot.edit_message_text("Выберите действие:", chat_id, active_id, reply_markup=build_edit_keyboard())
+        except Exception:
+            sent = bot.send_message(chat_id, "Выберите действие:", reply_markup=build_edit_keyboard())
+            set_today_active_window(chat_id, sent.message_id)
 
     elif call.data == "edit_change":
         store["edit_wait"] = "change_id"
@@ -330,7 +337,6 @@ def handle_callback(call):
         data["overall_balance"] = 0
         save_data(data)
         update_or_send_today_window(chat_id)
-
 
 # -----------------------------
 # ОТСЕК 9 — Входящие сообщения
