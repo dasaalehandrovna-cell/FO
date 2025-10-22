@@ -204,40 +204,38 @@ def export_to_csv(d):
 # ОТСЕК 6 — Клавиатуры
 # -----------------------------
 
-from telebot import types
-
-# Основное меню
 def build_main_keyboard(chat_id=None, confirm_reset=False):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
         types.InlineKeyboardButton("💰 Баланс", callback_data="btn_balance"),
         types.InlineKeyboardButton("📊 Отчёт", callback_data="btn_report"),
-        types.InlineKeyboardButton("✏️ Изменить", callback_data="btn_edit")
+        types.InlineKeyboardButton("📂 CSV", callback_data="btn_csv")
     )
+    if confirm_reset:
+        kb.row(
+            types.InlineKeyboardButton("✅ Да", callback_data="confirm_reset"),
+            types.InlineKeyboardButton("❌ Нет", callback_data="cancel_reset")
+        )
+    else:
+        kb.row(types.InlineKeyboardButton("⚙️ Обнулить данные", callback_data="btn_reset"))
     kb.row(
-        types.InlineKeyboardButton("📂 CSV", callback_data="btn_csv"),
-        types.InlineKeyboardButton("🧾 История", callback_data="btn_history")
+        types.InlineKeyboardButton("🚀 Обновить", callback_data="btn_start"),
+        types.InlineKeyboardButton("ℹ️ Инфо", callback_data="btn_cod")
     )
+    balance_text = ""
+    if chat_id is not None:
+        store = get_chat_store(chat_id)
+        balance_text = f"💰 {store.get('balance', 0)} ARS"
+    kb.add(types.InlineKeyboardButton(balance_text or "💰 0 ARS", callback_data="noop"))
     return kb
 
-
-# Меню для редактирования записей
 def build_edit_keyboard():
     kb = types.InlineKeyboardMarkup(row_width=2)
-    # Подкоманды справа
     kb.row(
-        types.InlineKeyboardButton("✏️ Изменить", callback_data="edit_change"),
-        types.InlineKeyboardButton("🗑️ Удалить", callback_data="edit_delete")
+        types.InlineKeyboardButton("✏ Изменить", callback_data="edit_change"),
+        types.InlineKeyboardButton("🗑 Удалить", callback_data="edit_delete")
     )
-    # Кнопка "Назад" внизу
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="edit_back"))
-    return kb
-
-
-# Меню возврата в главное окно
-def build_back_keyboard():
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="go_back"))
     return kb
 
 # -----------------------------
@@ -291,60 +289,49 @@ def update_or_send_today_window(chat_id):
     set_today_active_window(chat_id, sent.message_id)
 
 # -----------------------------
-# ОТСЕК 8 — Обработка callback-кнопок
+# ОТСЕК 8 — Callback кнопок
 # -----------------------------
-
-@bot.callback_query_handler(func=lambda call: True)
+@bot.callback_query_handler(func=lambda c: True)
 def handle_callback(call):
     chat_id = call.message.chat.id
+    store = get_chat_store(chat_id)
 
-    # Главное меню
-    if call.data == "btn_balance":
-        show_balance(chat_id, call.message.message_id)
-
-    elif call.data == "btn_report":
-        show_report(chat_id, call.message.message_id)
-
-    elif call.data == "btn_edit":
-        bot.edit_message_text(
-            "Выберите действие для изменения данных:",
-            chat_id,
-            call.message.message_id,
-            reply_markup=build_edit_keyboard()
-        )
+    if call.data in ["btn_balance", "btn_report"]:
+        update_or_send_today_window(chat_id)
 
     elif call.data == "btn_csv":
-        send_csv(chat_id, call.message.message_id)
+        try:
+            with open(CSV_FILE, "rb") as f:
+                bot.send_document(chat_id, f, caption="📂 Ваш файл data.csv")
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Ошибка при отправке CSV: {e}")
 
-    elif call.data == "btn_history":
-        show_history(chat_id, call.message.message_id)
+    elif call.data == "btn_edit":
+        bot.edit_message_text("Выберите действие:", chat_id, call.message.message_id, reply_markup=build_edit_keyboard())
 
-    # Подменю редактирования
     elif call.data == "edit_change":
-        bot.edit_message_text(
-            "✏️ Введите номер записи, которую хотите изменить:",
-            chat_id,
-            call.message.message_id,
-            reply_markup=build_back_keyboard()
-        )
-        bot.register_next_step_handler(call.message, handle_edit_change)
+        store["edit_wait"] = "change_id"
+        bot.send_message(chat_id, "Введите ID записи для изменения:")
 
     elif call.data == "edit_delete":
-        bot.edit_message_text(
-            "🗑️ Введите номер записи, которую хотите удалить:",
-            chat_id,
-            call.message.message_id,
-            reply_markup=build_back_keyboard()
-        )
-        bot.register_next_step_handler(call.message, handle_edit_delete)
+        store["edit_wait"] = "delete_id"
+        bot.send_message(chat_id, "Введите ID записи для удаления:")
 
-    elif call.data == "edit_back" or call.data == "go_back":
-        bot.edit_message_text(
-            "Главное меню:",
-            chat_id,
-            call.message.message_id,
-            reply_markup=build_main_keyboard(chat_id)
-        )
+    elif call.data == "edit_back":
+        store["edit_wait"] = None
+        update_or_send_today_window(chat_id)
+
+    elif call.data == "btn_reset":
+        store["edit_wait"] = None
+        store["records"] = []
+        store["daily_records"] = {}
+        store["balance"] = 0
+        data["records"] = []
+        data["overall_balance"] = 0
+        save_data(data)
+        update_or_send_today_window(chat_id)
+
+
 # -----------------------------
 # ОТСЕК 9 — Входящие сообщения
 # -----------------------------
