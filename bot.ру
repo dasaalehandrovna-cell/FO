@@ -230,7 +230,7 @@ def handle_callback(call):
     elif data_cd=="btn_report": update_main_window(chat_id)
     elif data_cd=="btn_reset":
         if str(call.from_user.id)!=str(OWNER_ID): return
-        data["chats"][str(chat_id)] = {"balance":0,"records":[],"next_id":1,"active_window_id=None"}
+        data["chats"][str(chat_id)] = {"balance":0,"records":[],"next_id":1,"active_window_id=None}
         save_data(data)
         update_main_window(chat_id, "✅ Данные сброшены владельцем")
     elif data_cd=="btn_start": cmd_start(call.message)
