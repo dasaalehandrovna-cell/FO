@@ -2,7 +2,6 @@
 # Финансовый бот — версия 9.8.2
 # Полная версия с одним окном и CSV
 # ============================================
-
 # -----------------------------
 # ОТСЕК 1 — Импорты и настройки
 # -----------------------------
@@ -28,7 +27,7 @@ DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.8.2"
+VERSION = "9.8.3"
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
@@ -152,7 +151,6 @@ def update_record_in_chat(chat_id, rid, new_amount, new_note):
     found = None
     for r in store.get("records", []):
         if r["id"] == rid:
-            diff = new_amount - r["amount"]
             r["amount"] = new_amount
             r["note"] = new_note
             found = r
@@ -203,7 +201,6 @@ def export_to_csv(d):
 # -----------------------------
 # ОТСЕК 6 — Клавиатуры
 # -----------------------------
-
 def build_main_keyboard(chat_id=None, confirm_reset=False):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
@@ -238,10 +235,10 @@ def build_edit_keyboard():
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="edit_back"))
     return kb
 
+
 # -----------------------------
 # ОТСЕК 7 — Обновление/создание окна
 # -----------------------------
-
 def update_or_send_today_window(chat_id):
     today_key = get_today_key()
     store = get_chat_store(chat_id)
@@ -273,21 +270,21 @@ def update_or_send_today_window(chat_id):
         text = "\n".join(lines)
 
     kb = build_main_keyboard(chat_id)
-    # Получаем актуальный active_id
-    active_id = get_today_active_window(chat_id)
+    today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
+    active_id = today_msgs.get(str(chat_id))
 
+    # Если окно уже существует — редактируем текущее
     if active_id:
         try:
-            # Пытаемся редактировать текущее сообщение
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
         except Exception:
-            # Если сообщение удалено — создаём новое и сохраняем его как активное
             sent = bot.send_message(chat_id, text, reply_markup=kb)
             set_today_active_window(chat_id, sent.message_id)
-    else:
-        # Если ещё нет окна — создаём новое
-        sent = bot.send_message(chat_id, text, reply_markup=kb)
-        set_today_active_window(chat_id, sent.message_id)
+        return
+
+    # Если окна ещё нет — создаём новое
+    sent = bot.send_message(chat_id, text, reply_markup=kb)
+    set_today_active_window(chat_id, sent.message_id)
 
 # -----------------------------
 # ОТСЕК 8 — Callback кнопок
