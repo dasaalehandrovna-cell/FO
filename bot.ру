@@ -246,7 +246,7 @@ def update_or_send_today_window(chat_id):
     day_records = store.get("daily_records", {}).get(today_key, [])
 
     # Считаем приход и расход
-    daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0
+    daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
     daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
     overall_balance = store.get("balance", 0)
 
