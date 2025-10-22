@@ -1,57 +1,20 @@
-
 # ============================================
-# Финансовый бот — версия 9.6.1.6
-# Полная версия
-# Примечание: интерфейс на русском, команды латиницей.
-# ОТСЕКИ пронумерованы в заголовках.
+# Финансовый бот — версия 9.6.1.6 (одно окно)
 # ============================================
-
-
 
 # -----------------------------
 # ОТСЕК 1 — Импорты и настройки
 # -----------------------------
-import os
-import json
-import csv              # ✅ добавлен явный импорт CSV
-import logging
-import requests
-import re
+import os, json, csv, logging, re, requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
-
 import telebot
 from flask import Flask, request
 from telebot import types
 
-# --------------------------------------------
-# Настройки окружения и константы
-# --------------------------------------------
 TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID")  # строка или число
-APP_URL = os.getenv("APP_URL", "https://fo-1.onrender.com")  # URL приложения для webhook
-TZ = ZoneInfo("America/Argentina/Catamarca")
-DATA_FILE = "data.json"
-CSV_FILE = "data.csv"
-LOG_FILE = "log.txt"
-PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.6.1.7"
-
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен в переменных окружения!")
-
-bot = telebot.TeleBot(TOKEN, threaded=True)
-app = Flask(__name__)
-
-log_info = logging.info
-log_error = logging.error
-
-# --------------------------------------------
-# Настройки окружения и константы
-# --------------------------------------------
-TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID")  # строка или число
-APP_URL = os.getenv("APP_URL", "https://fo-1.onrender.com")  # URL приложения, используется для webhook
+OWNER_ID = os.getenv("OWNER_ID")
+APP_URL = os.getenv("APP_URL", "https://fo-1.onrender.com")
 TZ = ZoneInfo("America/Argentina/Catamarca")
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
@@ -60,7 +23,7 @@ PORT = int(os.environ.get("PORT", 5000))
 VERSION = "9.6.1.6"
 
 if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен в переменных окружения!")
+    raise ValueError("BOT_TOKEN не установлен!")
 
 bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
@@ -72,28 +35,21 @@ logging.basicConfig(
     level=logging.INFO,
     format="[{asctime}] {levelname}: {message}",
     style="{",
-    handlers=[
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
-        logging.StreamHandler()
-    ]
+    handlers=[logging.FileHandler(LOG_FILE, encoding="utf-8"), logging.StreamHandler()]
 )
-
-def log_info(msg):
-    logging.info(msg)
-
-def log_error(msg):
-    logging.error(msg)
-
+log_info = logging.info
+log_error = logging.error
 log_info(f"Старт приложения. Версия {VERSION}")
 
 # --------------------------------------------
-# ОТСЕК 3 — Структура данных и работа с файлом
+# ОТСЕК 3 — Данные
 # --------------------------------------------
 def default_data():
     return {
-        "chats": {},  # chat_id -> { balance, records:[], next_id }
-        "forward_targets": [],  # список chat_id (int)
-        "tracked_messages": {},  # для временных состояний редактирования: chat_id -> {user_id: state}
+        "chats": {},              # chat_id -> {balance, records[], next_id, active_window_id}
+        "forward_targets": [],    # chat_id для пересылки
+        "tracked_messages": {},   # chat_id -> {user_id: state}
+        "processed_messages": []  # для пересылки без дублей
     }
 
 def load_data():
@@ -101,12 +57,11 @@ def load_data():
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 d = json.load(f)
-        except Exception as e:
-            log_error(f"Ошибка загрузки data.json: {e}")
+        except:
             d = default_data()
     else:
         d = default_data()
-    # Ensure keys
+    # ensure keys
     for k, v in default_data().items():
         if k not in d:
             d[k] = v
@@ -123,620 +78,222 @@ def export_to_csv(d):
     try:
         with open(CSV_FILE, "w", newline='', encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["chat_id","ID","short_id","timestamp","amount","note","owner"])
+            writer.writerow(["chat_id","id","short_id","timestamp","amount","note","owner"])
             for cid, cdata in d.get("chats", {}).items():
                 for r in cdata.get("records", []):
-                    writer.writerow([cid, r.get("id"), r.get("short_id"), r.get("timestamp"), r.get("amount"), r.get("note"), r.get("owner")])
+                    writer.writerow([cid, r["id"], r["short_id"], r["timestamp"], r["amount"], r["note"], r["owner"]])
     except Exception as e:
         log_error(f"Ошибка экспорта CSV: {e}")
 
 data = load_data()
-
-# если OWNER_ID задан в окружении — убедимся что он есть в списке forward_targets
 if OWNER_ID:
     try:
         owner_int = int(OWNER_ID)
-    except Exception:
-        owner_int = None
-    if owner_int is not None and owner_int not in data["forward_targets"]:
-        data["forward_targets"].append(owner_int)
-        save_data(data)
+        if owner_int not in data["forward_targets"]:
+            data["forward_targets"].append(owner_int)
+            save_data(data)
+    except: pass
 
 # --------------------------------------------
-# ОТСЕК 4 — Вспомогательные функции (парсинг, чат-менеджмент)
+# ОТСЕК 4 — Вспомогательные функции
 # --------------------------------------------
-# Разбор первой найденной цифры в строке (с учётом знаков и пробелов)
 num_re = re.compile(r'([+-]?\s*\d+)')
 
 def extract_first_number(s):
-    """
-    Ищет первое вхождение числа в строке. Возвращает (amount:int, raw_token:str) или (None, None)
-    Правила:
-    - допускается пробел между знаком и цифрой: "+ 100" или "-  50"
-    - возвращаемое число учитывает знак
-    """
-    if not s:
-        return None, None
+    if not s: return None, None
     m = num_re.search(s)
-    if not m:
-        return None, None
-    token = m.group(1)
-    # удаляем пробелы внутри токена
-    token_clean = token.replace(" ", "")
-    try:
-        amt = int(token_clean)
-    except Exception:
-        return None, None
-    return amt, token.strip()
+    if not m: return None, None
+    token = m.group(1).replace(" ", "")
+    try: amt = int(token)
+    except: return None, None
+    return amt, m.group(1).strip()
 
 def get_chat_store(chat_id):
-    """Возвращает или инициализирует структуру данных для чата"""
     chat_id = str(chat_id)
     if chat_id not in data["chats"]:
-        data["chats"][chat_id] = {
-            "balance": 0,
-            "records": [],
-            "next_id": 1
-        }
+        data["chats"][chat_id] = {"balance":0,"records":[],"next_id":1,"active_window_id":None}
         save_data(data)
     return data["chats"][chat_id]
 
 def add_record_to_chat(chat_id, amount, note, owner):
     store = get_chat_store(chat_id)
-    ts = datetime.now(TZ).isoformat()
     rid = store.get("next_id", 1)
-    rec = {
-        "id": rid,
-        "short_id": f"R{rid}",
-        "timestamp": ts,
-        "amount": amount,
-        "note": note,
-        "owner": owner
-    }
+    ts = datetime.now(TZ).isoformat()
+    rec = {"id":rid,"short_id":f"R{rid}","timestamp":ts,"amount":amount,"note":note,"owner":owner}
     store.setdefault("records", []).append(rec)
-    store["balance"] = store.get("balance", 0) + amount
+    store["balance"] = store.get("balance",0) + amount
     store["next_id"] = rid + 1
     save_data(data)
     export_to_csv(data)
-    if amount >= 0:
-        log_info(f"[CHAT {chat_id}] ПРИХОД: +{amount} {note}")
-    else:
-        log_info(f"[CHAT {chat_id}] РАСХОД: {amount} {note}")
     return rec
 
 def delete_record_in_chat(chat_id, rec_id):
     store = get_chat_store(chat_id)
     recs = store.get("records", [])
-    to_del = None
     for r in recs:
-        if r["id"] == rec_id or str(r["id"]) == str(rec_id) or r["short_id"] == f"R{rec_id}":
-            to_del = r
-            break
-    if not to_del:
-        return False, None
-    recs.remove(to_del)
-    store["balance"] = sum([r["amount"] for r in recs])
-    save_data(data)
-    export_to_csv(data)
-    return True, to_del
+        if r["id"] == rec_id or str(r["id"]) == str(rec_id):
+            recs.remove(r)
+            store["balance"] = sum([r["amount"] for r in recs])
+            save_data(data)
+            export_to_csv(data)
+            return True, r
+    return False, None
 
 def update_record_in_chat(chat_id, rec_id, new_amount, new_note):
     store = get_chat_store(chat_id)
-    recs = store.get("records", [])
-    found = None
-    for r in recs:
-        if r["id"] == rec_id or str(r["id"]) == str(rec_id) or r["short_id"] == f"R{rec_id}":
-            found = r
-            break
-    if not found:
-        return False, None
-    found["amount"] = new_amount
-    found["note"] = new_note
-    # recompute balance
-    store["balance"] = sum([r["amount"] for r in recs])
-    save_data(data)
-    export_to_csv(data)
-    return True, found
+    for r in store.get("records", []):
+        if r["id"] == rec_id or str(r["id"]) == str(rec_id):
+            r["amount"] = new_amount
+            r["note"] = new_note
+            store["balance"] = sum([x["amount"] for x in store.get("records",[])])
+            save_data(data)
+            export_to_csv(data)
+            return True, r
+    return False, None
+
+def format_amount(v):
+    return f"+{v}" if v>0 else f"{v}"
 
 # --------------------------------------------
-# ОТСЕК 5 — Клавиатуры и кнопки
+# ОТСЕК 5 — Клавиатуры
 # --------------------------------------------
-from telebot import types
-
 def build_main_keyboard():
-    """
-    Главное меню:
-    - Баланс
-    - Отчёт
-    - Редактировать
-    - Сброс
-    - Старт
-    - О коде
-    """
     kb = types.InlineKeyboardMarkup()
-    kb.row(
-        types.InlineKeyboardButton("💰 Баланс", callback_data="btn_balance"),
-        types.InlineKeyboardButton("📊 Отчёт", callback_data="btn_report")
-    )
-    kb.row(
-        types.InlineKeyboardButton("✏️ Редактировать", callback_data="btn_edit"),
-        types.InlineKeyboardButton("⚙️ Сброс", callback_data="btn_reset")
-    )
-    # заменено: вместо кнопки «Пересылка» — «Старт»
-    kb.row(
-        types.InlineKeyboardButton("🚀 Старт", callback_data="btn_start"),
-        types.InlineKeyboardButton("📘 О коде", callback_data="btn_cod")
-    )
+    kb.row(types.InlineKeyboardButton("💰 Баланс", callback_data="btn_balance"),
+           types.InlineKeyboardButton("📊 Отчёт", callback_data="btn_report"))
+    kb.row(types.InlineKeyboardButton("✏️ Редактировать", callback_data="btn_edit"),
+           types.InlineKeyboardButton("⚙️ Сброс", callback_data="btn_reset"))
+    kb.row(types.InlineKeyboardButton("🚀 Старт", callback_data="btn_start"),
+           types.InlineKeyboardButton("📘 О коде", callback_data="btn_cod"))
     return kb
 
-
-def build_edit_list_keyboard(chat_id):
-    """
-    Создаёт список кнопок для редактирования и удаления транзакций.
-    Используется в /edit и при нажатии на ✏️ Редактировать.
-    """
+def update_main_window(chat_id, extra_text=None):
     store = get_chat_store(chat_id)
-    kb = types.InlineKeyboardMarkup()
-    records = store.get("records", [])[-20:]
-    if not records:
-        kb.add(types.InlineKeyboardButton("Нет записей", callback_data="noop"))
-        return kb
+    lines = []
+    lines.append(f"💰 Баланс: {format_amount(store.get('balance',0))} ₽")
+    recs = store.get("records", [])[-20:]
+    if recs:
+        lines.append("\n📋 Последние операции:")
+        for r in recs:
+            lines.append(f"{r['short_id']}: {format_amount(r['amount'])} — {r.get('note','')}")
+    if extra_text:
+        lines.append("\n"+extra_text)
+    text = "\n".join(lines)
+    kb = build_main_keyboard()
+    mid = store.get("active_window_id")
+    try:
+        if mid:
+            bot.edit_message_text(text, chat_id, mid, reply_markup=kb)
+        else:
+            m = bot.send_message(chat_id, text, reply_markup=kb)
+            store["active_window_id"] = m.message_id
+            save_data(data)
+    except:
+        m = bot.send_message(chat_id, text, reply_markup=kb)
+        store["active_window_id"] = m.message_id
+        save_data(data)
 
-    for r in records:
-        text = f"{r['short_id']}: {r['amount']} — {r.get('note','')}"
-        # две кнопки в одной строке: ✏️ Редактировать и 🗑 Удалить
-        row = [
-            types.InlineKeyboardButton("✏️", callback_data=f"edit_select:{r['id']}"),
-            types.InlineKeyboardButton("🗑", callback_data=f"delete_record:{r['id']}")
-        ]
-        kb.add(types.InlineKeyboardButton(text, callback_data=f"noop_row:{r['id']}"))
-        kb.row(*row)
-    return kb
-
-# 6--------------------------------------------
-# ОТСЕК 6 — Команды (основные)
+# --------------------------------------------
+# ОТСЕК 6 — Основные команды (edit, delete, report, balance)
 # --------------------------------------------
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
-    text = (
-        "👋 Добро пожаловать в Финансовый бот «ФО»\n\n"
-        "Команды (латиницей):\n"
-        "/start – показать справку\n"
-        "/myid – показать ваш user ID\n"
-        "/chatid – показать ID чата\n"
-        "/balance – показать текущий баланс (для текущего чата)\n"
-        "/report – показать последние операции (для текущего чата)\n"
-        "/reset – обнулить все данные (только владелец)\n"
-        "/addforward <chat_id> – добавить цель для пересылки (только владелец)\n"
-        "/removeforward <chat_id> – убрать цель пересылки (только владелец)\n"
-        "/listforwards – список целей пересылки\n"
-        "/cod – информация о версии и обновлениях\n"
-        "/edit – редактирование транзакций (список и выбор)\n"
-        "/delete <номер> – удалить запись по номеру\n\n"
-        "Для записи транзакции отправьте одну или несколько строк, каждая строка отдельный учёт.\n"
-        "Примеры:\n+1000 зарплата\n-123 хлеб\n200 сок\n"
-    )
-    bot.send_message(msg.chat.id, f"💬 Версия: {VERSION}\n\n{text}", reply_markup=build_main_keyboard())
-
-@bot.message_handler(commands=["myid"])
-def cmd_myid(msg):
-    uid = msg.from_user.id
-    bot.reply_to(msg, f"🆔 Ваш user ID: {uid}")
-
-@bot.message_handler(commands=["chatid"])
-def cmd_chatid(msg):
-    cid = msg.chat.id
-    bot.reply_to(msg, f"💬 ID текущего чата: {cid}")
+    update_main_window(msg.chat.id, "👋 Добро пожаловать в Финансовый бот!")
 
 @bot.message_handler(commands=["balance"])
 def cmd_balance(msg):
-    store = get_chat_store(msg.chat.id)
-    bot.reply_to(msg, f"💰 Баланс этого чата: {store.get('balance',0)} ₽", reply_markup=build_main_keyboard())
+    update_main_window(msg.chat.id)
 
 @bot.message_handler(commands=["report"])
 def cmd_report(msg):
-    store = get_chat_store(msg.chat.id)
-    recs = store.get("records", [])
-    if not recs:
-        bot.send_message(msg.chat.id, "Пока нет операций в этом чате.", reply_markup=build_main_keyboard())
-        return
-    text_lines = ["📋 Последние операции этого чата:"]
-    for r in recs[-50:]:
-        sign = "+" if r["amount"] > 0 else ""
-        text_lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
-    bot.send_message(msg.chat.id, "\n".join(text_lines), reply_markup=build_main_keyboard())
-
-@bot.message_handler(commands=["reset"])
-def cmd_reset(msg):
-    if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
-        bot.send_message(msg.chat.id, "Только владелец может сбрасывать данные.", reply_markup=build_main_keyboard())
-        return
-    global data
-    data = default_data()
-    try:
-        if OWNER_ID:
-            data["forward_targets"].append(int(OWNER_ID))
-    except Exception:
-        pass
-    save_data(data)
-    export_to_csv(data)
-    bot.send_message(msg.chat.id, "✅ Все данные сброшены.", reply_markup=build_main_keyboard())
-    log_info("ДАННЫЕ ОБНУЛЕНЫ владельцем")
-
-@bot.message_handler(commands=["addforward"])
-def cmd_addforward(msg):
-    if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
-        return
-    parts = msg.text.split()
-    if len(parts) < 2:
-        bot.reply_to(msg, "Использование: /addforward <chat_id>")
-        return
-    try:
-        cid = int(parts[1])
-    except Exception:
-        bot.reply_to(msg, "Неверный chat_id (должно быть число).")
-        return
-    if cid in data["forward_targets"]:
-        bot.reply_to(msg, "Этот чат уже в списке пересылки.")
-        return
-    data["forward_targets"].append(cid)
-    save_data(data)
-    bot.reply_to(msg, f"✅ Цель пересылки добавлена: {cid}")
-
-@bot.message_handler(commands=["removeforward"])
-def cmd_removeforward(msg):
-    if OWNER_ID is None or str(msg.from_user.id) != str(OWNER_ID):
-        return
-    parts = msg.text.split()
-    if len(parts) < 2:
-        bot.reply_to(msg, "Использование: /removeforward <chat_id>")
-        return
-    try:
-        cid = int(parts[1])
-    except Exception:
-        bot.reply_to(msg, "Неверный chat_id (должно быть число).")
-        return
-    if cid not in data["forward_targets"]:
-        bot.reply_to(msg, "Этот чат не в списке пересылки.")
-        return
-    data["forward_targets"].remove(cid)
-    save_data(data)
-    bot.reply_to(msg, f"✅ Цель пересылки удалена: {cid}")
-
-@bot.message_handler(commands=["listforwards"])
-def cmd_listforwards(msg):
-    if not data["forward_targets"]:
-        bot.reply_to(msg, "Список пересылки пуст.", reply_markup=build_main_keyboard())
-        return
-    text = "📨 Цели пересылки:\n" + "\n".join(map(str, data["forward_targets"]))
-    bot.reply_to(msg, text, reply_markup=build_main_keyboard())
-
-@bot.message_handler(commands=["cod"])
-def cmd_cod(msg):
-    text = (
-        f"📘 Информация о коде — версия {VERSION}\n\n"
-        "Краткое структурное описание:\n"
-        "- Интерфейс полностью на русском языке\n"
-        "- Команды остаются на латинице\n"
-        "- Добавлены inline-кнопки для быстрого доступа\n"
-        "- Автоматическая установка webhook при запуске\n"
-        "- Пересылка сообщений от владельца в указанные чаты (без эха)\n"
-        "- Отдельный учёт по каждому чату\n"
-        "- Редактирование записей через /edit и /delete\n"
-        "- Каждая строка сообщения = отдельная запись\n\n"
-        "Последнее обновление: добавлена версия 9.6.1.6 — сегментированный учёт, улучшенная пересылка, редактирование."
-    )
-    bot.send_message(msg.chat.id, text, reply_markup=build_main_keyboard())
-
-@bot.message_handler(commands=["edit"])
-def cmd_edit(msg):
-    kb = build_edit_list_keyboard(msg.chat.id)
-    if not kb.keyboard:
-        bot.reply_to(msg, "Нет записей для редактирования в этом чате.", reply_markup=build_main_keyboard())
-        return
-    bot.send_message(msg.chat.id, "Выберите запись для редактирования:", reply_markup=kb)
+    update_main_window(msg.chat.id)
 
 @bot.message_handler(commands=["delete"])
 def cmd_delete(msg):
     parts = msg.text.split()
-    if len(parts) < 2:
-        bot.reply_to(msg, "Использование: /delete <номер или Rномер>")
-        return
-    token = parts[1].strip()
-    if token.upper().startswith("R"):
-        token = token[1:]
-    try:
-        rid = int(token)
-    except Exception:
-        bot.reply_to(msg, "Неверный номер записи.")
-        return
+    if len(parts)<2: return
+    rid = int(parts[1].lstrip("R"))
     ok, rec = delete_record_in_chat(msg.chat.id, rid)
     if ok:
-        bot.reply_to(msg, f"✅ Запись R{rid} удалена. Баланс обновлён: {get_chat_store(msg.chat.id).get('balance',0)} ₽", reply_markup=build_main_keyboard())
+        update_main_window(msg.chat.id, f"✅ Запись R{rid} удалена.")
     else:
-        bot.reply_to(msg, "Запись не найдена.", reply_markup=build_main_keyboard())
-
-
-
+        update_main_window(msg.chat.id, f"❌ Запись R{rid} не найдена.")
 
 # --------------------------------------------
-# ОТСЕК 7 — Обработка callback'ов (кнопки)
+# ОТСЕК 7 — Callback кнопки
 # --------------------------------------------
 @bot.callback_query_handler(func=lambda c: True)
 def handle_callback(call):
-    try:
-        data_cd = call.data
-
-        # --- Кнопка 💰 Баланс
-        if data_cd == "btn_balance":
-            store = get_chat_store(call.message.chat.id)
-            bot.answer_callback_query(call.id, text=f"Баланс: {store.get('balance',0)} ₽")
-            bot.send_message(call.message.chat.id, f"💰 Баланс этого чата: {store.get('balance',0)} ₽", reply_markup=build_main_keyboard())
-
-        # --- Кнопка 📊 Отчёт
-        elif data_cd == "btn_report":
-            cmd_report(call.message)
-            bot.answer_callback_query(call.id)
-
-        # --- Кнопка ⚙️ Сброс
-        elif data_cd == "btn_reset":
-            if str(call.from_user.id) != str(OWNER_ID):
-                bot.answer_callback_query(call.id, text="Только владелец может сбрасывать данные.")
-                return
-            bot.send_message(call.message.chat.id, "Вы уверены? Отправьте /reset для подтверждения.", reply_markup=build_main_keyboard())
-            bot.answer_callback_query(call.id)
-
-        # --- Кнопка ✏️ Редактировать
-        elif data_cd == "btn_edit":
-            kb = build_edit_list_keyboard(call.message.chat.id)
-            if not kb.keyboard or len(kb.keyboard) == 0:
-                bot.send_message(call.message.chat.id, "Нет записей для редактирования в этом чате.", reply_markup=build_main_keyboard())
-                bot.answer_callback_query(call.id)
-                return
-            bot.send_message(call.message.chat.id, "Выберите запись для редактирования или удаления:", reply_markup=kb)
-            bot.answer_callback_query(call.id)
-
-        # --- Кнопка 🚀 Старт
-        elif data_cd == "btn_start":
-            cmd_start(call.message)
-            bot.answer_callback_query(call.id)
-
-        # --- Кнопка 📘 О коде
-        elif data_cd == "btn_cod":
-            bot.answer_callback_query(call.id)
-            cmd_cod(call.message)
-
-        # --- Кнопка выбора транзакции (редактировать)
-        elif data_cd.startswith("edit_select:"):
-            rid = int(data_cd.split(":")[1])
-            chat_state = data.setdefault("tracked_messages", {})
-            chat_key = str(call.message.chat.id)
-            user_states = chat_state.setdefault(chat_key, {})
-            user_states[str(call.from_user.id)] = {"action": "edit_wait_value", "rid": rid}
-            save_data(data)
-            bot.send_message(
-                call.message.chat.id,
-                f"Введите новое значение для R{rid} (например: +500 продажа)\nили нажмите 🗑 Удалить для удаления.",
-                reply_markup=build_main_keyboard()
-            )
-            bot.answer_callback_query(call.id)
-
-        # --- Новая кнопка 🗑 Удалить запись
-        elif data_cd.startswith("delete_record:"):
-            rid = int(data_cd.split(":")[1])
-            ok, rec = delete_record_in_chat(call.message.chat.id, rid)
-            if ok:
-                bot.send_message(call.message.chat.id, f"✅ Запись R{rid} удалена. Баланс обновлён: {get_chat_store(call.message.chat.id).get('balance',0)} ₽", reply_markup=build_main_keyboard())
-                bot.answer_callback_query(call.id, text=f"R{rid} удалена.")
-            else:
-                bot.answer_callback_query(call.id, text="Запись не найдена.")
-
-        else:
-            bot.answer_callback_query(call.id)
-
-    except Exception as e:
-        log_error(f"Ошибка обработки callback: {e}")
-
-
-# 8--------------------------------------------
-# ОТСЕК 8 — Обработка входящих сообщений и пересылка
-# --------------------------------------------
-@bot.message_handler(func=lambda m: True, content_types=["text", "photo", "document", "voice", "video", "audio", "sticker"])
-def handle_message(msg):
-    # Игнорируем сообщения от ботов и без from_user
-    if not getattr(msg, "from_user", None):
-        return
-    if msg.from_user.is_bot:
-        return
-
-    # --- 1. Проверка состояния редактирования (аналог /edit)
-    chat_key = str(msg.chat.id)
-    user_states = data.setdefault("tracked_messages", {}).get(chat_key, {})
-    state = user_states.get(str(msg.from_user.id))
-    if state and state.get("action") == "edit_wait_value":
-        rid = state.get("rid")
-        lines = msg.text.splitlines() if msg.content_type == "text" and msg.text else []
-        if not lines:
-            bot.reply_to(msg, "Введите строку с числом, пример: +500 продажа.", reply_markup=build_main_keyboard())
-            return
-        first_line = lines[0].strip()
-        amt, token = extract_first_number(first_line)
-        if amt is None:
-            bot.reply_to(msg, "Число не обнаружено.", reply_markup=build_main_keyboard())
-            return
-        m = num_re.search(first_line)
-        note = first_line[m.end():].strip() if m else ""
-        raw_token = token
-        # Определяем знак суммы
-        if raw_token.lstrip().startswith("+"):
-            final_amt = amt
-        elif raw_token.lstrip().startswith("-"):
-            final_amt = amt
-        else:
-            final_amt = -abs(amt)
-        ok, updated = update_record_in_chat(msg.chat.id, rid, final_amt, note)
-        user_states.pop(str(msg.from_user.id), None)
+    chat_id = call.message.chat.id
+    data_cd = call.data
+    if data_cd=="btn_balance": update_main_window(chat_id)
+    elif data_cd=="btn_report": update_main_window(chat_id)
+    elif data_cd=="btn_reset":
+        if str(call.from_user.id)!=str(OWNER_ID): return
+        data["chats"][str(chat_id)] = {"balance":0,"records":[],"next_id":1,"active_window_id=None"}
         save_data(data)
-        if ok:
-            bot.reply_to(msg, f"✅ Запись R{rid} обновлена: {updated['amount']} — {updated.get('note','')}\nБаланс: {get_chat_store(msg.chat.id).get('balance',0)} ₽", reply_markup=build_main_keyboard())
-        else:
-            bot.reply_to(msg, "Запись не найдена.", reply_markup=build_main_keyboard())
-        return
-
-    # --- 2. Определение владельца и пересылки
-    is_owner_msg = False
-    if OWNER_ID:
-        try:
-            owner_int = int(OWNER_ID)
-        except Exception:
-            owner_int = None
-        is_owner_msg = (owner_int is not None and msg.from_user.id == owner_int)
-
-    # --- 3. Учет уже пересланных сообщений, чтобы не было дублей
-    processed = data.setdefault("processed_messages", [])
-    msg_key = f"{msg.chat.id}:{msg.message_id}"
-    if msg_key in processed:
-        return
-    processed.append(msg_key)
-    if len(processed) > 500:
-        processed = processed[-250:]
-    data["processed_messages"] = processed
-    save_data(data)
-
-    # --- 4. Пересылка (если сообщение от владельца)
-    if is_owner_msg:
-        for target in list(data.get("forward_targets", [])):
-            try:
-                t = int(target)
-            except Exception:
-                continue
-            # не пересылаем в тот же чат
-            if t == msg.chat.id:
-                # если владелец пишет в целевой чат — пересылаем в личку владельцу
-                if owner_int and t != owner_int:
-                    bot.copy_message(chat_id=owner_int, from_chat_id=msg.chat.id, message_id=msg.message_id)
-                    log_info(f"Владелец написал в цель {t} — переслано в личку владельца {owner_int}")
-                continue
-            try:
-                bot.copy_message(chat_id=t, from_chat_id=msg.chat.id, message_id=msg.message_id)
-                log_info(f"Переслано сообщение владельца в {t}")
-            except Exception as e:
-                log_error(f"Ошибка пересылки в {t}: {e}")
-
-    # --- 5. Обработка текста (учёт по строкам)
-    if msg.content_type == "text" and msg.text:
-        lines = msg.text.splitlines()
-        any_added = False
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            amt, token = extract_first_number(line)
-            if amt is None:
-                continue
-            m = num_re.search(line)
-            note = line[m.end():].strip() if m else ""
-            raw_token = token
-            if raw_token.lstrip().startswith("+"):
-                final_amt = amt
-            elif raw_token.lstrip().startswith("-"):
-                final_amt = amt
-            else:
-                final_amt = -abs(amt)
-            add_record_to_chat(msg.chat.id, final_amt, note, msg.from_user.id)
-            any_added = True
-        if any_added:
-            bot.reply_to(msg, f"✅ Записаны операции. Баланс: {get_chat_store(msg.chat.id).get('balance',0)} ₽", reply_markup=build_main_keyboard())
-            return
-
-    # --- 6. Обработка медиа (если есть подпись)
-    if msg.content_type in ["photo", "document", "video", "audio"] and getattr(msg, "caption", None):
-        lines = msg.caption.splitlines()
-        any_added = False
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            amt, token = extract_first_number(line)
-            if amt is None:
-                continue
-            m = num_re.search(line)
-            note = line[m.end():].strip() if m else ""
-            raw_token = token
-            if raw_token.lstrip().startswith("+"):
-                final_amt = amt
-            elif raw_token.lstrip().startswith("-"):
-                final_amt = amt
-            else:
-                final_amt = -abs(amt)
-            add_record_to_chat(msg.chat.id, final_amt, note, msg.from_user.id)
-            any_added = True
-        if any_added:
-            bot.reply_to(msg, f"✅ Записаны операции из подписи. Баланс: {get_chat_store(msg.chat.id).get('balance',0)} ₽", reply_markup=build_main_keyboard())
-            return
-
+        update_main_window(chat_id, "✅ Данные сброшены владельцем")
+    elif data_cd=="btn_start": cmd_start(call.message)
+    elif data_cd=="btn_cod":
+        update_main_window(chat_id, f"📘 Финансовый бот v{VERSION}")
+    elif data_cd=="btn_edit":
+        update_main_window(chat_id, "✏️ Редактирование — отправьте '+100 заметка' или '-50 хлеб'.")
 
 # --------------------------------------------
-# ОТСЕК 9 — Flask webhook endpoints и автоустановка
+# ОТСЕК 8 — Обработка сообщений
+# --------------------------------------------
+@bot.message_handler(func=lambda m: True, content_types=["text"])
+def handle_message(msg):
+    if not getattr(msg,"from_user",None): return
+    if msg.from_user.is_bot: return
+    lines = msg.text.splitlines()
+    any_added = False
+    for line in lines:
+        line = line.strip()
+        if not line: continue
+        amt, token = extract_first_number(line)
+        if amt is None: continue
+        note = line[num_re.search(line).end():].strip() if num_re.search(line) else ""
+        raw_token = token
+        if raw_token.startswith("+"): final_amt = amt
+        elif raw_token.startswith("-"): final_amt = amt
+        else: final_amt = -abs(amt)
+        add_record_to_chat(msg.chat.id, final_amt, note, msg.from_user.id)
+        any_added = True
+    if any_added:
+        update_main_window(msg.chat.id, "✅ Добавлены новые операции.")
+
+# --------------------------------------------
+# ОТСЕК 9 — Flask webhook
 # --------------------------------------------
 @app.route("/", methods=["GET"])
-def index():
-    return f"Бот версия {VERSION} запущен."
+def index(): return f"Бот версия {VERSION} запущен."
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
     try:
-        raw = request.stream.read().decode("utf-8")
-        update = telebot.types.Update.de_json(raw)
+        update = telebot.types.Update.de_json(request.stream.read().decode("utf-8"))
         bot.process_new_updates([update])
     except Exception as e:
-        log_error(f"Ошибка в webhook: {e}")
+        log_error(f"Webhook error: {e}")
     return "ok", 200
 
 def ensure_webhook():
     try:
-        webhook_url = f"{APP_URL.rstrip('/')}/webhook"
+        url = f"{APP_URL.rstrip('/')}/webhook"
         info = requests.get(f"https://api.telegram.org/bot{TOKEN}/getWebhookInfo", timeout=10).json()
-        current = info.get("result", {}).get("url", "")
-        if current != webhook_url:
-            r = requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params={"url": webhook_url}, timeout=10)
-            try:
-                jr = r.json()
-            except Exception:
-                jr = {"ok": False, "description": r.text}
-            if jr.get("ok"):
-                log_info(f"Webhook установлен: {webhook_url}")
-            else:
-                log_error(f"Ошибка установки webhook: {jr}")
-        else:
-            log_info("Webhook уже установлен корректно.")
+        if info.get("result",{}).get("url","") != url:
+            r = requests.get(f"https://api.telegram.org/bot{TOKEN}/setWebhook", params={"url":url}, timeout=10)
+            if r.json().get("ok"): log_info(f"Webhook установлен: {url}")
     except Exception as e:
-        log_error(f"Ошибка проверки/установки webhook: {e}")
-
-def notify_owner_start():
-    if OWNER_ID is None:
-        return
-    try:
-        owner_int = int(OWNER_ID)
-    except Exception:
-        return
-    try:
-        text = f"💬 Финансовый бот — версия {VERSION} запущен ✅"
-        bot.send_message(owner_int, text, reply_markup=build_main_keyboard())
-        log_info("Уведомление владельцу отправлено.")
-    except Exception as e:
-        log_error(f"Не удалось отправить уведомление владельцу: {e}")
+        log_error(f"Webhook setup error: {e}")
 
 # --------------------------------------------
-# ОТСЕК 10 — Запуск приложения
+# ОТСЕК 10 — Запуск
 # --------------------------------------------
-if __name__ == "__main__":
+if __name__=="__main__":
     ensure_webhook()
-    notify_owner_start()
-    log_info(f"Бот запущен (версия {VERSION})")
+    if OWNER_ID:
+        try: bot.send_message(int(OWNER_ID), f"💬 Бот v{VERSION} запущен ✅")
+        except: pass
     app.run(host="0.0.0.0", port=PORT)
-
-# ============================================
-# Конец кода — версия 9.6.1.6
-# Всего строк: 655
-# ============================================
