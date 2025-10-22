@@ -356,12 +356,18 @@ def handle_message(msg):
     store = get_chat_store(chat_id)
     wait_action = store.get("edit_wait")
 
-    # Авто-добавление записи
     if wait_action is None:
         m = num_re.search(msg.text)
         if m:
             try:
-                amount = int(m.group(1).replace(" ", ""))
+                raw = m.group(1).replace(" ", "")
+                if raw.startswith("+"):
+                    amount = int(raw[1:])        # Приход
+                elif raw.startswith("-"):
+                    amount = -int(raw[1:])       # Расход
+                else:
+                    amount = -int(raw)           # Без знака = расход
+
                 note = msg.text.replace(m.group(1), "").strip()
                 add_record_to_chat(chat_id, amount, note, msg.from_user.id)
                 update_or_send_today_window(chat_id)
