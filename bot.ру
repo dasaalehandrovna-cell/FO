@@ -249,6 +249,7 @@ def update_or_send_today_window(chat_id):
     daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
     overall_balance = store.get("balance", 0)
 
+    # Формируем текст
     if not day_records:
         text = (
             f"📅 {today_key}\n"
@@ -273,19 +274,18 @@ def update_or_send_today_window(chat_id):
     today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
     active_id = today_msgs.get(str(chat_id))
 
-    # Обновляем текущее окно, если оно есть
+    # Пытаемся обновить существующее окно
     if active_id:
         try:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
+            return
         except Exception:
-            sent = bot.send_message(chat_id, text, reply_markup=kb)
-            set_today_active_window(chat_id, sent.message_id)
-        return
+            # Сообщение было удалено — убираем его из active_messages
+            today_msgs.pop(str(chat_id), None)
 
-    # Если окна ещё нет — создаём новое
+    # Создаем новое окно
     sent = bot.send_message(chat_id, text, reply_markup=kb)
     set_today_active_window(chat_id, sent.message_id)
-
 
 # -----------------------------
 # ОТСЕК 8 — Callback кнопок
