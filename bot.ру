@@ -1,6 +1,6 @@
 # ============================================
-# Финансовый бот — версия 9.6.1.7
-# Полная версия с авто-добавлением записей
+# Финансовый бот — версия 9.7.1
+# Полная версия с авто-добавлением записей и правильными знаками
 # ============================================
 
 # -----------------------------
@@ -28,7 +28,7 @@ DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.6.1.7"
+VERSION = "9.7.1"
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
@@ -241,7 +241,6 @@ def update_or_send_today_window(chat_id):
     else:
         lines = [f"📅 {today_key}", "📋 Операции:"]
         for r in day_records[-50:]:
-            # Всегда показываем знак: + для дохода, - для расхода
             sign = "+" if r["amount"] > 0 else "-"
             lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
         lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
@@ -295,7 +294,7 @@ def handle_callback(call):
         update_or_send_today_window(chat_id)
 
 # -----------------------------
-# ОТСЕК 9 — Входящие сообщения (всё в одном окне)
+# ОТСЕК 9 — Входящие сообщения
 # -----------------------------
 num_re = re.compile(r'([+-]?\s*\d+)')
 
@@ -306,34 +305,26 @@ def handle_message(msg):
     wait_action = store.get("edit_wait")
 
     # -----------------------------
-# Авто-добавление записи
-# -----------------------------
-if wait_action is None:
-    m = num_re.search(msg.text)
-    if m:
-        try:
-            raw_amount = m.group(1).replace(" ", "")
-            # Определяем знак:
-            # + → приход (положительное)
-            # - или без знака → расход (отрицательное)
-            if raw_amount.startswith("+"):
-                amount = int(raw_amount[1:])  # приход
-            else:
-                amount = -int(raw_amount.lstrip("-"))  # расход
-            note = msg.text.replace(m.group(1), "").strip()
-            add_record_to_chat(chat_id, amount, note, msg.from_user.id)
-
-            # Обновляем текущее окно вместо создания нового
-            update_or_send_today_window(chat_id)
-
-            # Убираем отдельное сообщение подтверждения
+    # Авто-добавление записи
+    # -----------------------------
+    if wait_action is None:
+        m = num_re.search(msg.text)
+        if m:
             try:
-                bot.answer_callback_query(msg.message_id, "✅ Запись добавлена")
-            except:
-                pass
-        except Exception as e:
-            log_error(f"Ошибка авто-добавления записи: {e}")
-    return
+                raw_amount = m.group(1).replace(" ", "")
+                if raw_amount.startswith("+"):
+                    amount = int(raw_amount[1:])  # приход
+                else:
+                    amount = -int(raw_amount.lstrip("-"))  # расход
+                note = msg.text.replace(m.group(1), "").strip()
+                add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+                update_or_send_today_window(chat_id)
+                try:
+                    bot.answer_callback_query(msg.message_id, "✅ Запись добавлена")
+                except: pass
+            except Exception as e:
+                log_error(f"Ошибка авто-добавления записи: {e}")
+        return
 
     # -----------------------------
     # Редактирование записи
@@ -359,13 +350,16 @@ if wait_action is None:
             return
         parts = msg.text.strip().split(" ", 1)
         try:
-            amount = int(parts[0])
+            raw_amount = parts[0]
+            if raw_amount.startswith("+"):
+                amount = int(raw_amount[1:])
+            else:
+                amount = -int(raw_amount.lstrip("-"))
             note = parts[1] if len(parts) > 1 else ""
             success, _ = update_record_in_chat(chat_id, rid, amount, note)
             store["edit_wait"] = None
             store["edit_target"] = None
             update_or_send_today_window(chat_id)
-
             msg_text = f"✅ Запись {rid} изменена" if success else f"❌ Запись {rid} не найдена"
             try:
                 bot.edit_message_text(msg_text, chat_id, get_today_active_window(chat_id))
@@ -384,7 +378,6 @@ if wait_action is None:
             success, _ = delete_record_in_chat(chat_id, rid)
             store["edit_wait"] = None
             update_or_send_today_window(chat_id)
-
             msg_text = f"✅ Запись {rid} удалена" if success else f"❌ Запись {rid} не найдена"
             try:
                 bot.edit_message_text(msg_text, chat_id, get_today_active_window(chat_id))
@@ -394,7 +387,7 @@ if wait_action is None:
             bot.send_message(chat_id, "Ошибка при удалении записи")
 
 # -----------------------------
-# ОТСЕК 13 — Flask webhook
+# ОТСЕК 10 — Flask webhook
 # -----------------------------
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
@@ -407,7 +400,7 @@ def index():
     return f"Финансовый бот «ФО» — версия {VERSION} работает", 200
 
 # -----------------------------
-# ОТСЕК 14 — Webhook установка и запуск
+# ОТСЕК 11 — Webhook установка и запуск
 # -----------------------------
 def set_webhook():
     url = f"{APP_URL}/{TOKEN}"
@@ -420,7 +413,7 @@ def set_webhook():
         log_error(f"Не удалось установить webhook: {e}")
 
 # -----------------------------
-# ОТСЕК 15 — Планировщик смены дня
+# ОТСЕК 12 — Планировщик смены дня
 # -----------------------------
 def schedule_daily_window_creation():
     def task():
@@ -444,11 +437,10 @@ def schedule_daily_window_creation():
     thread.start()
 
 # -----------------------------
-# ОТСЕК 16 — Запуск
+# ОТСЕК 13 — Запуск приложения
 # -----------------------------
 if __name__ == "__main__":
     set_webhook()
     schedule_daily_window_creation()
-    log_info(f"Бот ФО версии {VERSION} запущен")
+    log_info(f"Бот ФО версии {VERSION} успешно запущен ✅")
     app.run(host="0.0.0.0", port=PORT)
-
