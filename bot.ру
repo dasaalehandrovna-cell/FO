@@ -9,14 +9,15 @@ import csv
 from telebot import types
 
 # Настройки
-TOKEN = "ВАШ_ТОКЕН_БОТА"  # вставь свой токен
+TOKEN = os.environ.get("BOT_TOKEN")  # теперь берём из окружения
 APP_URL = "https://yourapp.onrender.com"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "v3.3"
+VERSION = "v3.4"
 
 bot = telebot.TeleBot(TOKEN)
 app = Flask(__name__)
 
+OWNER_ID = os.environ.get("OWNER_ID")  # сюда можно добавить свой ID владельца
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 data = {"chats": {}}
