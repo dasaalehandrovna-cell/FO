@@ -244,7 +244,7 @@ def update_or_send_today_window(chat_id):
     store = get_chat_store(chat_id)
     day_records = store.get("daily_records", {}).get(today_key, [])
 
-    # Считаем приход и расход
+    # Считаем приход и расход за сегодня
     daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
     daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
     overall_balance = store.get("balance", 0)
@@ -269,15 +269,19 @@ def update_or_send_today_window(chat_id):
         )
         text = "\n".join(lines)
 
+    # Получаем клавиатуру
     kb = build_main_keyboard(chat_id)
+
+    # Проверяем, есть ли активное окно
     today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
     active_id = today_msgs.get(str(chat_id))
 
-    # Если окно уже существует — редактируем текущее
     if active_id:
+        # Обновляем текущее окно
         try:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
         except Exception:
+            # Если окно удалено, создаём новое
             sent = bot.send_message(chat_id, text, reply_markup=kb)
             set_today_active_window(chat_id, sent.message_id)
         return
