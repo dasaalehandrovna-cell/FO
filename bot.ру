@@ -241,8 +241,9 @@ def update_or_send_today_window(chat_id):
     else:
         lines = [f"📅 {today_key}", "📋 Операции:"]
         for r in day_records[-50:]:
-            sign = "+" if r["amount"] > 0 else ""
-            lines.append(f"{r['short_id']}: {sign}{r['amount']} — {r.get('note','')}")
+            # Всегда показываем знак: + для дохода, - для расхода
+            sign = "+" if r["amount"] > 0 else "-"
+            lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
         lines.append(f"\n💰 Баланс: {store.get('balance', 0)} ARS")
         text = "\n".join(lines)
 
@@ -254,7 +255,6 @@ def update_or_send_today_window(chat_id):
         try:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
         except Exception:
-            # Если окно удалено — создаём новое
             sent = bot.send_message(chat_id, text, reply_markup=kb)
             set_today_active_window(chat_id, sent.message_id)
         return
@@ -306,27 +306,34 @@ def handle_message(msg):
     wait_action = store.get("edit_wait")
 
     # -----------------------------
-    # Авто-добавление записи
-    # -----------------------------
-    if wait_action is None:
-        m = num_re.search(msg.text)
-        if m:
+# Авто-добавление записи
+# -----------------------------
+if wait_action is None:
+    m = num_re.search(msg.text)
+    if m:
+        try:
+            raw_amount = m.group(1).replace(" ", "")
+            # Определяем знак:
+            # + → приход (положительное)
+            # - или без знака → расход (отрицательное)
+            if raw_amount.startswith("+"):
+                amount = int(raw_amount[1:])  # приход
+            else:
+                amount = -int(raw_amount.lstrip("-"))  # расход
+            note = msg.text.replace(m.group(1), "").strip()
+            add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+
+            # Обновляем текущее окно вместо создания нового
+            update_or_send_today_window(chat_id)
+
+            # Убираем отдельное сообщение подтверждения
             try:
-                amount = int(m.group(1).replace(" ", ""))
-                note = msg.text.replace(m.group(1), "").strip()
-                add_record_to_chat(chat_id, amount, note, msg.from_user.id)
-
-                # Обновляем текущее окно вместо создания нового
-                update_or_send_today_window(chat_id)
-
-                # Убираем отдельное сообщение подтверждения
-                try:
-                    bot.answer_callback_query(msg.message_id, "✅ Запись добавлена")
-                except:
-                    pass
-            except Exception as e:
-                log_error(f"Ошибка авто-добавления записи: {e}")
-        return
+                bot.answer_callback_query(msg.message_id, "✅ Запись добавлена")
+            except:
+                pass
+        except Exception as e:
+            log_error(f"Ошибка авто-добавления записи: {e}")
+    return
 
     # -----------------------------
     # Редактирование записи
