@@ -459,4 +459,12 @@ if __name__ == "__main__":
     set_webhook()
     schedule_daily_window_creation()
     log_info(f"Бот ФО версии {VERSION} запущен")
+
+    # Сообщение владельцу в Telegram
+    try:
+        if OWNER_ID:
+            bot.send_message(int(OWNER_ID), f"✅ Бот запущен и работает! (версия {VERSION})")
+    except Exception as e:
+        log_error(f"Не удалось отправить сообщение о запуске: {e}")
+
     app.run(host="0.0.0.0", port=PORT)
