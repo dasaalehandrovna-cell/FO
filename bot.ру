@@ -229,14 +229,14 @@ def build_edit_keyboard():
     return kb
 
 # -----------------------------
-# ОТСЕК 7 — Обновление/создание окна (всё в одном сообщении)
+# ОТСЕК 7 — Обновление/создание окна (единое сообщение дня)
 # -----------------------------
 def update_or_send_today_window(chat_id):
     today_key = get_today_key()
     store = get_chat_store(chat_id)
     day_records = store.get("daily_records", {}).get(today_key, [])
 
-    # Формируем текст окна
+    # Формирование текста окна
     if not day_records:
         text = f"📅 {today_key}\nПока нет операций.\n💰 Баланс: {store.get('balance', 0)} ARS"
     else:
@@ -249,55 +249,99 @@ def update_or_send_today_window(chat_id):
 
     kb = build_main_keyboard(chat_id)
 
-    # --- ВСЁ ПРОИСХОДИТ В ОДНОМ ОКНЕ ---
     today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
     active_id = today_msgs.get(str(chat_id))
 
-    try:
-        if active_id:
-            # Пытаемся обновить существующее сообщение
+    # Попытка обновить текущее активное сообщение
+    if active_id:
+        try:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-        else:
-            # Если нет активного окна — создаём одно и запоминаем
-            sent = bot.send_message(chat_id, text, reply_markup=kb)
-            set_today_active_window(chat_id, sent.message_id)
-    except Exception as e:
-        # Если сообщение удалено пользователем или ошибка — создаём новое окно и запоминаем его
-        log_error(f"Ошибка при обновлении окна: {e}")
-        sent = bot.send_message(chat_id, text, reply_markup=kb)
-        set_today_active_window(chat_id, sent.message_id)
+            return  # ✅ Не создаём новое сообщение, если успешно отредактировали
+        except Exception as e:
+            log_error(f"Ошибка обновления окна: {e}")
+
+    # Если нет активного окна (или ошибка) — создаём новое
+    sent = bot.send_message(chat_id, text, reply_markup=kb)
+    set_today_active_window(chat_id, sent.message_id)
 
 # -----------------------------
-# ОТСЕК 8 — Callback кнопок
+# ОТСЕК 8 — Callback кнопок (всё в одном окне)
 # -----------------------------
 @bot.callback_query_handler(func=lambda c: True)
 def handle_callback(call):
     chat_id = call.message.chat.id
     store = get_chat_store(chat_id)
+    today_msg_id = get_today_active_window(chat_id)
 
-    if call.data in ["btn_balance", "btn_report"]:
-        update_or_send_today_window(chat_id)
-    elif call.data == "btn_edit":
-        bot.edit_message_text("Выберите действие:", chat_id, call.message.message_id, reply_markup=build_edit_keyboard())
-    elif call.data == "edit_change":
-        store["edit_wait"] = "change_id"
-        bot.send_message(chat_id, "Введите ID записи для изменения:")
-    elif call.data == "edit_delete":
-        store["edit_wait"] = "delete_id"
-        bot.send_message(chat_id, "Введите ID записи для удаления:")
-    elif call.data == "edit_back":
-        store["edit_wait"] = None
-        update_or_send_today_window(chat_id)
-    elif call.data == "btn_reset":
-        store["edit_wait"] = None
-        bot.send_message(chat_id, "Данные обнуляются…")
-        store["records"] = []
-        store["daily_records"] = {}
-        store["balance"] = 0
-        data["records"] = []
-        data["overall_balance"] = 0
-        save_data(data)
-        update_or_send_today_window(chat_id)
+    try:
+        if call.data in ["btn_balance", "btn_report"]:
+            # Просто обновляем окно
+            update_or_send_today_window(chat_id)
+            bot.answer_callback_query(call.id, "📊 Обновлено")
+            return
+
+        elif call.data == "btn_edit":
+            text = "Выберите действие для редактирования:"
+            kb = build_edit_keyboard()
+            if today_msg_id:
+                bot.edit_message_text(text, chat_id, today_msg_id, reply_markup=kb)
+            else:
+                sent = bot.send_message(chat_id, text, reply_markup=kb)
+                set_today_active_window(chat_id, sent.message_id)
+            return
+
+        elif call.data == "edit_change":
+            store["edit_wait"] = "change_id"
+            bot.send_message(chat_id, "Введите ID записи для изменения:")
+            return
+
+        elif call.data == "edit_delete":
+            store["edit_wait"] = "delete_id"
+            bot.send_message(chat_id, "Введите ID записи для удаления:")
+            return
+
+        elif call.data == "edit_back":
+            store["edit_wait"] = None
+            update_or_send_today_window(chat_id)
+            bot.answer_callback_query(call.id, "↩️ Возврат")
+            return
+
+        elif call.data == "btn_reset":
+            store["edit_wait"] = None
+            store["records"] = []
+            store["daily_records"] = {}
+            store["balance"] = 0
+            data["records"] = []
+            data["overall_balance"] = 0
+            save_data(data)
+            update_or_send_today_window(chat_id)
+            bot.answer_callback_query(call.id, "🔄 Данные сброшены")
+            return
+
+        elif call.data == "btn_start":
+            update_or_send_today_window(chat_id)
+            bot.answer_callback_query(call.id, "🚀 Обновлено")
+            return
+
+        elif call.data == "btn_cod":
+            if today_msg_id:
+                bot.edit_message_text(
+                    "ℹ️ Финансовый бот ФО версии 9.7.1\nВсе операции происходят в одном окне ✅",
+                    chat_id,
+                    today_msg_id,
+                    reply_markup=build_main_keyboard(chat_id)
+                )
+            else:
+                sent = bot.send_message(chat_id, "ℹ️ Финансовый бот ФО версии 9.7.1", reply_markup=build_main_keyboard(chat_id))
+                set_today_active_window(chat_id, sent.message_id)
+            return
+
+    except Exception as e:
+        log_error(f"Ошибка в callback: {e}")
+        try:
+            bot.answer_callback_query(call.id, "⚠️ Ошибка")
+        except:
+            pass
 
 # -----------------------------
 # ОТСЕК 9 — Входящие сообщения
