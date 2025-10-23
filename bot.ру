@@ -364,7 +364,6 @@ def handle_callback(call):
     if call.data == "btn_cod":
         bot.send_message(chat_id, f"ℹ️ Финансовый бот — версия {VERSION}")
         return
-
 # -----------------------------
 # ОТСЕК 9 — Входящие сообщения
 # -----------------------------
