@@ -305,9 +305,22 @@ def handle_callback(call):
     # -----------------------------
     # Баланс и отчёт
     # -----------------------------
-    if call.data in ["btn_balance", "btn_report"]:
-        update_or_send_today_window(chat_id)
-        return
+    if call.data == "btn_balance":
+    # При нажатии на "Баланс" показываем инфо-окно
+    text = (
+        f"💰 Текущий баланс: {get_chat_store(chat_id).get('balance', 0)} ARS\n"
+        f"📦 Общий приход/расход за сегодня обновляется автоматически.\n\n"
+        f"ℹ️ Финансовый бот — версия {VERSION}\n"
+        f"© 2025, FO Systems"
+    )
+    kb = types.InlineKeyboardMarkup()
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="btn_start"))
+    bot.send_message(chat_id, text, reply_markup=kb)
+    return
+
+if call.data == "btn_report":
+    update_or_send_today_window(chat_id)
+    return
 
     # -----------------------------
     # Отправка CSV
