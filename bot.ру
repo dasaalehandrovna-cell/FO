@@ -306,25 +306,29 @@ def handle_callback(call):
     # Баланс и отчёт
     # -----------------------------
     if call.data == "btn_balance":
-    # При нажатии на "Баланс" показываем инфо-окно
-    text = (
-        f"💰 Текущий баланс: {get_chat_store(chat_id).get('balance', 0)} ARS\n"
-        f"📦 Общий приход/расход за сегодня обновляется автоматически.\n\n"
-        f"ℹ️ Финансовый бот — версия {VERSION}\n"
-        f"© 2025, FO Systems"
-    )
-    kb = types.InlineKeyboardMarkup()
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="btn_start"))
-    bot.send_message(chat_id, text, reply_markup=kb)
-    return
+        # При нажатии на "Баланс" показываем инфо-окно
+        today_key = get_today_key()
+        day_records = store.get("daily_records", {}).get(today_key, [])
+        daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
+        daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
+        overall_balance = store.get("balance", 0)
 
-if call.data == "btn_report":
-    update_or_send_today_window(chat_id)
-    return
+        text = (
+            f"💰 Текущий баланс: {overall_balance} ARS\n"
+            f"📈 Приход за сегодня: {daily_income} ARS\n"
+            f"📉 Расход за сегодня: {abs(daily_expense)} ARS\n\n"
+            f"ℹ️ Финансовый бот — версия {VERSION}\n"
+            f"© 2025, FO Systems"
+        )
 
-if call.data == "btn_report":
-    update_or_send_today_window(chat_id)
-    return
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="btn_start"))
+        bot.send_message(chat_id, text, reply_markup=kb)
+        return
+
+    if call.data == "btn_report":
+        update_or_send_today_window(chat_id)
+        return
 
     # -----------------------------
     # Отправка CSV
@@ -371,6 +375,16 @@ if call.data == "btn_report":
         update_or_send_today_window(chat_id)
         return
 
+    # -----------------------------
+    # Обновление/инфо
+    # -----------------------------
+    if call.data == "btn_start":
+        update_or_send_today_window(chat_id)
+        return
+
+    if call.data == "btn_cod":
+        bot.send_message(chat_id, f"ℹ️ Финансовый бот — версия {VERSION}")
+        return
     # -----------------------------
     # Обновление/инфо
     # -----------------------------
