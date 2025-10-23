@@ -235,7 +235,6 @@ def build_edit_keyboard():
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="edit_back"))
     return kb
 
-
 # -----------------------------
 # ОТСЕК 7 — Обновление/создание окна
 # -----------------------------
@@ -244,10 +243,12 @@ def update_or_send_today_window(chat_id):
     store = get_chat_store(chat_id)
     day_records = store.get("daily_records", {}).get(today_key, [])
 
+    # Считаем приход и расход
     daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
     daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
     overall_balance = store.get("balance", 0)
 
+    # Формируем текст окна
     if not day_records:
         text = (
             f"📅 {today_key}\n"
@@ -272,20 +273,24 @@ def update_or_send_today_window(chat_id):
     today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
     active_id = today_msgs.get(str(chat_id))
 
+    # Если есть активное окно — редактируем его
     if active_id:
         try:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
         except telebot.apihelper.ApiException as e:
-            # Если не получилось редактировать — не создаём новое сообщение
-            log_error(f"Не удалось редактировать существующее окно для {chat_id}: {e}")
+            log_error(f"Не удалось редактировать текущее окно для {chat_id}: {e}")
         return
 
-    # Если окна ещё нет — создаём новое (новый чат или первый раз за день)
+    # Если окна ещё нет — создаём новое
     try:
         sent = bot.send_message(chat_id, text, reply_markup=kb)
-        set_today_active_window(chat_id, sent.message_id)
+        # Запоминаем ID нового окна
+        today_msgs[str(chat_id)] = sent.message_id
+        save_data(data)
     except Exception as e:
         log_error(f"Ошибка при создании нового окна для {chat_id}: {e}")
+
+
 # -----------------------------
 # ОТСЕК 8 — Callback кнопок
 # -----------------------------
@@ -297,7 +302,7 @@ def handle_callback(call):
     day_records = store.get("daily_records", {}).get(today_key, [])
 
     # -----------------------------
-    # Кнопка Баланс
+    # Баланс — отдельное окно
     # -----------------------------
     if call.data == "btn_balance":
         daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
@@ -318,7 +323,7 @@ def handle_callback(call):
         return
 
     # -----------------------------
-    # Кнопка Отчёт
+    # Отчёт — редактируем текущее окно
     # -----------------------------
     if call.data == "btn_report":
         daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
@@ -346,7 +351,7 @@ def handle_callback(call):
             text = "\n".join(lines)
 
         try:
-            # Пытаемся редактировать текущее сообщение
+            # Редактируем текущее сообщение, где была нажата кнопка
             bot.edit_message_text(
                 text,
                 chat_id,
@@ -355,7 +360,7 @@ def handle_callback(call):
             )
         except telebot.apihelper.ApiException as e:
             log_error(f"Ошибка редактирования отчёта: {e}")
-            # Если не удалось редактировать, отправляем новое сообщение
+            # Если редактировать не удалось, отправляем новое сообщение
             bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
         return
 
