@@ -238,7 +238,7 @@ def build_edit_keyboard():
 # -----------------------------
 # ОТСЕК 7 — Обновление/создание окна
 # -----------------------------
-def update_or_send_today_window(chat_id, create_if_missing=True):
+def update_or_send_today_window(chat_id, show_report=False):
     today_key = get_today_key()
     store = get_chat_store(chat_id)
     day_records = store.get("daily_records", {}).get(today_key, [])
@@ -247,31 +247,44 @@ def update_or_send_today_window(chat_id, create_if_missing=True):
     daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
     overall_balance = store.get("balance", 0)
 
-    if not day_records:
-        text = (
-            f"📅 {today_key}\n"
-            f"Пока нет операций.\n"
-            f"💵 Приход: {daily_income} ARS\n"
-            f"💸 Расход: {abs(daily_expense)} ARS\n"
-            f"💰 Общий остаток: {overall_balance} ARS"
-        )
+    if show_report:
+        # Формируем текст отчёта — только расходы
+        expenses = [r for r in day_records if r["amount"] < 0]
+        daily_expense_total = sum(abs(r["amount"]) for r in expenses)
+        if not expenses:
+            text = f"📅 {today_key}\nПока нет расходов за сегодня.\n💸 Расход за день: 0 ARS"
+        else:
+            lines = [f"📅 {today_key}", "📋 Расходы за день:"]
+            for r in expenses[-30:]:
+                lines.append(f"{r['short_id']}: -{abs(r['amount'])} — {r.get('note','')}")
+            lines.append(f"\n💸 Расход за день: {daily_expense_total} ARS")
+            text = "\n".join(lines)
     else:
-        lines = [f"📅 {today_key}", "📋 Операции:"]
-        for r in day_records[-50:]:
-            sign = "+" if r["amount"] > 0 else "-"
-            lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
-        lines.append(
-            f"\n💵 Приход: {daily_income} ARS\n"
-            f"💸 Расход: {abs(daily_expense)} ARS\n"
-            f"💰 Общий остаток: {overall_balance} ARS"
-        )
-        text = "\n".join(lines)
+        # Стандартное окно дня
+        if not day_records:
+            text = (
+                f"📅 {today_key}\n"
+                f"Пока нет операций.\n"
+                f"💵 Приход: {daily_income} ARS\n"
+                f"💸 Расход: {abs(daily_expense)} ARS\n"
+                f"💰 Общий остаток: {overall_balance} ARS"
+            )
+        else:
+            lines = [f"📅 {today_key}", "📋 Операции:"]
+            for r in day_records[-50:]:
+                sign = "+" if r["amount"] > 0 else "-"
+                lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
+            lines.append(
+                f"\n💵 Приход: {daily_income} ARS\n"
+                f"💸 Расход: {abs(daily_expense)} ARS\n"
+                f"💰 Общий остаток: {overall_balance} ARS"
+            )
+            text = "\n".join(lines)
 
     kb = build_main_keyboard(chat_id)
     today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
     active_id = today_msgs.get(str(chat_id))
 
-    # Если активное окно есть — редактируем его
     if active_id:
         try:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
@@ -279,25 +292,13 @@ def update_or_send_today_window(chat_id, create_if_missing=True):
             log_error(f"Не удалось редактировать окно {active_id} для чата {chat_id}: {e}")
         return
 
-    # Если create_if_missing=False — не создаём новое окно
-    if not create_if_missing:
-        return
-
-    # Создаём новое окно, если активного нет
+    # Создаём новое окно только если его ещё нет
     try:
         sent = bot.send_message(chat_id, text, reply_markup=kb)
         today_msgs[str(chat_id)] = sent.message_id
         save_data(data)
     except Exception as e:
         log_error(f"Ошибка при создании нового окна для {chat_id}: {e}")
-@bot.message_handler(commands=["start"])
-def handle_start(msg):
-    chat_id = msg.chat.id
-    today_key = get_today_key()
-    today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
-    
-    # Создаём окно только если его ещё нет
-    update_or_send_today_window(chat_id, create_if_missing=True)
 
 
 # -----------------------------
@@ -309,13 +310,10 @@ def handle_callback(call):
     store = get_chat_store(chat_id)
     today_key = get_today_key()
     day_records = store.get("daily_records", {}).get(today_key, [])
-
     today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
     active_id = today_msgs.get(str(chat_id))
 
-    # -----------------------------
-    # Кнопка "Баланс"
-    # -----------------------------
+    # ----------- Баланс -----------
     if call.data == "btn_balance":
         daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
         daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
@@ -329,46 +327,19 @@ def handle_callback(call):
         )
 
         if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка редактирования окна (Баланс): {e}")
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
         else:
             update_or_send_today_window(chat_id)
-
         bot.answer_callback_query(call.id, "Баланс обновлён ✅")
         return
 
-    # -----------------------------
-    # Кнопка "Отчёт" — только расходы текущего дня
-    # -----------------------------
+    # ----------- Отчёт (расходы) -----------
     if call.data == "btn_report":
-        expenses = [r for r in day_records if r["amount"] < 0]
-        daily_expense_total = sum(abs(r["amount"]) for r in expenses)
-
-        if not expenses:
-            text = f"📅 {today_key}\nПока нет расходов за сегодня.\n💸 Расход за день: 0 ARS"
-        else:
-            lines = [f"📅 {today_key}", "📋 Расходы за день:"]
-            for r in expenses[-30:]:
-                lines.append(f"{r['short_id']}: -{abs(r['amount'])} — {r.get('note','')}")
-            lines.append(f"\n💸 Расход за день: {daily_expense_total} ARS")
-            text = "\n".join(lines)
-
-        if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка редактирования окна (Отчёт расходов): {e}")
-        else:
-            update_or_send_today_window(chat_id)
-
+        update_or_send_today_window(chat_id, show_report=True)
         bot.answer_callback_query(call.id, "Отчёт расходов обновлён 📊")
         return
 
-    # -----------------------------
-    # Кнопка "CSV"
-    # -----------------------------
+    # ----------- CSV -----------
     if call.data == "btn_csv":
         try:
             with open(CSV_FILE, "rb") as f:
@@ -379,9 +350,7 @@ def handle_callback(call):
             bot.answer_callback_query(call.id)
         return
 
-    # -----------------------------
-    # Кнопка "Сброс данных"
-    # -----------------------------
+    # ----------- Сброс данных -----------
     if call.data == "btn_reset":
         store["records"] = []
         store["daily_records"] = {}
@@ -393,17 +362,13 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, "Данные сброшены 🧹")
         return
 
-    # -----------------------------
-    # Кнопка "Обновить"
-    # -----------------------------
+    # ----------- Обновить окно -----------
     if call.data == "btn_start":
         update_or_send_today_window(chat_id)
         bot.answer_callback_query(call.id, "Окно обновлено 🔄")
         return
 
-    # -----------------------------
-    # Кнопка "Инфо" — список команд и инструкция
-    # -----------------------------
+    # ----------- Инфо (список команд) -----------
     if call.data == "btn_cod":
         info_text = (
             f"ℹ️ Финансовый бот — версия {VERSION}\n\n"
@@ -421,11 +386,9 @@ def handle_callback(call):
             "200 Такси\n\n"
             "✏️ Редактирование записи через кнопки \"Изменить\" / \"Удалить\""
         )
-
         bot.send_message(chat_id, info_text, reply_markup=None)
         bot.answer_callback_query(call.id)
         return
-
 # -----------------------------
 # ОТСЕК 9 — Входящие сообщения
 # -----------------------------
