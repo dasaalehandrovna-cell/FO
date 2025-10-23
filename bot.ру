@@ -322,6 +322,10 @@ if call.data == "btn_report":
     update_or_send_today_window(chat_id)
     return
 
+if call.data == "btn_report":
+    update_or_send_today_window(chat_id)
+    return
+
     # -----------------------------
     # Отправка CSV
     # -----------------------------
