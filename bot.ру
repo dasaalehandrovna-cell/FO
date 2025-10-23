@@ -340,46 +340,32 @@ def handle_callback(call):
         return
 
     # -----------------------------
-    # Кнопка "Отчёт" — показать дневной отчёт в том же окне
-    # -----------------------------
-    if call.data == "btn_report":
-        daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
-        daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
-        overall_balance = store.get("balance", 0)
+# Кнопка "Отчёт" — только расходы текущего дня
+# -----------------------------
+if call.data == "btn_report":
+    # Отбираем только расходы (отрицательные суммы)
+    expenses = [r for r in day_records if r["amount"] < 0]
+    daily_expense_total = sum(abs(r["amount"]) for r in expenses)
+    
+    if not expenses:
+        text = f"📅 {today_key}\nПока нет расходов за сегодня.\n💸 Расход за день: 0 ARS"
+    else:
+        lines = [f"📅 {today_key}", "📋 Расходы за день:"]
+        for r in expenses[-30:]:  # Показываем до 30 последних расходов
+            lines.append(f"{r['short_id']}: -{abs(r['amount'])} — {r.get('note','')}")
+        lines.append(f"\n💸 Расход за день: {daily_expense_total} ARS")
+        text = "\n".join(lines)
 
-        if not day_records:
-            text = (
-                f"📅 {today_key}\n"
-                f"Пока нет операций.\n\n"
-                f"💵 Приход: {daily_income} ARS\n"
-                f"💸 Расход: {daily_expense} ARS\n"
-                f"💰 Остаток: {overall_balance} ARS"
-            )
-        else:
-            lines = [f"📅 {today_key}", "📋 Операции:"]
-            for r in day_records[-30:]:
-                sign = "+" if r["amount"] > 0 else "-"
-                lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note', '')}")
-            lines.append(
-                f"\n💵 Приход: {daily_income} ARS\n"
-                f"💸 Расход: {daily_expense} ARS\n"
-                f"💰 Остаток: {overall_balance} ARS"
-            )
-            text = "\n".join(lines)
+    if active_id:
+        try:
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
+        except telebot.apihelper.ApiException as e:
+            log_error(f"Ошибка редактирования окна (Отчёт расходов): {e}")
+    else:
+        update_or_send_today_window(chat_id)
 
-        today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
-        active_id = today_msgs.get(str(chat_id))
-
-        if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка редактирования окна (отчёт): {e}")
-        else:
-            update_or_send_today_window(chat_id)
-
-        bot.answer_callback_query(call.id, "Отчёт обновлён 📊")
-        return
+    bot.answer_callback_query(call.id, "Отчёт расходов обновлён 📊")
+    return
 
     # -----------------------------
     # Кнопка "CSV" — отправка файла
