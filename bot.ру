@@ -460,6 +460,100 @@ def handle_message(msg):
             bot.send_message(chat_id, msg_text)
         except:
             bot.send_message(chat_id, "Ошибка при удалении записи")
+
+# -----------------------------
+# ОТСЕК 10 — Команды с "/"
+# -----------------------------
+@bot.message_handler(commands=["start"])
+def cmd_start(msg):
+    chat_id = msg.chat.id
+    # Создаём окно только если его ещё нет
+    update_or_send_today_window(chat_id, create_if_missing=True)
+    bot.send_message(chat_id, f"✅ Бот запущен! Версия {VERSION}")
+
+@bot.message_handler(commands=["balance"])
+def cmd_balance(msg):
+    chat_id = msg.chat.id
+    store = get_chat_store(chat_id)
+    today_key = get_today_key()
+    day_records = store.get("daily_records", {}).get(today_key, [])
+
+    daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
+    daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
+    overall_balance = store.get("balance", 0)
+
+    text = (
+        f"📅 {today_key}\n\n"
+        f"💰 Общий остаток: {overall_balance} ARS\n"
+        f"💵 Приход за сегодня: {daily_income} ARS\n"
+        f"💸 Расход за сегодня: {abs(daily_expense)} ARS"
+    )
+    update_or_send_today_window(chat_id)
+    bot.send_message(chat_id, text)
+
+@bot.message_handler(commands=["report"])
+def cmd_report(msg):
+    chat_id = msg.chat.id
+    store = get_chat_store(chat_id)
+    today_key = get_today_key()
+    day_records = store.get("daily_records", {}).get(today_key, [])
+    expenses = [r for r in day_records if r["amount"] < 0]
+    daily_expense_total = sum(abs(r["amount"]) for r in expenses)
+
+    if not expenses:
+        text = f"📅 {today_key}\nПока нет расходов за сегодня.\n💸 Расход за день: 0 ARS"
+    else:
+        lines = [f"📅 {today_key}", "📋 Расходы за день:"]
+        for r in expenses[-30:]:
+            lines.append(f"{r['short_id']}: -{abs(r['amount'])} — {r.get('note','')}")
+        lines.append(f"\n💸 Расход за день: {daily_expense_total} ARS")
+        text = "\n".join(lines)
+
+    update_or_send_today_window(chat_id)
+    bot.send_message(chat_id, text)
+
+@bot.message_handler(commands=["csv"])
+def cmd_csv(msg):
+    chat_id = msg.chat.id
+    try:
+        with open(CSV_FILE, "rb") as f:
+            bot.send_document(chat_id, f, caption="📂 Ваш файл data.csv")
+    except Exception as e:
+        bot.send_message(chat_id, f"❌ Ошибка при отправке CSV: {e}")
+
+@bot.message_handler(commands=["reset"])
+def cmd_reset(msg):
+    chat_id = msg.chat.id
+    store = get_chat_store(chat_id)
+    store["records"] = []
+    store["daily_records"] = {}
+    store["balance"] = 0
+    data["records"] = []
+    data["overall_balance"] = 0
+    save_data(data)
+    update_or_send_today_window(chat_id)
+    bot.send_message(chat_id, "🧹 Данные сброшены")
+
+@bot.message_handler(commands=["info"])
+def cmd_info(msg):
+    chat_id = msg.chat.id
+    info_text = (
+        f"ℹ️ Финансовый бот — версия {VERSION}\n\n"
+        "📌 Доступные команды:\n"
+        "/start - Запуск бота и создание окна отчёта на сегодня\n"
+        "/balance - Показать общий остаток за день\n"
+        "/report - Показать список расходов текущего дня\n"
+        "/csv - Скачать файл с историей операций\n"
+        "/reset - Полностью очистить все записи\n"
+        "/info - Показать это окно со списком команд\n\n"
+        "📝 Добавление операций:\n"
+        "+500 Зарплата\n"
+        "-150 Обед\n"
+        "200 Такси\n\n"
+        "✏️ Редактирование записи через кнопки \"Изменить\" / \"Удалить\""
+    )
+    bot.send_message(chat_id, info_text)
+
 # -----------------------------
 # ОТСЕК 13 — Flask webhook
 # -----------------------------
