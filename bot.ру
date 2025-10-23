@@ -329,7 +329,48 @@ def handle_callback(call):
     if call.data == "btn_report":
         update_or_send_today_window(chat_id)
         return
+# -----------------------------
+    # Отчёт
+    # -----------------------------
+    if call.data == "btn_report":
+        # Формируем отчёт прямо в том же сообщении (обновляем текст)
+        today_key = get_today_key()
+        day_records = store.get("daily_records", {}).get(today_key, [])
+        daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
+        daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
+        overall_balance = store.get("balance", 0)
 
+        if not day_records:
+            text = (
+                f"📅 {today_key}\n"
+                f"Пока нет операций.\n\n"
+                f"💵 Приход: {daily_income} ARS\n"
+                f"💸 Расход: {daily_expense} ARS\n"
+                f"💰 Общий остаток: {overall_balance} ARS"
+            )
+        else:
+            lines = [f"📅 {today_key}", "📋 Операции:"]
+            for r in day_records[-30:]:  # показываем последние 30
+                sign = "+" if r["amount"] > 0 else "-"
+                lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
+            lines.append(
+                f"\n💵 Приход: {daily_income} ARS\n"
+                f"💸 Расход: {abs(daily_expense)} ARS\n"
+                f"💰 Общий остаток: {overall_balance} ARS"
+            )
+            text = "\n".join(lines)
+
+        # Редактируем то же сообщение, где нажали кнопку
+        try:
+            bot.edit_message_text(
+                text,
+                chat_id,
+                call.message.message_id,
+                reply_markup=build_main_keyboard(chat_id)
+            )
+        except Exception as e:
+            log_error(f"Ошибка при редактировании отчёта: {e}")
+        return
     # -----------------------------
     # Отправка CSV
     # -----------------------------
