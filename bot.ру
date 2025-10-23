@@ -293,6 +293,7 @@ def update_or_send_today_window(chat_id):
     # Если окна ещё нет — создаём новое
     sent = bot.send_message(chat_id, text, reply_markup=kb)
     set_today_active_window(chat_id, sent.message_id)
+
 # -----------------------------
 # ОТСЕК 8 — Callback кнопок
 # -----------------------------
@@ -300,14 +301,13 @@ def update_or_send_today_window(chat_id):
 def handle_callback(call):
     chat_id = call.message.chat.id
     store = get_chat_store(chat_id)
+    today_key = get_today_key()
+    day_records = store.get("daily_records", {}).get(today_key, [])
 
     # -----------------------------
-    # Баланс
+    # Кнопка Баланс
     # -----------------------------
     if call.data == "btn_balance":
-        # При нажатии на "Баланс" показываем отдельное информационное окно
-        today_key = get_today_key()
-        day_records = store.get("daily_records", {}).get(today_key, [])
         daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
         daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
         overall_balance = store.get("balance", 0)
@@ -326,12 +326,9 @@ def handle_callback(call):
         return
 
     # -----------------------------
-    # Отчёт
+    # Кнопка Отчёт
     # -----------------------------
     if call.data == "btn_report":
-        # Формируем отчёт прямо в том же сообщении (обновляем текст)
-        today_key = get_today_key()
-        day_records = store.get("daily_records", {}).get(today_key, [])
         daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
         daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
         overall_balance = store.get("balance", 0)
@@ -346,7 +343,7 @@ def handle_callback(call):
             )
         else:
             lines = [f"📅 {today_key}", "📋 Операции:"]
-            for r in day_records[-30:]:  # показываем последние 30 операций
+            for r in day_records[-30:]:
                 sign = "+" if r["amount"] > 0 else "-"
                 lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
             lines.append(
@@ -357,14 +354,17 @@ def handle_callback(call):
             text = "\n".join(lines)
 
         try:
+            # Пытаемся редактировать текущее сообщение
             bot.edit_message_text(
                 text,
                 chat_id,
                 call.message.message_id,
                 reply_markup=build_main_keyboard(chat_id)
             )
-        except Exception as e:
-            log_error(f"Ошибка при редактировании отчёта: {e}")
+        except telebot.apihelper.ApiException as e:
+            log_error(f"Ошибка редактирования отчёта: {e}")
+            # Если не удалось редактировать, отправляем новое сообщение
+            bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
         return
 
     # -----------------------------
@@ -412,7 +412,7 @@ def handle_callback(call):
         return
 
     # -----------------------------
-    # Обновление/инфо
+    # Обновление / Назад / Инфо
     # -----------------------------
     if call.data == "btn_start":
         update_or_send_today_window(chat_id)
@@ -421,6 +421,7 @@ def handle_callback(call):
     if call.data == "btn_cod":
         bot.send_message(chat_id, f"ℹ️ Финансовый бот — версия {VERSION}")
         return
+
 # -----------------------------
 # ОТСЕК 9 — Входящие сообщения
 # -----------------------------
