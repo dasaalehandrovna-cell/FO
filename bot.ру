@@ -278,10 +278,17 @@ def build_confirm_delete_keyboard(rid):
 # Обновление/создание окна
 # -----------------------------
 def update_or_send_today_window(chat_id, create_if_missing=True):
+# -----------------------------
+# Новый функционал: редактирование с дублированием окна
+# -----------------------------
+def edit_then_duplicate_window(chat_id):
     today_key = get_today_key()
     store = get_chat_store(chat_id)
-    day_records = store.get("daily_records", {}).get(today_key, [])
+    today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
+    old_id = today_msgs.get(str(chat_id))
 
+    # Формируем текст и клавиатуру
+    day_records = store.get("daily_records", {}).get(today_key, [])
     daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
     daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
     overall_balance = store.get("balance", 0)
@@ -307,24 +314,31 @@ def update_or_send_today_window(chat_id, create_if_missing=True):
         text = "\n".join(lines)
 
     kb = build_main_keyboard(chat_id)
-    today_msgs = data.setdefault("active_messages", {}).setdefault(get_today_key(), {})
-    active_id = today_msgs.get(str(chat_id))
 
-    if active_id:
+    # Редактируем старое окно
+    if old_id:
         try:
-            bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-        except telebot.apihelper.ApiException as e:
-            log_error(f"Не удалось редактировать окно {active_id} для чата {chat_id}: {e}")
-        return
+            bot.edit_message_text(text, chat_id, old_id, reply_markup=kb)
+        except:
+            pass
 
-    if not create_if_missing:
-        return
+    # Через 2 секунды создаём дубликат и удаляем старое
+    def duplicate_and_delete_old():
+        time.sleep(2)
+        try:
+            sent = bot.send_message(chat_id, text, reply_markup=kb)
+            today_msgs[str(chat_id)] = sent.message_id
+            save_data(data)
+            if old_id:
+                time.sleep(0.5)
+                try:
+                    bot.delete_message(chat_id, old_id)
+                except:
+                    pass
+        except Exception as e:
+            log_error(f"Ошибка дублирования окна: {e}")
 
-    try:
-        sent = bot.send_message(chat_id, text, reply_markup=kb)
-        set_today_active_window(chat_id, sent.message_id)
-    except Exception as e:
-        log_error(f"Ошибка при создании нового окна для {chat_id}: {e}")
+    threading.Thread(target=duplicate_and_delete_old, daemon=True).start()
 
 # -----------------------------
 # Callback обработчик
@@ -749,7 +763,7 @@ def handle_message(msg):
             amount = parse_amount_token(raw_clean)
             note = msg.text.replace(m.group(0), "").strip()
             add_record_to_chat(chat_id, amount, note, msg.from_user.id)
-            update_or_send_today_window(chat_id)
+            edit_then_duplicate_window(chat_id)
         except Exception as e:
             log_error(f"Ошибка авто-добавления записи: {e}")
     return
