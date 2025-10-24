@@ -35,6 +35,19 @@ bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
 
 # -----------------------------
+# Автоудаление сообщений
+# -----------------------------
+def schedule_auto_delete(chat_id, message_id, delay=30):
+    """Удаляет сообщение через delay секунд (по умолчанию 30)."""
+    def delete_later():
+        time.sleep(delay)
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+    threading.Thread(target=delete_later, daemon=True).start()
+
+# -----------------------------
 # Логирование
 # -----------------------------
 logging.basicConfig(
