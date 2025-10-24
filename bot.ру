@@ -732,15 +732,6 @@ def schedule_daily_window_creation():
     thread = threading.Thread(target=task, daemon=True)
     thread.start()
 
-# ===== 6. АВТООЧИСТКА (через 30 секунд) =====
-@dp.message_handler(lambda msg: msg.text and msg.text.lower() != "бот запущен ✅")
-async def auto_delete_message(message: types.Message):
-    await asyncio.sleep(30)
-    try:
-        await message.delete()
-    except:
-        pass
-
 # -----------------------------
 # ОТСЕК 16 — Запуск
 # -----------------------------
