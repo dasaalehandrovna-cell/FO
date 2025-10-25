@@ -28,7 +28,7 @@ DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.8.3"
+VERSION = "9.8.4"
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
