@@ -1,7 +1,7 @@
 # ============================================
-# Финансовый бот — версия 9.8.3
-# Изменён: обнуление в команде, inline-редактирование, форвард кнопка
-# ID в памяти: Code_001
+# Финансовый бот — версия 9.8.5
+# Добавлено: форвард с выбором получателя (forward_target_id)
+# Совместимо со старой конфигурацией (CSV, webhook, активные окна и т.д.)
 # ============================================
 
 import os
@@ -18,15 +18,16 @@ import telebot
 from flask import Flask, request
 from telebot import types
 
+# --- Конфигурация (не меняй, если уже настроено в окружении) ---
 TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID")  # строка с числом
+OWNER_ID = os.getenv("OWNER_ID")  # строка с числом или None
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
 TZ = ZoneInfo("America/Argentina/Catamarca")
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.8.3"
+VERSION = "9.8.5"
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
@@ -71,7 +72,8 @@ def load_data():
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 d = json.load(f)
-        except:
+        except Exception as e:
+            log_error(f"Ошибка чтения data.json: {e}")
             d = default_data()
     else:
         d = default_data()
@@ -90,6 +92,7 @@ def save_data(d):
 
 data = load_data()
 
+# если задан OWNER_ID — добавим его в глобальные цели (совместимость со старым кодом)
 if OWNER_ID:
     try:
         oi = int(OWNER_ID)
@@ -116,10 +119,18 @@ def get_chat_store(chat_id):
             "active_windows": {},
             "edit_wait": None,
             "edit_target": None,
-            "forward_enabled": False  # per-chat toggle for forwarding
+            "forward_enabled": False,    # per-chat toggle for forwarding
+            "forward_target_id": None    # per-chat target for forwarding (None -> use OWNER_ID if set)
         }
         save_data(data)
-    return data["chats"][cid]
+    # Ensure backward compatibility: if store exists but lacks new keys, set them
+    store = data["chats"][cid]
+    if "forward_enabled" not in store:
+        store["forward_enabled"] = False
+    if "forward_target_id" not in store:
+        store["forward_target_id"] = None
+    save_data(data)
+    return store
 
 def set_today_active_window(chat_id, message_id):
     today = get_today_key()
@@ -136,7 +147,14 @@ def set_today_active_window(chat_id, message_id):
 def add_record_to_chat(chat_id, amount, note, owner):
     store = get_chat_store(chat_id)
     rid = data.get("next_id", 1)
-    rec = {"id": rid, "short_id": f"R{rid}", "timestamp": datetime.now(TZ).isoformat(timespec="seconds"), "amount": amount, "note": note, "owner": owner}
+    rec = {
+        "id": rid,
+        "short_id": f"R{rid}",
+        "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
+        "amount": amount,
+        "note": note,
+        "owner": owner
+    }
     data.setdefault("records", []).append(rec)
     store.setdefault("records", []).append(rec)
     day = get_today_key()
@@ -147,13 +165,31 @@ def add_record_to_chat(chat_id, amount, note, owner):
     save_data(data)
     try:
         export_to_csv(data)
-    except:
-        pass
+    except Exception as e:
+        log_error(f"Ошибка при экспорте в CSV после добавления: {e}")
 
-    # Форвард новой записи владельцу, если включено
+    # Форвард новой записи владельцу или указанному получателю, если включено
     try:
-        if store.get("forward_enabled") and OWNER_ID:
-            bot.send_message(int(OWNER_ID), f"Пересылка из чата {chat_id}: {rec['short_id']} {rec['amount']} — {rec['note']}")
+        if store.get("forward_enabled"):
+            # предпочтительный таргет — per-chat forward_target_id, иначе OWNER_ID (если задан)
+            target = store.get("forward_target_id")
+            if not target and OWNER_ID:
+                try:
+                    target = int(OWNER_ID)
+                except:
+                    target = None
+            if target:
+                try:
+                    bot.send_message(
+                        int(target),
+                        f"📨 Пересылка из чата {chat_id}:\n"
+                        f"🆔 {rec['short_id']}\n"
+                        f"💰 {rec['amount']} ARS\n"
+                        f"📝 {rec.get('note','')}\n"
+                        f"⏱ {rec.get('timestamp')}"
+                    )
+                except Exception as e:
+                    log_error(f"Не удалось переслать запись (target {target}): {e}")
     except Exception as e:
         log_error(f"Ошибка пересылки записи: {e}")
 
@@ -177,8 +213,10 @@ def update_record_in_chat(chat_id, rid, new_amount, new_note, user=None):
         store["balance"] = sum([x["amount"] for x in store.get("records", [])])
         data["overall_balance"] = sum([x["amount"] for x in data.get("records", [])])
         save_data(data)
-        export_to_csv(data)
-        # логирование
+        try:
+            export_to_csv(data)
+        except:
+            pass
         user_repr = f"{user.id}/{user.username}" if user else "unknown"
         log_info(f"Edit by {user_repr}: R{rid} -> amount={new_amount}, note='{new_note}'")
         return True, found
@@ -199,7 +237,10 @@ def delete_record_in_chat(chat_id, rid, user=None):
         data["records"] = [x for x in data.get("records", []) if x["id"] != rid]
         data["overall_balance"] = sum([x["amount"] for x in data.get("records", [])])
         save_data(data)
-        export_to_csv(data)
+        try:
+            export_to_csv(data)
+        except:
+            pass
         user_repr = f"{user.id}/{user.username}" if user else "unknown"
         log_info(f"Delete by {user_repr}: R{rid} removed")
         return True, removed
@@ -228,8 +269,11 @@ def build_main_keyboard(chat_id=None, confirm_reset=False):
         types.InlineKeyboardButton("📂 CSV", callback_data="btn_csv")
     )
     kb.row(types.InlineKeyboardButton("✏️ Редактировать", callback_data="btn_edit_list"))
-    # форвард toggle
-    kb.row(types.InlineKeyboardButton("📨 Форвард", callback_data="btn_toggle_forward"))
+    # форвард toggle и выбор получателя
+    kb.row(
+        types.InlineKeyboardButton("📨 Форвард", callback_data="btn_toggle_forward"),
+        types.InlineKeyboardButton("👤 Получатель", callback_data="btn_set_forward_target")
+    )
     if confirm_reset:
         kb.row(
             types.InlineKeyboardButton("✅ Да", callback_data="confirm_reset"),
@@ -307,6 +351,18 @@ def update_or_send_today_window(chat_id, create_if_missing=True):
         text = "\n".join(lines)
 
     kb = build_main_keyboard(chat_id)
+    # Добавим информацию о состоянии форварда (если нужно) в клавиатуру — оставим в тексте окна
+    try:
+        forward_info = ""
+        if store.get("forward_enabled"):
+            tgt = store.get("forward_target_id") or OWNER_ID
+            forward_info = f"\n\n📨 Пересылка: Включена → {tgt}"
+        else:
+            forward_info = f"\n\n📨 Пересылка: Выключена"
+        text = text + forward_info
+    except:
+        pass
+
     today_msgs = data.setdefault("active_messages", {}).setdefault(get_today_key(), {})
     active_id = today_msgs.get(str(chat_id))
 
@@ -395,13 +451,26 @@ def handle_callback(call):
             bot.answer_callback_query(call.id)
         return
 
-    # Toggle forward
+    # Toggle forward (вкл/выкл пересылку)
     if call.data == "btn_toggle_forward":
         store["forward_enabled"] = not store.get("forward_enabled", False)
         save_data(data)
-        status = "включена" if store["forward_enabled"] else "выключена"
+        status = "включена ✅" if store["forward_enabled"] else "выключена ❌"
         update_or_send_today_window(chat_id)
         bot.answer_callback_query(call.id, f"Пересылка {status}")
+        return
+
+    # Set forward target (запрос ID получателя)
+    if call.data == "btn_set_forward_target":
+        # Отправляем пользователю сообщение и регистрируем следующий шаг
+        try:
+            bot.answer_callback_query(call.id)
+            sent = bot.send_message(chat_id, "Введите ID пользователя, которому нужно пересылать записи (или введите 0, чтобы сбросить):")
+            # register_next_step_handler ожидает Message; используем sent (отправленное сообщение) — следующий шаг регистрируется на основе сообщения пользователя
+            bot.register_next_step_handler(sent, process_forward_target)
+        except Exception as e:
+            log_error(f"Ошибка при запросе ID получателя: {e}")
+            bot.answer_callback_query(call.id, "Не удалось запросить ID получателя.")
         return
 
     # reset button now just points to command
@@ -457,7 +526,7 @@ def handle_callback(call):
             "+500 Зарплата    (или ^+^500^)\n"
             "-150 Обед       (или ^-^150^)\n\n"
             "✏️ Нажмите «✏️ Редактировать», чтобы управлять записями.\n"
-            "📨 Кнопка «Форвард» включает пересылку новых записей владельцу."
+            "📨 Кнопка «Форвард» включает пересылку новых записей владельцу или указанному получателю."
         )
         if active_id:
             try:
@@ -645,6 +714,38 @@ def parse_amount_token(token:str):
         return -int(t[1:])
     # если без знака — считаем расход (как у тебя в коде)
     return -int(t)
+
+# -----------------------------
+# Обработка установки получателя форварда (next-step)
+# -----------------------------
+def process_forward_target(message):
+    try:
+        chat_id = message.chat.id
+        store = get_chat_store(chat_id)
+        text = (message.text or "").strip()
+
+        if text == "0":
+            store["forward_target_id"] = None
+            save_data(data)
+            bot.send_message(chat_id, "✅ Получатель пересылки сброшен (будет использоваться OWNER_ID, если он задан).")
+            update_or_send_today_window(chat_id)
+            return
+
+        if not text.isdigit():
+            bot.send_message(chat_id, "❌ ID должен быть числом. Попробуйте ещё раз или введите 0 для сброса.")
+            bot.register_next_step_handler(message, process_forward_target)
+            return
+
+        store["forward_target_id"] = int(text)
+        save_data(data)
+        bot.send_message(chat_id, f"✅ Теперь пересылка будет идти пользователю с ID {text}.")
+        update_or_send_today_window(chat_id)
+    except Exception as e:
+        log_error(f"Ошибка process_forward_target: {e}")
+        try:
+            bot.send_message(message.chat.id, "❌ Ошибка при установке получателя. Попробуйте ещё раз.")
+        except:
+            pass
 
 # -----------------------------
 # Входящие сообщения и команды
