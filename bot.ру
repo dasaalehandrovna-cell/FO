@@ -1,6 +1,7 @@
 # ============================================
-# Финансовый бот — версия 9.8.4
-# Полная версия (один файл) с интерактивным окном, CSV и подтверждениями
+# Финансовый бот — версия 9.8.3
+# Полная версия (один файл) с одним окном и CSV
+# Отсеки 1–13 (подотсеки внутри)
 # ============================================
 
 # -----------------------------
@@ -28,7 +29,7 @@ DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.8.4"
+VERSION = "9.8.3"
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
@@ -63,6 +64,9 @@ def default_data():
         "records": [],
         "chats": {},
         "active_messages": {},
+        "processed_messages": [],
+        "forward_targets": [],
+        "tracked_messages": {},
         "next_id": 1
     }
 
@@ -91,6 +95,16 @@ def save_data(d):
 
 data = load_data()
 
+# Подотсек 3.1 — Добавление владельца в forward_targets (если задан)
+if OWNER_ID:
+    try:
+        oi = int(OWNER_ID)
+        if oi not in data.get("forward_targets", []):
+            data["forward_targets"].append(oi)
+            save_data(data)
+    except Exception as e:
+        log_error(f"OWNER_ID не добавлен: {e}")
+
 # -----------------------------
 # ОТСЕК 4 — Чат/дата (хранилище)
 # -----------------------------
@@ -105,10 +119,9 @@ def get_chat_store(chat_id):
             "records": [],
             "next_id": 1,
             "daily_records": {},
-            "edit_wait": None,       # None | "change_id" | "change_value" | "delete_id"
-            "edit_target": None,     # target record id for edit/delete
-            "awaiting_reset_confirm": False,
-            "delete_confirm": None
+            "active_windows": {},
+            "edit_wait": None,
+            "edit_target": None
         }
         save_data(data)
     return data["chats"][cid]
@@ -134,16 +147,14 @@ def add_record_to_chat(chat_id, amount, note, owner):
         "timestamp": datetime.now(TZ).isoformat(timespec="seconds"),
         "amount": amount,
         "note": note,
-        "owner": owner,
-        "deleted": False
+        "owner": owner
     }
     data.setdefault("records", []).append(rec)
     store.setdefault("records", []).append(rec)
     day = get_today_key()
     store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
-    # balance per chat counts only non-deleted
-    store["balance"] = sum(r["amount"] for r in store.get("records", []) if not r.get("deleted", False))
-    data["overall_balance"] = sum(r["amount"] for r in data.get("records", []) if not r.get("deleted", False))
+    store["balance"] = store.get("balance", 0) + amount
+    data["overall_balance"] = sum(r["amount"] for r in data.get("records", []))
     data["next_id"] = rid + 1
     save_data(data)
     try:
@@ -159,47 +170,36 @@ def update_record_in_chat(chat_id, rid, new_amount, new_note):
         if r["id"] == rid:
             r["amount"] = new_amount
             r["note"] = new_note
-            r["deleted"] = False
             found = r
             break
     if found:
-        # update daily_records references
         for day_recs in store.get("daily_records", {}).values():
             for r in day_recs:
                 if r["id"] == rid:
                     r.update(found)
-        store["balance"] = sum(x["amount"] for x in store.get("records", []) if not x.get("deleted", False))
-        data["overall_balance"] = sum(x["amount"] for x in data.get("records", []) if not x.get("deleted", False))
+        store["balance"] = sum(x["amount"] for x in store.get("records", []))
+        data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
         save_data(data)
-        try:
-            export_to_csv(data)
-        except:
-            pass
+        export_to_csv(data)
         return True, found
     return False, None
 
-def mark_deleted_record(chat_id, rid):
+def delete_record_in_chat(chat_id, rid):
     store = get_chat_store(chat_id)
     removed = None
-    for r in store.get("records", []):
-        if r["id"] == rid:
-            r["deleted"] = True
-            r["note"] = r.get("note", "")
+    for r in list(store.get("records", [])):
+        if r["id"] == rid or str(r["id"]) == str(rid) or r.get("short_id") == f"R{rid}":
             removed = r
+            store["records"].remove(r)
             break
     if removed:
-        # mark in daily_records too
-        for day_recs in store.get("daily_records", {}).values():
-            for r in day_recs:
-                if r["id"] == rid:
-                    r["deleted"] = True
-        store["balance"] = sum(x["amount"] for x in store.get("records", []) if not x.get("deleted", False))
-        data["overall_balance"] = sum(x["amount"] for x in data.get("records", []) if not x.get("deleted", False))
+        for day_key, recs in list(store.get("daily_records", {}).items()):
+            store["daily_records"][day_key] = [x for x in recs if x["id"] != rid]
+        store["balance"] = sum(x["amount"] for x in store.get("records", []))
+        data["records"] = [x for x in data.get("records", []) if x["id"] != rid]
+        data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
         save_data(data)
-        try:
-            export_to_csv(data)
-        except:
-            pass
+        export_to_csv(data)
         return True, removed
     return False, None
 
@@ -207,11 +207,11 @@ def export_to_csv(d):
     try:
         with open(CSV_FILE, "w", newline='', encoding="utf-8") as f:
             writer = csv.writer(f)
-            writer.writerow(["chat_id","ID","short_id","timestamp","amount","note","owner","day_key","deleted"])
+            writer.writerow(["chat_id","ID","short_id","timestamp","amount","note","owner","day_key"])
             for cid, cdata in d.get("chats", {}).items():
                 for day_key, records in cdata.get("daily_records", {}).items():
                     for r in records:
-                        writer.writerow([cid, r.get("id"), r.get("short_id"), r.get("timestamp"), r.get("amount"), r.get("note"), r.get("owner"), day_key, r.get("deleted", False)])
+                        writer.writerow([cid, r.get("id"), r.get("short_id"), r.get("timestamp"), r.get("amount"), r.get("note"), r.get("owner"), day_key])
     except Exception as e:
         log_error(f"Ошибка экспорта CSV: {e}")
 
@@ -243,92 +243,65 @@ def build_main_keyboard(chat_id=None, confirm_reset=False):
     kb.add(types.InlineKeyboardButton(balance_text or "💰 0 ARS", callback_data="noop"))
     return kb
 
+def build_edit_keyboard():
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(
+        types.InlineKeyboardButton("✏ Изменить", callback_data="edit_change"),
+        types.InlineKeyboardButton("🗑 Удалить", callback_data="edit_delete")
+    )
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="edit_back"))
+    return kb
+
 # -----------------------------
-# ОТСЕК 7 — Обновление/создание окна (с кнопками "Изменить/Удалить" для каждой записи)
+# ОТСЕК 7 — Обновление/создание окна
 # -----------------------------
-def update_or_send_today_window(chat_id, create_if_missing=True, show_info=False):
+def update_or_send_today_window(chat_id, create_if_missing=True):
     today_key = get_today_key()
     store = get_chat_store(chat_id)
     day_records = store.get("daily_records", {}).get(today_key, [])
 
-    if show_info:
+    daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
+    daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
+    overall_balance = store.get("balance", 0)
+
+    if not day_records:
         text = (
-            f"ℹ️ Финансовый бот — версия {VERSION}\n\n"
-            "📌 Доступные команды:\n"
-            "/start — создать/обновить окно\n"
-            "/balance — показать остаток\n"
-            "/report — показать расходы за день\n"
-            "/csv — скачать CSV\n"
-            "/reset — обнулить данные (с подтверждением)\n"
-            "/update — обновить окно\n"
-            "/info — показать это окно\n\n"
-            "📝 Примеры добавления операций:\n"
-            "+500 Зарплата\n"
-            "-150 Обед\n"
-            "200 Такси  (без знака = расход)\n\n"
-            "✏️ Редактирование/удаление — кнопки рядом с записью."
+            f"📅 {today_key}\n"
+            f"Пока нет операций.\n"
+            f"💵 Приход: {daily_income} ARS\n"
+            f"💸 Расход: {abs(daily_expense)} ARS\n"
+            f"💰 Общий остаток: {overall_balance} ARS"
         )
-        kb = build_main_keyboard(chat_id)
     else:
-        daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0 and not r.get("deleted", False))
-        daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0 and not r.get("deleted", False))
-        overall_balance = store.get("balance", 0)
+        lines = [f"📅 {today_key}", "📋 Операции:"]
+        for r in day_records[-50:]:
+            sign = "+" if r["amount"] > 0 else "-"
+            lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
+        lines.append(
+            f"\n💵 Приход: {daily_income} ARS\n"
+            f"💸 Расход: {abs(daily_expense)} ARS\n"
+            f"💰 Общий остаток: {overall_balance} ARS"
+        )
+        text = "\n".join(lines)
 
-        if not day_records:
-            text = (
-                f"📅 {today_key}\nПока нет операций.\n"
-                f"💵 Приход: {daily_income} ARS\n"
-                f"💸 Расход: {abs(daily_expense)} ARS\n"
-                f"💰 Общий остаток: {overall_balance} ARS"
-            )
-            kb = build_main_keyboard(chat_id)
-        else:
-            lines = [f"📅 {today_key}", "📋 Операции:"]
-            kb = types.InlineKeyboardMarkup()
-            # show each record line and add edit/delete buttons if not deleted
-            for r in day_records[-50:]:
-                if r.get("deleted", False):
-                    lines.append(f"{r['short_id']}: ❌ Удалено — {r.get('note','')}")
-                else:
-                    sign = "+" if r["amount"] > 0 else "-"
-                    lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
-                    # buttons for this record
-                    kb.row(
-                        types.InlineKeyboardButton(f"✏ {r['short_id']}", callback_data=f"edit_{r['id']}"),
-                        types.InlineKeyboardButton(f"🗑 {r['short_id']}", callback_data=f"delete_{r['id']}")
-                    )
-            lines.append(
-                f"\n💵 Приход: {daily_income} ARS\n"
-                f"💸 Расход: {abs(daily_expense)} ARS\n"
-                f"💰 Общий остаток: {overall_balance} ARS"
-            )
-            # append main menu buttons at bottom
-            kb.row(
-                types.InlineKeyboardButton("💰 Баланс", callback_data="btn_balance"),
-                types.InlineKeyboardButton("📊 Отчёт", callback_data="btn_report"),
-                types.InlineKeyboardButton("📂 CSV", callback_data="btn_csv")
-            )
-            kb.row(
-                types.InlineKeyboardButton("⚙️ Обнулить данные", callback_data="btn_reset"),
-                types.InlineKeyboardButton("🚀 Обновить", callback_data="btn_start"),
-                types.InlineKeyboardButton("ℹ️ Инфо", callback_data="btn_cod")
-            )
-            text = "\n".join(lines)
-
+    kb = build_main_keyboard(chat_id)
     today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
     active_id = today_msgs.get(str(chat_id))
 
+    # Если активное окно есть — редактируем его
     if active_id:
         try:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
             return
         except telebot.apihelper.ApiException as e:
-            # could be message deleted or can't edit; we'll send new message below
+            # если не удалось редактировать, попробуем отправить новое
             log_error(f"Не удалось редактировать окно {active_id} для чата {chat_id}: {e}")
 
+    # Если create_if_missing=False — не создаём новое окно
     if not create_if_missing:
         return
 
+    # Создаём новое окно, если активного нет или редактирование не получилось
     try:
         sent = bot.send_message(chat_id, text, reply_markup=kb)
         today_msgs[str(chat_id)] = sent.message_id
@@ -337,161 +310,72 @@ def update_or_send_today_window(chat_id, create_if_missing=True, show_info=False
         log_error(f"Ошибка при создании нового окна для {chat_id}: {e}")
 
 # -----------------------------
-# ОТСЕК 8 — Callback кнопок (включая edit/delete с подтверждением и reset confirm)
+# ОТСЕК 8 — Callback кнопок
 # -----------------------------
 @bot.callback_query_handler(func=lambda c: True)
 def handle_callback(call):
-    try:
-        chat_id = call.message.chat.id
-    except Exception:
-        # callback from a message without chat? ignore
-        return
+    chat_id = call.message.chat.id
     store = get_chat_store(chat_id)
-    data_today = data.setdefault("active_messages", {}).setdefault(get_today_key(), {})
-    active_id = data_today.get(str(chat_id))
+    today_key = get_today_key()
+    day_records = store.get("daily_records", {}).get(today_key, [])
+    today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
+    active_id = today_msgs.get(str(chat_id))
 
-    # edit request (button)
-    if call.data.startswith("edit_"):
-        try:
-            rid = int(call.data.split("_", 1)[1])
-        except:
-            bot.answer_callback_query(call.id, "Некорректный ID")
-            return
-        store["edit_wait"] = "change_value"   # next message should be "amount [note]"
-        store["edit_target"] = rid
-        save_data(data)
-        bot.send_message(chat_id, f"Введите новую сумму и заметку для записи {rid} (пример: +500 Зарплата):")
-        bot.answer_callback_query(call.id)
+    # 8.1 — Кнопка "Баланс"
+    if call.data == "btn_balance":
+        send_balance(chat_id)
+        bot.answer_callback_query(call.id, "Баланс обновлён ✅")
         return
 
-    # delete request (button) — ask confirmation via inline Yes/No
-    if call.data.startswith("delete_"):
-        try:
-            rid = int(call.data.split("_", 1)[1])
-        except:
-            bot.answer_callback_query(call.id, "Некорректный ID")
-            return
-        store["delete_confirm"] = rid
-        save_data(data)
-        kb = types.InlineKeyboardMarkup()
-        kb.row(
-            types.InlineKeyboardButton("✅ Да", callback_data="confirm_delete"),
-            types.InlineKeyboardButton("❌ Нет", callback_data="cancel_delete")
-        )
-        bot.send_message(chat_id, f"Вы уверены, что хотите удалить запись R{rid}?", reply_markup=kb)
-        bot.answer_callback_query(call.id)
+    # 8.2 — Кнопка "Отчёт"
+    if call.data == "btn_report":
+        send_report(chat_id)
+        bot.answer_callback_query(call.id, "Отчёт расходов обновлён 📊")
         return
 
-    # confirm delete
-    if call.data == "confirm_delete":
-        rid = store.get("delete_confirm")
-        if not rid:
-            bot.answer_callback_query(call.id, "Нет записи для удаления")
-            return
-        success, _ = mark_deleted_record(chat_id, rid)
-        store["delete_confirm"] = None
-        save_data(data)
-        update_or_send_today_window(chat_id)
-        bot.answer_callback_query(call.id, "Запись помечена как удалённая ✅")
-        return
-
-    if call.data == "cancel_delete":
-        store["delete_confirm"] = None
-        save_data(data)
-        update_or_send_today_window(chat_id)
-        bot.answer_callback_query(call.id, "Удаление отменено ❌")
-        return
-
-    # CSV
+    # 8.3 — Кнопка "CSV"
     if call.data == "btn_csv":
-        try:
-            with open(CSV_FILE, "rb") as f:
-                bot.send_document(chat_id, f, caption="📂 Ваш файл data.csv")
-            bot.answer_callback_query(call.id, "CSV отправлен 📁")
-        except Exception as e:
-            bot.answer_callback_query(call.id, f"Ошибка: {e}")
+        send_csv(chat_id)
+        bot.answer_callback_query(call.id, "CSV отправлен 📁")
         return
 
-    # reset flow
+    # 8.4 — Кнопка "Сброс данных"
     if call.data == "btn_reset":
-        kb = build_main_keyboard(chat_id, confirm_reset=True)
-        text = "⚠️ Вы уверены, что хотите обнулить все данные?"
-        # try edit existing window to show confirm buttons
-        try:
-            if active_id:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-            else:
-                bot.send_message(chat_id, text, reply_markup=kb)
-        except Exception:
-            try:
-                bot.send_message(chat_id, text, reply_markup=kb)
-            except:
-                pass
-        store["awaiting_reset_confirm"] = True
-        save_data(data)
-        bot.answer_callback_query(call.id)
-        return
-
-    if call.data == "confirm_reset":
-        if store.get("awaiting_reset_confirm"):
-            # Clear only this chat
-            store["records"] = []
-            store["daily_records"] = {}
-            store["balance"] = 0
-            # Also remove these records from global data.records (best-effort: remove by id)
-            # We'll rebuild global records as union of chat records for simplicity
-            # Rebuild data["records"]
-            all_recs = []
-            for cid, c in data.get("chats", {}).items():
-                all_recs.extend(c.get("records", []))
-            data["records"] = all_recs
-            data["overall_balance"] = sum(r["amount"] for r in data.get("records", []) if not r.get("deleted", False))
-            store["awaiting_reset_confirm"] = False
-            save_data(data)
-            update_or_send_today_window(chat_id)
+        reset_data(chat_id)
         bot.answer_callback_query(call.id, "Данные сброшены 🧹")
         return
 
-    if call.data == "cancel_reset":
-        store["awaiting_reset_confirm"] = False
-        save_data(data)
-        update_or_send_today_window(chat_id)
-        bot.answer_callback_query(call.id, "Сброс отменён ❌")
-        return
-
-    # info
-    if call.data == "btn_cod":
-        update_or_send_today_window(chat_id, show_info=True)
-        bot.answer_callback_query(call.id, "Информация 📄")
-        return
-
-    # balance/report/update/noop
-    if call.data == "btn_balance":
-        send_balance(chat_id)
-        bot.answer_callback_query(call.id, "Баланс показан ✅")
-        return
-    if call.data == "btn_report":
-        send_report(chat_id)
-        bot.answer_callback_query(call.id, "Отчёт показан 📊")
-        return
+    # 8.5 — Кнопка "Обновить"
     if call.data == "btn_start":
         update_or_send_today_window(chat_id)
         bot.answer_callback_query(call.id, "Окно обновлено 🔄")
         return
+
+    # 8.6 — Кнопка "Инфо"
+    if call.data == "btn_cod":
+        send_info(chat_id)
+        bot.answer_callback_query(call.id, "Информация 📄")
+        return
+
+    # 8.7 — Кнопка "No operation" — пустышка
     if call.data == "noop":
         bot.answer_callback_query(call.id)
         return
 
-    # default
-    bot.answer_callback_query(call.id)
-
 # -----------------------------
-# ОТСЕК 9 — Слэш-команды
+# ОТСЕК 9 — Слэш-команды (команды /...)
 # -----------------------------
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
-    update_or_send_today_window(msg.chat.id)
-    bot.send_message(msg.chat.id, f"✅ Окно создано/обновлено — версия {VERSION}")
+    chat_id = msg.chat.id
+    # Создаём окно, только если ещё нет на сегодня
+    today_msgs = data.setdefault("active_messages", {}).setdefault(get_today_key(), {})
+    if str(chat_id) in today_msgs:
+        # Обновим существующее окно
+        update_or_send_today_window(chat_id, create_if_missing=False)
+    else:
+        update_or_send_today_window(chat_id, create_if_missing=True)
+    bot.send_message(chat_id, f"✅ Окно создано/обновлено — версия {VERSION}")
 
 @bot.message_handler(commands=["balance"])
 def cmd_balance(msg):
@@ -507,20 +391,7 @@ def cmd_csv(msg):
 
 @bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
-    # show confirm
-    kb = build_main_keyboard(msg.chat.id, confirm_reset=True)
-    text = "⚠️ Вы уверены, что хотите обнулить все данные?"
-    active_id = get_today_active_window(msg.chat.id)
-    try:
-        if active_id:
-            bot.edit_message_text(text, msg.chat.id, active_id, reply_markup=kb)
-        else:
-            bot.send_message(msg.chat.id, text, reply_markup=kb)
-    except:
-        bot.send_message(msg.chat.id, text, reply_markup=kb)
-    store = get_chat_store(msg.chat.id)
-    store["awaiting_reset_confirm"] = True
-    save_data(data)
+    reset_data(msg.chat.id)
 
 @bot.message_handler(commands=["update"])
 def cmd_update(msg):
@@ -528,101 +399,26 @@ def cmd_update(msg):
 
 @bot.message_handler(commands=["info"])
 def cmd_info(msg):
-    update_or_send_today_window(msg.chat.id, show_info=True)
+    send_info(msg.chat.id)
 
 # -----------------------------
-# ОТСЕК 10 — Входящие сообщения (добавление/редактирование/удаление подтверждение)
-# -----------------------------
-num_re = re.compile(r'([+-]?\s*\d+)')
-
-@bot.message_handler(func=lambda m: True)
-def handle_message(msg):
-    # ignore messages without text
-    if not msg.text:
-        return
-    chat_id = msg.chat.id
-    store = get_chat_store(chat_id)
-    wait_action = store.get("edit_wait")
-
-    # If no wait action — try to parse as new record
-    if wait_action is None:
-        m = num_re.search(msg.text)
-        if m:
-            try:
-                raw = m.group(1).replace(" ", "")
-                if raw.startswith("+"):
-                    amount = int(raw[1:])
-                elif raw.startswith("-"):
-                    amount = -int(raw[1:])
-                else:
-                    amount = -int(raw)
-                note = msg.text.replace(m.group(1), "").strip()
-                add_record_to_chat(chat_id, amount, note, msg.from_user.id)
-                update_or_send_today_window(chat_id)
-            except Exception as e:
-                log_error(f"Ошибка авто-добавления записи: {e}")
-        return
-
-    # If waiting for change_value (after pressing edit button)
-    if wait_action == "change_value":
-        rid = store.get("edit_target")
-        if not rid:
-            store["edit_wait"] = None
-            store["edit_target"] = None
-            save_data(data)
-            return
-        parts = msg.text.strip().split(" ", 1)
-        try:
-            raw = parts[0]
-            # support + / - and plain numbers (plain -> expense -> negative)
-            if raw.startswith("+"):
-                amount = int(raw[1:])
-            elif raw.startswith("-"):
-                amount = -int(raw[1:])
-            else:
-                amount = -int(raw)
-            note = parts[1] if len(parts) > 1 else ""
-            success, _ = update_record_in_chat(chat_id, rid, amount, note)
-            store["edit_wait"] = None
-            store["edit_target"] = None
-            save_data(data)
-            update_or_send_today_window(chat_id)
-            bot.send_message(chat_id, f"✅ Запись R{rid} изменена" if success else f"❌ Запись R{rid} не найдена")
-        except Exception as e:
-            log_error(f"Ошибка при изменении записи: {e}")
-            bot.send_message(chat_id, "Ошибка при вводе суммы/формата. Пример: +500 Зарплата")
-        return
-
-    # If waiting for delete confirmation via typing ID
-    if wait_action == "delete_id":
-        try:
-            rid = int(msg.text.strip())
-            success, _ = mark_deleted_record(chat_id, rid)
-            store["edit_wait"] = None
-            store["edit_target"] = None
-            save_data(data)
-            update_or_send_today_window(chat_id)
-            bot.send_message(chat_id, f"✅ Запись R{rid} удалена" if success else f"❌ Запись R{rid} не найдена")
-        except:
-            bot.send_message(chat_id, "Неверный ID для удаления")
-        return
-
-# -----------------------------
-# ОТСЕК 11 — Вспомогательные функции (send_balance, send_report, send_csv, reset, info)
+# ОТСЕК 10 — Утилитные функции (используются кнопками и командами)
 # -----------------------------
 def send_balance(chat_id):
     store = get_chat_store(chat_id)
     today_key = get_today_key()
     day_records = store.get("daily_records", {}).get(today_key, [])
-    daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0 and not r.get("deleted", False))
-    daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0 and not r.get("deleted", False))
+    daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
+    daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
     overall_balance = store.get("balance", 0)
+
     text = (
         f"📅 {today_key}\n\n"
         f"💰 Общий остаток: {overall_balance} ARS\n"
         f"💵 Приход за сегодня: {daily_income} ARS\n"
         f"💸 Расход за сегодня: {abs(daily_expense)} ARS"
     )
+
     active_id = get_today_active_window(chat_id)
     if active_id:
         try:
@@ -630,6 +426,7 @@ def send_balance(chat_id):
             return
         except telebot.apihelper.ApiException as e:
             log_error(f"send_balance: не удалось редактировать {active_id}: {e}")
+    # если редактирование не получилось — отправляем новое окно (и запоминаем)
     sent = bot.send_message(chat_id, text, reply_markup=build_main_keyboard(chat_id))
     set_today_active_window(chat_id, sent.message_id)
 
@@ -637,8 +434,9 @@ def send_report(chat_id):
     store = get_chat_store(chat_id)
     today_key = get_today_key()
     day_records = store.get("daily_records", {}).get(today_key, [])
-    expenses = [r for r in day_records if r["amount"] < 0 and not r.get("deleted", False)]
+    expenses = [r for r in day_records if r["amount"] < 0]
     total = sum(abs(r["amount"]) for r in expenses)
+
     if not expenses:
         text = f"📅 {today_key}\nПока нет расходов за сегодня.\n💸 Расход за день: 0 ARS"
     else:
@@ -647,6 +445,7 @@ def send_report(chat_id):
             lines.append(f"{r['short_id']}: -{abs(r['amount'])} — {r.get('note','')}")
         lines.append(f"\n💸 Расход за день: {total} ARS")
         text = "\n".join(lines)
+
     active_id = get_today_active_window(chat_id)
     if active_id:
         try:
@@ -669,14 +468,108 @@ def reset_data(chat_id):
     store["records"] = []
     store["daily_records"] = {}
     store["balance"] = 0
-    # Rebuild global data["records"] as union of chat records
-    all_recs = []
-    for cid, c in data.get("chats", {}).items():
-        all_recs.extend(c.get("records", []))
-    data["records"] = all_recs
-    data["overall_balance"] = sum(r["amount"] for r in data.get("records", []) if not r.get("deleted", False))
+    data["records"] = []
+    data["overall_balance"] = 0
     save_data(data)
     update_or_send_today_window(chat_id)
+
+def send_info(chat_id):
+    info_text = (
+        f"ℹ️ Финансовый бот — версия {VERSION}\n\n"
+        "📌 Доступные команды:\n"
+        "/start - Запуск бота и создание окна отчёта на сегодня\n"
+        "/balance - Показать общий остаток за день\n"
+        "/report - Показать список расходов текущего дня\n"
+        "/csv - Скачать файл с историей операций\n"
+        "/reset - Полностью очистить все записи\n"
+        "/update - Обновить текущее окно\n"
+        "/info - Показать это окно со списком команд\n\n"
+        "📝 Добавление операций — примеры:\n"
+        "+500 Зарплата\n"
+        "-150 Обед\n"
+        "200 Такси  (без знака = расход)\n\n"
+        "✏️ Редактирование записи: нажмите '✏ Изменить' в окне и следуйте инструкциям\n"
+        "🗑 Удаление: нажмите '🗑 Удалить' и укажите ID"
+    )
+    bot.send_message(chat_id, info_text)
+
+# -----------------------------
+# ОТСЕК 11 — Входящие сообщения (добавление/редактирование/удаление)
+# -----------------------------
+num_re = re.compile(r'([+-]?\s*\d+)')
+
+@bot.message_handler(func=lambda m: True)
+def handle_message(msg):
+    # защищаем от сообщений без текста
+    if not msg.text:
+        return
+
+    chat_id = msg.chat.id
+    store = get_chat_store(chat_id)
+    wait_action = store.get("edit_wait")
+
+    # 11.1 — Добавление новой записи (по умолчанию)
+    if wait_action is None:
+        m = num_re.search(msg.text)
+        if m:
+            try:
+                raw = m.group(1).replace(" ", "")
+                if raw.startswith("+"):
+                    amount = int(raw[1:])
+                elif raw.startswith("-"):
+                    amount = -int(raw[1:])
+                else:
+                    amount = -int(raw)
+                note = msg.text.replace(m.group(1), "").strip()
+                add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+                update_or_send_today_window(chat_id)
+            except Exception as e:
+                log_error(f"Ошибка авто-добавления записи: {e}")
+        return
+
+    # 11.2 — Редактирование: ввод ID
+    if wait_action == "change_id":
+        try:
+            rid = int(msg.text.strip())
+            store["edit_target"] = rid
+            store["edit_wait"] = "change_value"
+            bot.send_message(chat_id, f"Введите новую сумму и заметку для записи {rid}:")
+        except:
+            bot.send_message(chat_id, "Неверный ID")
+        return
+
+    # 11.3 — Редактирование: ввод суммы и заметки
+    if wait_action == "change_value":
+        rid = store.get("edit_target")
+        if not rid:
+            store["edit_wait"] = None
+            return
+        parts = msg.text.strip().split(" ", 1)
+        try:
+            amount = int(parts[0])
+            note = parts[1] if len(parts) > 1 else ""
+            success, _ = update_record_in_chat(chat_id, rid, amount, note)
+            store["edit_wait"] = None
+            store["edit_target"] = None
+            update_or_send_today_window(chat_id)
+            msg_text = f"✅ Запись {rid} изменена" if success else f"❌ Запись {rid} не найдена"
+            bot.send_message(chat_id, msg_text)
+        except:
+            bot.send_message(chat_id, "Ошибка при вводе суммы")
+        return
+
+    # 11.4 — Удаление записи
+    if wait_action == "delete_id":
+        try:
+            rid = int(msg.text.strip())
+            success, _ = delete_record_in_chat(chat_id, rid)
+            store["edit_wait"] = None
+            update_or_send_today_window(chat_id)
+            msg_text = f"✅ Запись {rid} удалена" if success else f"❌ Запись {rid} не найдена"
+            bot.send_message(chat_id, msg_text)
+        except:
+            bot.send_message(chat_id, "Ошибка при удалении записи")
+        return
 
 # -----------------------------
 # ОТСЕК 12 — Webhook / Flask routes
@@ -712,34 +605,34 @@ def schedule_daily_window_creation():
                 time.sleep(60)
                 current_day = get_today_key()
                 if current_day != last_day:
-                    for cid in list(data.get("chats", {}).keys()):
+                    for chat_id_str in list(data.get("chats", {}).keys()):
                         try:
-                            update_or_send_today_window(int(cid))
+                            chat_id = int(chat_id_str)
+                        except:
+                            continue
+                        try:
+                            update_or_send_today_window(chat_id)
                         except Exception as e:
-                            log_error(f"Ошибка при создании окна нового дня для {cid}: {e}")
+                            log_error(f"Ошибка при создании окна нового дня для {chat_id}: {e}")
                     last_day = current_day
             except Exception as e:
                 log_error(f"Ошибка в daily loop: {e}")
                 time.sleep(5)
-    threading.Thread(target=task, daemon=True).start()
+    thread = threading.Thread(target=task, daemon=True)
+    thread.start()
 
 if __name__ == "__main__":
+    # Установим webhook и запустим планировщик
     set_webhook()
     schedule_daily_window_creation()
     log_info(f"Бот ФО версии {VERSION} запущен")
 
-    # уведомление владельцу (опционально)
-    if OWNER_ID:
-        try:
+    # Отправка сообщения владельцу
+    try:
+        if OWNER_ID:
             bot.send_message(int(OWNER_ID), f"✅ Бот запущен и работает! (версия {VERSION})")
-        except Exception as e:
-            log_error(f"Не удалось отправить сообщение о запуске: {e}")
+    except Exception as e:
+        log_error(f"Не удалось отправить сообщение о запуске: {e}")
 
     app.run(host="0.0.0.0", port=PORT)
-
-
-
-
-
-
 
