@@ -429,6 +429,9 @@ def set_webhook():
     except Exception as e:
         log_error(f"Не удалось установить webhook: {e}")
 
+# -----------------------------
+# Планировщик создания ежедневного окна
+# -----------------------------
 def schedule_daily_window_creation():
     def task():
         last_day = get_today_key()
@@ -437,7 +440,7 @@ def schedule_daily_window_creation():
                 time.sleep(60)
                 current_day = get_today_key()
                 if current_day != last_day:
-                                        for chat_id_str in list(data.get("chats", {}).keys()):
+                    for chat_id_str in list(data.get("chats", {}).keys()):
                         try:
                             chat_id = int(chat_id_str)
                         except:
@@ -454,7 +457,7 @@ def schedule_daily_window_creation():
     thread.start()
 
 # -----------------------------
-# Запуск
+# Запуск бота
 # -----------------------------
 if __name__ == "__main__":
     set_webhook()
