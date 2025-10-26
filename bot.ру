@@ -441,7 +441,7 @@ def handle_message(msg):
         try:
             amount_token = parts[0]
             amount = parse_amount_token(amount_token)
-                        note = parts[1] if len(parts) > 1 else ""
+            note = parts[1] if len(parts) > 1 else ""
             success, rec = update_record_in_chat(chat_id, rid, amount, note, user=msg.from_user)
             if success:
                 bot.send_message(chat_id, f"✅ Запись {rec['short_id']} обновлена: {rec['amount']} — {rec['note']}")
