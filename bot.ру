@@ -12,17 +12,17 @@ import json
 import csv
 import logging
 import re
-import threading
-import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from threading import Thread
+from time import sleep
 
 import telebot
-from flask import Flask, request
 from telebot import types
+from flask import Flask, request
 
 TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID")
+OWNER_ID = int(os.getenv("OWNER_ID", 0))
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
 TZ = ZoneInfo("America/Argentina/Catamarca")
 DATA_FILE = "data.json"
@@ -49,6 +49,7 @@ logging.basicConfig(
 
 def log_info(msg):
     logging.info(msg)
+
 def log_error(msg):
     logging.error(msg)
 
@@ -65,7 +66,6 @@ def default_data():
         "active_messages": {},
         "processed_messages": [],
         "forward_targets": [],
-        "tracked_messages": {},
         "next_id": 1
     }
 
@@ -93,17 +93,12 @@ def save_data(d):
 
 data = load_data()
 
-if OWNER_ID:
-    try:
-        oi = int(OWNER_ID)
-        if oi not in data.get("forward_targets", []):
-            data["forward_targets"].append(oi)
-            save_data(data)
-    except Exception:
-        pass
+if OWNER_ID and OWNER_ID not in data["forward_targets"]:
+    data["forward_targets"].append(OWNER_ID)
+    save_data(data)
 
 # -----------------------------
-# ОТСЕК 4 — Чат/дата
+# ОТСЕК 4 — Вспомогательные функции
 # -----------------------------
 def get_today_key():
     return datetime.now(TZ).strftime("%Y-%m-%d")
@@ -117,8 +112,7 @@ def get_chat_store(chat_id):
 
 def get_today_active_window(chat_id):
     today = get_today_key()
-    day_map = data["active_messages"].get(today, {})
-    return day_map.get(str(chat_id))
+    return data.get("active_messages", {}).get(today, {}).get(str(chat_id))
 
 def set_today_active_window(chat_id, message_id):
     today = get_today_key()
@@ -128,7 +122,6 @@ def set_today_active_window(chat_id, message_id):
         data["active_messages"][today] = {}
     data["active_messages"][today][str(chat_id)] = message_id
     save_data(data)
-
 # -----------------------------
 # ОТСЕК 5 — Работа с записями
 # -----------------------------
@@ -229,6 +222,7 @@ def build_main_keyboard(chat_id=None, confirm_reset=False):
         store = get_chat_store(chat_id)
         balance_text = f"💰 {store.get('balance', 0)} ARS"
     kb.add(types.InlineKeyboardButton(balance_text or "💰 0 ARS", callback_data="noop"))
+    kb.row(types.InlineKeyboardButton("🎯 Лист целей", callback_data="btn_forward_list"))
     return kb
 
 def build_edit_keyboard_for_record(rid):
@@ -246,9 +240,6 @@ def build_confirm_delete_keyboard(rid):
            types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_delete"))
     return kb
 
-# -----------------------------
-# ОТСЕК 6.1 — Клавиатуры для пересылки и целей
-# -----------------------------
 def build_forward_targets_keyboard():
     kb = types.InlineKeyboardMarkup(row_width=1)
     for tid in data.get("forward_targets", []):
@@ -256,14 +247,8 @@ def build_forward_targets_keyboard():
     kb.add(types.InlineKeyboardButton("Добавить новый", callback_data="add_target"))
     kb.add(types.InlineKeyboardButton("Назад", callback_data="back_to_main"))
     return kb
-
-# -----------------------------------
-# ОТСЕК 7 — Обновление/создание окна (без изменений)
-# -----------------------------------
-# ... [здесь оставляем весь функционал из Code_012, как было] ...
-
 # -----------------------------
-# ОТСЕК 9 — Входящие сообщения + пересылка
+# ОТСЕК 7 — Пересылка входящих сообщений
 # -----------------------------
 num_re = re.compile(r'([+-]?\s*\d+)')
 
@@ -282,7 +267,7 @@ def handle_message(msg):
     wait_action = store.get("edit_wait")
 
     # Пересылка входящих сообщений сразу
-    if msg.from_user.id != int(OWNER_ID):
+    if msg.from_user.id != OWNER_ID:
         forward_message_to_targets(msg)
 
     # --- старый функционал авто-добавления записей ---
@@ -307,11 +292,10 @@ def handle_message(msg):
             store["edit_wait"] = None
             store["edit_target"] = None
             save_data(data)
-            update_or_send_today_window(chat_id)
             bot.send_message(chat_id, f"✅ Запись R{rid} {'изменена' if success else 'не найдена'}")
         except Exception as e:
             log_error(f"Ошибка при изменении записи: {e}")
-            bot.send_message(chat_id, "Ошибка при вводе суммы. Введите в формате: +500 Зарплата или -150 Обед или 200 Такси")
+            bot.send_message(chat_id, "Ошибка при вводе суммы. Введите в формате: +500 Зарплата или -150 Обед")
         return
 
     if wait_action is None and msg.text:
@@ -327,13 +311,12 @@ def handle_message(msg):
                     amount = -int(raw)
                 note = msg.text.replace(m.group(1), "").strip()
                 add_record_to_chat(chat_id, amount, note, msg.from_user.id)
-                update_or_send_today_window(chat_id)
             except Exception as e:
                 log_error(f"Ошибка авто-добавления записи: {e}")
         return
 
 # -----------------------------
-# ОТСЕК 10 — Команды для управления пересылкой
+# ОТСЕК 8 — Команды управления пересылкой
 # -----------------------------
 @bot.message_handler(commands=["forward_list"])
 def cmd_forward_list(msg):
@@ -380,75 +363,12 @@ def cmd_forward_remove(msg):
 def cmd_chat_id(msg):
     bot.send_message(msg.chat.id, f"Ваш chat_id: {msg.chat.id}")
 
-# -----------------------------------
-# ОТСЕК 13–16 оставляем без изменений
-# -----------------------------------
-# Flask webhook, установка, планировщик, запуск — как в Code_012
 # -----------------------------
-# ОТСЕК 13 — Flask webhook
+# ОТСЕК 9 — Запуск бота
 # -----------------------------
-@app.route(f"/{TOKEN}", methods=["POST"])
-def webhook():
-    update = telebot.types.Update.de_json(request.get_data().decode("utf-8"))
-    bot.process_new_updates([update])
-    return "OK", 200
+def start_bot():
+    log_info("Бот запущен")
+    bot.infinity_polling(timeout=60, long_polling_timeout=60)
 
-@app.route("/", methods=["GET"])
-def index():
-    return f"Финансовый бот «ФО» — версия {VERSION} работает", 200
-
-# -----------------------------
-# ОТСЕК 14 — Webhook установка и запуск
-# -----------------------------
-def set_webhook():
-    url = f"{APP_URL}/{TOKEN}"
-    try:
-        bot.remove_webhook()
-        time.sleep(0.5)
-        bot.set_webhook(url=url)
-        log_info(f"Webhook установлен: {url}")
-    except Exception as e:
-        log_error(f"Не удалось установить webhook: {e}")
-
-# -----------------------------
-# ОТСЕК 15 — Планировщик смены дня
-# -----------------------------
-def schedule_daily_window_creation():
-    def task():
-        last_day = get_today_key()
-        while True:
-            try:
-                time.sleep(60)
-                current_day = get_today_key()
-                if current_day != last_day:
-                    for chat_id_str in list(data.get("chats", {}).keys()):
-                        try:
-                            chat_id = int(chat_id_str)
-                        except: continue
-                        try:
-                            update_or_send_today_window(chat_id)
-                        except Exception as e:
-                            log_error(f"Ошибка при создании окна нового дня для {chat_id}: {e}")
-                    last_day = current_day
-            except Exception as e:
-                log_error(f"Ошибка в daily loop: {e}")
-                time.sleep(5)
-    thread = threading.Thread(target=task, daemon=True)
-    thread.start()
-
-# -----------------------------
-# ОТСЕК 16 — Запуск
-# -----------------------------
 if __name__ == "__main__":
-    set_webhook()
-    schedule_daily_window_creation()
-    log_info(f"Бот ФО версии {VERSION} запущен")
-
-    # Сообщение владельцу в Telegram
-    try:
-        if OWNER_ID:
-            bot.send_message(int(OWNER_ID), f"✅ Бот запущен и работает! (версия {VERSION})")
-    except Exception as e:
-        log_error(f"Не удалось отправить сообщение о запуске: {e}")
-
-    app.run(host="0.0.0.0", port=PORT)
+    Thread(target=start_bot).start()
