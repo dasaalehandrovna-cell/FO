@@ -753,19 +753,24 @@ def process_forward_target(message):
             return
 
         text = text.strip()
-if not (text.startswith("-") or text.isdigit()):
-    bot.send_message(chat_id, "❌ Некорректный ID. Пример: -1001234567890\nПопробуйте снова или введите 0 для сброса.")
-    return
-try:
-    target = int(text)
-except Exception:
-    bot.send_message(chat_id, "❌ Не удалось распознать ID. Попробуйте снова.")
-    return
 
-        store["forward_target_id"] = int(text)
+        # Проверка корректности ID
+        if not (text.startswith("-") or text.isdigit()):
+            bot.send_message(chat_id, "❌ Некорректный ID. Пример: -1001234567890\nПопробуйте снова или введите 0 для сброса.")
+            return
+
+        # Попытка конвертировать в число
+        try:
+            target = int(text)
+        except Exception:
+            bot.send_message(chat_id, "❌ Не удалось распознать ID. Попробуйте снова.")
+            return
+
+        store["forward_target_id"] = target
         save_data(data)
-        bot.send_message(chat_id, f"✅ Теперь пересылка будет идти пользователю с ID {text}.")
+        bot.send_message(chat_id, f"✅ Теперь пересылка будет идти пользователю с ID {target}.")
         update_or_send_today_window(chat_id)
+
     except Exception as e:
         log_error(f"Ошибка process_forward_target: {e}")
         try:
