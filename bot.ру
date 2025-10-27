@@ -441,9 +441,9 @@ def handle_callback(call):
         overall_balance = store.get("balance", 0)
         text = (
             f"📅 {today_key}\n\n"
-            f"💰 Общий остаток: {overall_balance} ARS\n"
-            f"💵 Приход за сегодня: {daily_income} ARS\n"
-            f"💸 Расход за сегодня: {abs(daily_expense)} ARS"
+            f"💵 Приход: {fmt_num(daily_income)} ARS\n"
+            f"💸 Расход: {fmt_num(abs(daily_expense))} ARS\n"
+            f"💰 Общий остаток: {fmt_num(overall_balance)} ARS"
         )
         if active_id:
             try:
