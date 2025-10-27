@@ -752,10 +752,15 @@ def process_forward_target(message):
             update_or_send_today_window(chat_id)
             return
 
-        if not text.isdigit():
-            bot.send_message(chat_id, "❌ ID должен быть числом. Попробуйте ещё раз или введите 0 для сброса.")
-            bot.register_next_step_handler(message, process_forward_target)
-            return
+        text = text.strip()
+if not (text.startswith("-") or text.isdigit()):
+    bot.send_message(chat_id, "❌ Некорректный ID. Пример: -1001234567890\nПопробуйте снова или введите 0 для сброса.")
+    return
+try:
+    target = int(text)
+except Exception:
+    bot.send_message(chat_id, "❌ Не удалось распознать ID. Попробуйте снова.")
+    return
 
         store["forward_target_id"] = int(text)
         save_data(data)
