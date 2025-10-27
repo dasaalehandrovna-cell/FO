@@ -290,7 +290,7 @@ def build_main_keyboard(chat_id=None, confirm_reset=False):
     balance_text = ""
     if chat_id is not None:
         store = get_chat_store(chat_id)
-        balance_text = f"💰 {store.get('balance', 0)} ARS"
+        balance_text = f"💰 {fmt_num(store.get('balance', 0))} ARS"
     kb.add(types.InlineKeyboardButton(balance_text or "💰 0 ARS", callback_data="noop"))
     return kb
 
