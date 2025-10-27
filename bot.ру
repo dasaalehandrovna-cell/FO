@@ -348,9 +348,9 @@ def update_or_send_today_window(chat_id, create_if_missing=True):
         text = (
             f"📅 {today_key}\n"
             f"Пока нет операций.\n"
-            f"💵 Приход: {daily_income} ARS\n"
-            f"💸 Расход: {abs(daily_expense)} ARS\n"
-            f"💰 Общий остаток: {overall_balance} ARS"
+            f"💵 Приход: {fmt_num(daily_income)} ARS\n"
+            f"💸 Расход: {fmt_num(abs(daily_expense))} ARS\n"
+            f"💰 Общий остаток: {fmt_num(overall_balance)} ARS"
         )
     else:
         lines = [f"📅 {today_key}", "📋 Операции:"]
@@ -358,9 +358,9 @@ def update_or_send_today_window(chat_id, create_if_missing=True):
             sign = "+" if r["amount"] > 0 else "-"
             lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
         lines.append(
-            f"\n💵 Приход: {daily_income} ARS\n"
-            f"💸 Расход: {abs(daily_expense)} ARS\n"
-            f"💰 Общий остаток: {overall_balance} ARS"
+            f"💵 Приход: {fmt_num(daily_income)} ARS\n"
+            f"💸 Расход: {fmt_num(abs(daily_expense))} ARS\n"
+            f"💰 Общий остаток: {fmt_num(overall_balance)} ARS"
         )
         text = "\n".join(lines)
 
