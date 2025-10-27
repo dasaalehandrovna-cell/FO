@@ -182,11 +182,11 @@ def add_record_to_chat(chat_id, amount, note, owner):
                 try:
                     bot.send_message(
                         int(target),
-                        f"📨 Пересылка из чата {chat_id}:\n"
-                        f"🆔 {rec['short_id']}\n"
+                        # f"📨 Пересылка из чата {chat_id}:\n"
+                        # f"🆔 {rec['short_id']}\n"
                         f"💰 {rec['amount']} ARS\n"
-                        f"📝 {rec.get('note','')}\n"
-                        f"⏱ {rec.get('timestamp')}"
+                        # f"📝 {rec.get('note','')}\n"
+                        # f"⏱ {rec.get('timestamp')}"
                     )
                 except Exception as e:
                     log_error(f"Не удалось переслать запись (target {target}): {e}")
