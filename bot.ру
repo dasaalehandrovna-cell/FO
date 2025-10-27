@@ -356,7 +356,7 @@ def update_or_send_today_window(chat_id, create_if_missing=True):
         lines = [f"📅 {today_key}", "📋 Операции:"]
         for r in day_records[-50:]:
             sign = "+" if r["amount"] > 0 else "-"
-            lines.append(f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}")
+            lines.append(f"{r['short_id']}: {sign}{fmt_num(abs(r['amount']))} — {r.get('note','')}")
         lines.append(
             f"💵 Приход: {fmt_num(daily_income)} ARS\n"
             f"💸 Расход: {fmt_num(abs(daily_expense))} ARS\n"
@@ -464,7 +464,7 @@ def handle_callback(call):
         else:
             lines = [f"📅 {today_key}", "📋 Расходы за день:"]
             for r in expenses[-30:]:
-                lines.append(f"{r['short_id']}: -{abs(r['amount'])} — {r.get('note','')}")
+                lines.append(f"{r['short_id']}: {sign}{fmt_num(abs(r['amount']))} — {r.get('note','')}")
             lines.append(f"\n💸 Расход за день: {daily_expense_total} ARS")
             text = "\n".join(lines)
         if active_id:
@@ -830,7 +830,7 @@ def cmd_report(msg):
         return
     lines = [f"📅 {today_key}", "📋 Расходы за день:"]
     for r in expenses[-30:]:
-        lines.append(f"{r['short_id']}: -{abs(r['amount'])} — {r.get('note','')}")
+        lines.append(f"{r['short_id']}: {sign}{fmt_num(abs(r['amount']))} — {r.get('note','')}")
     lines.append(f"\n💸 Расход за день: {sum(abs(r['amount']) for r in expenses)} ARS")
     bot.send_message(chat_id, "\n".join(lines))
 
