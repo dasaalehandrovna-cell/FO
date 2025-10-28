@@ -317,18 +317,10 @@ def build_edit_menu_keyboard(chat_id=None):
 def build_edit_keyboard_for_record(rid):
     kb = types.InlineKeyboardMarkup(row_width=2)
     # быстрые пресеты для изменения суммы
-    kb.row(
-        types.InlineKeyboardButton("+10", callback_data=f"preset_add_{rid}_10"),
-        types.InlineKeyboardButton("-10", callback_data=f"preset_add_{rid}_-10")
-    )
-    kb.row(
-        types.InlineKeyboardButton("+100", callback_data=f"preset_add_{rid}_100"),
-        types.InlineKeyboardButton("-100", callback_data=f"preset_add_{rid}_-100")
-    )
-    kb.row(
-        types.InlineKeyboardButton("+500", callback_data=f"preset_add_{rid}_500"),
-        types.InlineKeyboardButton("-500", callback_data=f"preset_add_{rid}_-500")
-    )
+    #kb.row(types.InlineKeyboardButton("+10", callback_data=f"preset_add_{rid}_10"),types.InlineKeyboardButton("-10", callback_data=f"preset_add_{rid}_-10"))
+    #kb.row(types.InlineKeyboardButton("+100", callback_data=f"preset_add_{rid}_100"),types.InlineKeyboardButton("-100", callback_data=f"preset_add_{rid}_-100"))
+    #kb.row(types.InlineKeyboardButton("+500", callback_data=f"preset_add_{rid}_500"),types.InlineKeyboardButton("-500", callback_data=f"preset_add_{rid}_-500"))
+    
     kb.add(types.InlineKeyboardButton("✏ Ввести вручную", callback_data=f"edit_manual_{rid}"))
     kb.add(types.InlineKeyboardButton("🗑 Удалить", callback_data=f"edit_delete_{rid}"))
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="edit_back_to_list"))
