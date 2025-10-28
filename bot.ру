@@ -630,7 +630,7 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, "Запись не найдена")
             return
         sign = "+" if rec["amount"] > 0 else "-"
-        text = f"Запись {rec['short_id']}\n{sign}{abs(rec['amount'])} — {rec.get('note','')}\nДобавлена: {rec.get('timestamp')}"
+        text = f"Запись {rec['short_id']}\n{sign}{fmt_num(abs(rec['amount']))} — {rec.get('note','')}\nДобавлена: {rec.get('timestamp')}"
         kb = build_edit_keyboard_for_record(rid)
         if active_id:
             try:
