@@ -437,9 +437,9 @@ def handle_callback(call):
 
     # Баланс
     if call.data == "btn_balance":
-        daily_income = fmt_num(sum(r["amount"] for r in day_records if r["amount"] > 0))
-        daily_expense = fmt_num(sum(r["amount"] for r in day_records if r["amount"] < 0))
-        overall_balance = fmt_num(store.get("balance", 0))
+        daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
+        daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
+        overall_balance = store.get("balance", 0)
         text = (
             f"📅 {today_key}\n\n"
             f"💰 Общий остаток: {fmt_num(overall_balance)} ARS\n"
