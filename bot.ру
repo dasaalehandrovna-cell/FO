@@ -301,8 +301,10 @@ def build_edit_menu_keyboard(chat_id=None):
         types.InlineKeyboardButton("📨 Форвард", callback_data="btn_toggle_forward"),
         types.InlineKeyboardButton("👤 Получатель", callback_data="btn_set_forward_target")
     )
-    kb.row(types.InlineKeyboardButton("⚙️ Обнулить", callback_data="btn_reset"))
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
+    kb.row(
+        types.InlineKeyboardButton("⚙️ Обнулить", callback_data="btn_reset"),
+        types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")
+    )
     return kb
 
 def build_edit_keyboard_for_record(rid):
