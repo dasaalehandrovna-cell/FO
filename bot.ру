@@ -442,9 +442,8 @@ def handle_callback(call):
         text = (
             f"📅 {today_key}\n\n"
             f"💵 Приход за сегодня: {fmt_num(daily_income)} ARS\n"
-            f"💸 Расход за сегодня: {fmt_num(abs(daily_expense))} ARS"
-
-            f"💰 Общий остаток: {fmt_num(overall_balance)} ARS\n"
+            f"💸 Расход за сегодня: {fmt_num(abs(daily_expense))} ARS\n"
+            f"💰 Общий остаток: {fmt_num(overall_balance)} ARS"
         )
         if active_id:
             try:
