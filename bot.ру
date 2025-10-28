@@ -596,7 +596,7 @@ def handle_callback(call):
         kb = types.InlineKeyboardMarkup(row_width=1)
         for r in reversed(day_records[-20:]):
             sign = "+" if r["amount"] > 0 else "-"
-            label = f"{r['short_id']}: {sign}{abs(r['amount'])} — {r.get('note','')}"
+            label = f"{r['short_id']}: {sign}{fmt_num(abs(r['amount']))} — {r.get('note','')}"
             kb.add(types.InlineKeyboardButton(label, callback_data=f"rec_{r['id']}"))
         kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
         text = "\n".join(lines)
