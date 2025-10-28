@@ -293,18 +293,26 @@ def build_main_keyboard(chat_id=None, confirm_reset=False):
     return kb
 
 
+######### сюда вставить👇 #########
 def build_edit_menu_keyboard(chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(types.InlineKeyboardButton("📂 CSV", callback_data="btn_csv"))
+    kb.row(types.InlineKeyboardButton("📂 CSV", callback_data="btn_csv"),
+
+# <<< ДОБАВЛЕНА ВОТ ЭТА КНОПКА >>>
+    types.InlineKeyboardButton("✏️ Редактировать записи", callback_data="btn_edit_list")
+)
     kb.row(
         types.InlineKeyboardButton("📨 Форвард", callback_data="btn_toggle_forward"),
         types.InlineKeyboardButton("👤 Получатель", callback_data="btn_set_forward_target")
     )
+
+    
     kb.row(
         types.InlineKeyboardButton("⚙️ Обнулить", callback_data="btn_reset"),
         types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main")
     )
     return kb
+######### здесь заканчивается код👍 #########
 
 def build_edit_keyboard_for_record(rid):
     kb = types.InlineKeyboardMarkup(row_width=2)
