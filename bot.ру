@@ -280,8 +280,7 @@ def build_main_keyboard(chat_id=None, confirm_reset=False):
     kb.row(
         types.InlineKeyboardButton("💰 Баланс", callback_data="btn_balance"),
         types.InlineKeyboardButton("📊 Отчёт", callback_data="btn_report")
-    )
-    kb.row(types.InlineKeyboardButton("✏️ Редактировать", callback_data="btn_edit_menu"))
+        types.InlineKeyboardButton("✏️ Редактировать", callback_data="btn_edit_menu"))
     kb.row(
         types.InlineKeyboardButton("🚀 Обновить", callback_data="btn_start"),
         types.InlineKeyboardButton("ℹ️ Инфо", callback_data="btn_cod")
