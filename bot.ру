@@ -395,16 +395,13 @@ def _start_auto_backup_loop():
     t = threading.Thread(target=loop, daemon=True)
     t.start()
 
+
 # -----------------------------
 # Запуск
 # -----------------------------
 if __name__ == "__main__":
-    set_webhook()
-    schedule_daily_window_creation()
-    log_info(f"Бот ФО версии {VERSION} запущен")
-    try:
-        if OWNER_ID:
-            bot.send_message(int(OWNER_ID), f"✅ Бот запущен и работает! (версия {VERSION})")
-    except Exception as e:
-        log_error(f"Не удалось отправить сообщение о запуске: {e}")
+    # Start auto-backup thread silently (no Telegram notifications)
+    _start_auto_backup_loop()
+
+    log_info("Бот запущен на Flask")
     app.run(host="0.0.0.0", port=PORT)
