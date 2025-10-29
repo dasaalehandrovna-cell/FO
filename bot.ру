@@ -833,7 +833,7 @@ def cmd_report(msg):
     lines = [f"📅 {today_key}", "📋 Расходы за день:"]
     for r in expenses[-30:]:
         lines.append(f"{r['short_id']}: -{fmt_num(abs(r['amount']))} — {r.get('note','')}")
-    lines.append(f"\n💸 Расход за день: {sum(fmt_num(abs(r['amount'])) for r in expenses)} арс")
+    lines.append(f"\n💸 Расход за день: {fmt_num(sum(abs(r['amount'])) for r in expenses)} арс")
     bot.send_message(chat_id, "\n".join(lines))
 
 @bot.message_handler(commands=["csv"])
