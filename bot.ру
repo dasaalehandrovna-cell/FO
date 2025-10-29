@@ -1,5 +1,8 @@
+#9.8.6 с точками
 # ============================================
-# Финансовый бот — версия 9.8.6 — с локальным + Telegram backup и автосохранением 5 мин
+# Финансовый бот — версия 9.8.6
+# Обновлено: подменю "✏️ Редактировать" содержит CSV, Форвард, Получатель, Обнулить, Назад
+# Совместимо со старой конфигурацией (CSV, webhook, активные окна и т.д.)
 # ============================================
 
 import os
@@ -27,18 +30,15 @@ LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
 VERSION = "9.8.6"
 
-# --- Конфигурация backup ---
-# Telegram ID, куда бот будет отправлять backup-файлы (ты указал)
-BACKUP_CHAT_ID = 8107562890
-# meta файл для хранения last backup file_id
-BACKUP_META = "backup_meta.json"
-
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
 
 bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
 
+# ----------------------------------------
+# ФУНКЦИЯ ФОРМАТИРОВАНИЯ ЧИСЕЛ
+# ----------------------------------------
 # ----------------------------------------
 # ФУНКЦИЯ ФОРМАТИРОВАНИЯ ЧИСЕЛ
 # ----------------------------------------
@@ -66,7 +66,7 @@ def log_error(msg):
 log_info(f"Старт приложения. Версия {VERSION}")
 
 # -----------------------------
-# Структура данных и IO (расширенная с Telegram-backup)
+# Структура данных и IO
 # -----------------------------
 def default_data():
     return {
@@ -77,75 +77,19 @@ def default_data():
         "processed_messages": [],
         "forward_targets": [],    # глобальные форвард цели (например OWNER_ID)
         "tracked_messages": {},
-        "next_id": 1,
-        # last backup file id (если есть) — будет храниться также в backup_meta.json
-        "last_backup_file_id": None
+        "next_id": 1
     }
 
-def read_backup_meta():
-    if os.path.exists(BACKUP_META):
-        try:
-            with open(BACKUP_META, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            log_error(f"Ошибка чтения {BACKUP_META}: {e}")
-    return {}
-
-def write_backup_meta(m):
-    try:
-        with open(BACKUP_META, "w", encoding="utf-8") as f:
-            json.dump(m, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        log_error(f"Ошибка записи {BACKUP_META}: {e}")
-
-def try_restore_from_telegram(file_id):
-    """
-    Попытаться скачать data.json по file_id и сохранить локально.
-    Возвращает True если удалось восстановить.
-    """
-    try:
-        if not file_id:
-            return False
-        file_info = bot.get_file(file_id)
-        downloaded = bot.download_file(file_info.file_path)
-        with open(DATA_FILE, "wb") as f:
-            f.write(downloaded)
-        log_info("Данные восстановлены из Telegram backup (file_id).")
-        return True
-    except Exception as e:
-        log_error(f"Не удалось восстановить из Telegram backup: {e}")
-        return False
-
 def load_data():
-    # Если локальный файл существует — читаем
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r", encoding="utf-8") as f:
                 d = json.load(f)
         except Exception as e:
-            log_error(f"Ошибка чтения {DATA_FILE}: {e} — попробуем восстановить из backup_meta")
-            d = None
-    else:
-        d = None
-
-    if d is None:
-        # попробуем восстановить из meta -> file_id
-        meta = read_backup_meta()
-        file_id = meta.get("last_file_id") or None
-        if file_id:
-            ok = try_restore_from_telegram(file_id)
-            if ok:
-                try:
-                    with open(DATA_FILE, "r", encoding="utf-8") as f:
-                        d = json.load(f)
-                except Exception as e:
-                    log_error(f"После скачивания не удалось прочитать {DATA_FILE}: {e}")
-                    d = None
-        # если восстановление не удалось — используем дефолт
-        if d is None:
+            log_error(f"Ошибка чтения data.json: {e}")
             d = default_data()
-
-    # Ensure schema compatibility
+    else:
+        d = default_data()
     base = default_data()
     for k, v in base.items():
         if k not in d:
@@ -153,38 +97,12 @@ def load_data():
     return d
 
 def save_data(d):
-    """
-    Сохраняет локально и пытается отправить backup в Telegram (и записать backup_meta).
-    """
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(d, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        log_error(f"Ошибка сохранения {DATA_FILE}: {e}")
+        log_error(f"Ошибка сохранения data.json: {e}")
 
-    # Отправляем backup в Telegram (попытка — не фатальная)
-    try:
-        with open(DATA_FILE, "rb") as f:
-            sent = bot.send_document(BACKUP_CHAT_ID, f, caption=f"Backup {datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')}")
-            # Если отправилось — запомним file_id в meta и в data (в памяти)
-            try:
-                file_id = sent.document.file_id
-                meta = {"last_file_id": file_id, "timestamp": datetime.now(TZ).isoformat(timespec="seconds")}
-                write_backup_meta(meta)
-                # обновим поле в объекте d и локально перезапишем (необязательно, но удобно)
-                d["last_backup_file_id"] = file_id
-                # перезапишем data.json с file_id (чтобы он тоже содержал актуальную ссылку)
-                try:
-                    with open(DATA_FILE, "w", encoding="utf-8") as f2:
-                        json.dump(d, f2, ensure_ascii=False, indent=2)
-                except Exception as e:
-                    log_error(f"Ошибка повторного сохранения data.json с file_id: {e}")
-            except Exception as e:
-                log_error(f"Ошибка получения file_id после отправки backup: {e}")
-    except Exception as e:
-        log_error(f"Не удалось отправить backup в Telegram: {e}")
-
-# Загружаем данные при старте
 data = load_data()
 
 # если задан OWNER_ID — добавим его в глобальные цели (совместимость со старым кодом)
@@ -277,7 +195,11 @@ def add_record_to_chat(chat_id, amount, note, owner):
                 try:
                     bot.send_message(
                         int(target),
-                        f"💰 {rec['amount']} ARS\n📝 {rec.get('note','')}\n⏱ {rec.get('timestamp')}"
+                        # f"📨 Пересылка из чата {chat_id}:\n"
+                        # f"🆔 {rec['short_id']}\n"
+                        f"💰 {rec['amount']} ARS\n"
+                        # f"📝 {rec.get('note','')}\n"
+                        # f"⏱ {rec.get('timestamp')}"
                     )
                 except Exception as e:
                     log_error(f"Не удалось переслать запись (target {target}): {e}")
@@ -393,6 +315,11 @@ def build_edit_menu_keyboard(chat_id=None):
 
 def build_edit_keyboard_for_record(rid):
     kb = types.InlineKeyboardMarkup(row_width=2)
+    # быстрые пресеты для изменения суммы
+    #kb.row(types.InlineKeyboardButton("+10", callback_data=f"preset_add_{rid}_10"),types.InlineKeyboardButton("-10", callback_data=f"preset_add_{rid}_-10"))
+    #kb.row(types.InlineKeyboardButton("+100", callback_data=f"preset_add_{rid}_100"),types.InlineKeyboardButton("-100", callback_data=f"preset_add_{rid}_-100"))
+    #kb.row(types.InlineKeyboardButton("+500", callback_data=f"preset_add_{rid}_500"),types.InlineKeyboardButton("-500", callback_data=f"preset_add_{rid}_-500"))
+    
     kb.add(types.InlineKeyboardButton("✏ Ввести вручную", callback_data=f"edit_manual_{rid}"))
     kb.add(types.InlineKeyboardButton("🗑 Удалить", callback_data=f"edit_delete_{rid}"))
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="edit_back_to_list"))
@@ -437,6 +364,7 @@ def update_or_send_today_window(chat_id, create_if_missing=True):
         text = "\n".join(lines)
 
     kb = build_main_keyboard(chat_id)
+    # Добавим информацию о состоянии форварда (если нужно) в клавиатуру — оставим в тексте окна
     try:
         forward_info = ""
         if store.get("forward_enabled"):
@@ -512,9 +440,9 @@ def handle_callback(call):
         overall_balance = store.get("balance", 0)
         text = (
             f"📅 {today_key}\n\n"
-            f"💰 Общий остаток: {fmt_num(overall_balance)} ARS\n"
             f"💵 Приход за сегодня: {fmt_num(daily_income)} ARS\n"
-            f"💸 Расход за сегодня: {fmt_num(abs(daily_expense))} ARS"
+            f"💸 Расход за сегодня: {fmt_num(abs(daily_expense))} ARS\n"
+            f"💰 Общий остаток: {fmt_num(overall_balance)} ARS"
         )
         if active_id:
             try:
@@ -1023,27 +951,11 @@ def schedule_daily_window_creation():
     thread.start()
 
 # -----------------------------
-# Автосохранение (каждые 5 минут)
-# -----------------------------
-def start_autosave(interval_seconds=300):
-    def loop():
-        while True:
-            try:
-                save_data(data)
-                log_info("Автосохранение: данные сохранены.")
-            except Exception as e:
-                log_error(f"Ошибка автосохранения: {e}")
-            time.sleep(interval_seconds)
-    t = threading.Thread(target=loop, daemon=True)
-    t.start()
-
-# -----------------------------
 # Запуск
 # -----------------------------
 if __name__ == "__main__":
     set_webhook()
     schedule_daily_window_creation()
-    start_autosave(300)  # автосохранение каждые 300 секунд (5 минут)
     log_info(f"Бот ФО версии {VERSION} запущен")
     try:
         if OWNER_ID:
