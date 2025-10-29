@@ -398,15 +398,6 @@ def _start_auto_backup_loop():
 # -----------------------------
 # Запуск
 # -----------------------------
-#if __name__ == "__main__":
-    # Start auto-backup thread silently (no Telegram notifications)
-    #_start_auto_backup_loop()
-
-    #log_info("Бот запущен на Flask")
-    #app.run(host="0.0.0.0", port=PORT)
-# -----------------------------
-# Запуск
-# -----------------------------
 if __name__ == "__main__":
     set_webhook()
     schedule_daily_window_creation()
