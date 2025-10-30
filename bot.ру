@@ -494,7 +494,7 @@ def handle_callback(call):
     if call.data == "btn_set_forward_target":
         try:
             bot.answer_callback_query(call.id)
-            sent = bot.send_message(chat_id, "Введите ID пользователя, которому нужно пересылать записи (или введите 0, чтобы сбросить):")
+            sent = send_temp_message(chat_id, "Введите ID пользователя, которому нужно пересылать записи (или введите 0, чтобы сбросить):")
             bot.register_next_step_handler(sent, process_forward_target)
         except Exception as e:
             log_error(f"Ошибка при запросе ID получателя: {e}")
