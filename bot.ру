@@ -650,7 +650,8 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, "Сумма обновлена" if success else "Не удалось изменить")
         return
 
-    if call.data and call.data.startswith("edit_manual_"):
+    # /////в одном окне//////
+if call.data and call.data.startswith("edit_manual_"):
     try:
         rid = int(call.data.split("_", 2)[2])
     except:
