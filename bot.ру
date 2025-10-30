@@ -651,17 +651,30 @@ def handle_callback(call):
         return
 
     if call.data and call.data.startswith("edit_manual_"):
-        try:
-            rid = int(call.data.split("_",2)[2])
-        except:
-            bot.answer_callback_query(call.id, "Неверный ID")
-            return
-        store["edit_wait"] = "change_value"
-        store["edit_target"] = rid
-        save_data(data)
-        bot.send_message(chat_id, f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед")
-        bot.answer_callback_query(call.id)
+    try:
+        rid = int(call.data.split("_", 2)[2])
+    except:
+        bot.answer_callback_query(call.id, "Неверный ID")
         return
+
+    store["edit_wait"] = "change_value"
+    store["edit_target"] = rid
+    save_data(data)
+
+    text = f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед"
+
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=call.message.message_id,
+            text=text,
+            reply_markup=None
+        )
+    except Exception as e:
+        bot.send_message(chat_id, text)
+
+    bot.answer_callback_query(call.id)
+    return
 
     if call.data and call.data.startswith("edit_delete_"):
         try:
