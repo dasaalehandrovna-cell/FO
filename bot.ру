@@ -399,18 +399,31 @@ def update_or_send_today_window(chat_id, create_if_missing=True):
 # -----------------------------
 # Callback обработчик
 # -----------------------------
-@bot.callback_query_handler(func=lambda c: True)
+@bot.callback_query_handler(func=lambda call: True)
 def handle_callback(call):
     try:
         chat_id = call.message.chat.id
+        message_id = call.message.message_id
     except Exception:
         return
+
     store = get_chat_store(chat_id)
     today_key = get_today_key()
     day_records = store.get("daily_records", {}).get(today_key, [])
     today_msgs = data.setdefault("active_messages", {}).setdefault(today_key, {})
-    active_id = today_msgs.get(str(chat_id))
+    active_id = today_msgs.get(str(chat_id)) or message_id
 
+    def edit_window(text, reply_markup=None):
+        try:
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=reply_markup)
+        except telebot.apihelper.ApiException as e:
+            log_error(f"Ошибка редактирования окна: {e}")
+
+    def send_and_set_window(text, reply_markup=None):
+        sent = bot.send_message(chat_id, text, reply_markup=reply_markup)
+        set_today_active_window(chat_id, sent.message_id)
+
+    # ---------- Меню редактирования ----------
     if call.data == "btn_edit_menu":
         text = (
             "✏️ Меню редактирования\n\n"
@@ -419,20 +432,11 @@ def handle_callback(call):
             "👤 Получатель — задать ID для пересылки\n"
             "⚙️ Обнулить — очистить все данные\n"
         )
-        if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_edit_menu_keyboard(chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка открытия подменю редактирования: {e}")
-        else:
-            try:
-                sent = bot.send_message(chat_id, text, reply_markup=build_edit_menu_keyboard(chat_id))
-                set_today_active_window(chat_id, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки подменю редактирования: {e}")
+        edit_window(text, build_edit_menu_keyboard(chat_id))
         bot.answer_callback_query(call.id)
         return
 
+    # ---------- Баланс ----------
     if call.data == "btn_balance":
         daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
         daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
@@ -443,37 +447,26 @@ def handle_callback(call):
             f"💸 Расход за сегодня: {fmt_num(abs(daily_expense))} ARS\n"
             f"💰 Общий остаток: {fmt_num(overall_balance)} ARS"
         )
-        if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка редактирования окна (Баланс): {e}")
-        else:
-            update_or_send_today_window(chat_id)
+        edit_window(text, build_main_keyboard(chat_id))
         bot.answer_callback_query(call.id, "Баланс обновлён ✅")
         return
 
+    # ---------- Отчёт расходов ----------
     if call.data == "btn_report":
         expenses = [r for r in day_records if r["amount"] < 0]
-        daily_expense_total = sum(abs(r["amount"]) for r in expenses)
         if not expenses:
             text = f"📅 {today_key}\nПока нет расходов за сегодня.\n💸 Расход за день: 0 ARS"
         else:
             lines = [f"📅 {today_key}", "📋 Расходы за день:"]
             for r in expenses[-30:]:
                 lines.append(f"{r['short_id']}: -{fmt_num(abs(r['amount']))} — {r.get('note','')}")
-            lines.append(f"\n💸 Расход за день: {fmt_num(daily_expense_total)} ARS")
+            lines.append(f"\n💸 Расход за день: {fmt_num(sum(abs(r['amount']) for r in expenses))} ARS")
             text = "\n".join(lines)
-        if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка редактирования окна (Отчёт расходов): {e}")
-        else:
-            update_or_send_today_window(chat_id)
+        edit_window(text, build_main_keyboard(chat_id))
         bot.answer_callback_query(call.id, "Отчёт расходов обновлён 📊")
         return
 
+    # ---------- CSV ----------
     if call.data == "btn_csv":
         try:
             with open(CSV_FILE, "rb") as f:
@@ -484,6 +477,7 @@ def handle_callback(call):
             bot.answer_callback_query(call.id)
         return
 
+    # ---------- Форвард ----------
     if call.data == "btn_toggle_forward":
         store["forward_enabled"] = not store.get("forward_enabled", False)
         save_data(data)
@@ -493,35 +487,47 @@ def handle_callback(call):
         return
 
     if call.data == "btn_set_forward_target":
-        try:
-            bot.answer_callback_query(call.id)
-
-        # Текст, который будет показан в текущем окне
-            new_text = "Введите ID пользователя, которому нужно пересылать записи\n(или введите 0, чтобы сбросить):"
-
-        # Редактируем текущее сообщение — сохраняем кнопки
-            bot.edit_message_text(
-                chat_id=call.message.chat.id,
-                message_id=call.message.message_id,
-                text=new_text,
-                reply_markup=call.message.reply_markup  # сохраняем клавиатуру
-            )
-
-        # Регистрируем следующий ввод от пользователя (в том же окне)
-            bot.register_next_step_handler_by_chat_id(call.message.chat.id, process_forward_target)
-
-        except Exception as e:
-            log_error(f"Ошибка при запросе ID получателя: {e}")
-            bot.answer_callback_query(call.id, "Не удалось запросить ID получателя.")
+        bot.answer_callback_query(call.id)
+        text = "Введите ID пользователя, которому нужно пересылать записи\n(или введите 0, чтобы сбросить):"
+        edit_window(text, call.message.reply_markup)
+        bot.register_next_step_handler_by_chat_id(chat_id, process_forward_target)
         return
 
-#кнопка обнуления
+    # ---------- Ручной ввод изменений ----------
+    if call.data.startswith("edit_manual_"):
+        rid = int(call.data.split("_")[2])
+        store["edit_target"] = rid
+        save_data(data)
+        text = "Введите новую сумму и описание операции:"
+        edit_window(text, call.message.reply_markup)
+        bot.register_next_step_handler_by_chat_id(chat_id, process_manual_input)
+        bot.answer_callback_query(call.id)
+        return
+
+    # ---------- Удаление записи ----------
+    if call.data.startswith("edit_delete_"):
+        rid = int(call.data.split("_")[2])
+        text = f"Подтвердите удаление записи R{rid}:"
+        edit_window(text, build_confirm_delete_keyboard(rid))
+        bot.answer_callback_query(call.id)
+        return
+
+    if call.data.startswith("confirm_delete_"):
+        rid = int(call.data.split("_")[2])
+        success, _ = delete_record_in_chat(chat_id, rid, user=call.from_user)
+        update_or_send_today_window(chat_id)
+        bot.answer_callback_query(call.id, "Запись удалена" if success else "Запись не найдена")
+        return
+
+    if call.data == "cancel_delete":
+        update_or_send_today_window(chat_id)
+        bot.answer_callback_query(call.id, "Отмена удаления")
+        return
+
+    # ---------- Обнуление ----------
     if call.data == "btn_reset":
-        if active_id:
-            try:
-                bot.edit_message_text("Для обнуления используйте команду /reset (введите `/reset` в чате).", chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
-            except:
-                pass
+        text = "Для обнуления используйте команду /reset (введите `/reset` в чате)."
+        edit_window(text, build_main_keyboard(chat_id))
         bot.answer_callback_query(call.id)
         return
 
@@ -530,10 +536,7 @@ def handle_callback(call):
         store["daily_records"] = {}
         store["balance"] = 0
         data["records"] = [x for x in data.get("records", []) if x.get("owner") != chat_id]
-        try:
-            data["overall_balance"] = sum([x["amount"] for x in data.get("records", [])])
-        except:
-            data["overall_balance"] = 0
+        data["overall_balance"] = sum([x["amount"] for x in data.get("records", [])]) if data.get("records") else 0
         save_data(data)
         update_or_send_today_window(chat_id)
         bot.answer_callback_query(call.id, "Данные сброшены 🧹")
@@ -544,6 +547,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, "Отмена")
         return
 
+    # ---------- Старт / Инфо ----------
     if call.data == "btn_start":
         update_or_send_today_window(chat_id)
         bot.answer_callback_query(call.id, "Окно обновлено 🔄")
@@ -562,32 +566,17 @@ def handle_callback(call):
             "/help - Помощь\n\n"
             "📝 Добавление операций (форматы):\n"
             "+500 Зарплата    (или ^+^500^)\n"
-            "-150 Обед       (или ^-^150^)\n"
+            "-150 Обед       (или ^-^150^ Обед)\n"
         )
-        if active_id:
-            try:
-                bot.edit_message_text(info_text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка редактирования окна (Инфо): {e}")
-        else:
-            try:
-                sent = bot.send_message(chat_id, info_text, reply_markup=build_main_keyboard(chat_id))
-                set_today_active_window(chat_id, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки инфо: {e}")
+        edit_window(info_text, build_main_keyboard(chat_id))
         bot.answer_callback_query(call.id)
         return
 
+    # ---------- Список редактирования ----------
     if call.data == "btn_edit_list":
         if not day_records:
             text = f"📅 {today_key}\nПока нет операций за сегодня."
-            if active_id:
-                try:
-                    bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(chat_id))
-                except telebot.apihelper.ApiException as e:
-                    log_error(f"Ошибка редактирования окна (пустой список редактирования): {e}")
-            else:
-                update_or_send_today_window(chat_id)
+            edit_window(text, build_main_keyboard(chat_id))
             bot.answer_callback_query(call.id, "Нет записей для редактирования")
             return
 
@@ -599,168 +588,27 @@ def handle_callback(call):
             kb.add(types.InlineKeyboardButton(label, callback_data=f"rec_{r['id']}"))
         kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
         text = "\n".join(lines)
-        if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка показа списка редактирования: {e}")
-        else:
-            try:
-                sent = bot.send_message(chat_id, text, reply_markup=kb)
-                set_today_active_window(chat_id, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки списка редактирования: {e}")
+        edit_window(text, kb)
         bot.answer_callback_query(call.id)
         return
 
-    if call.data and call.data.startswith("rec_"):
-        try:
-            rid = int(call.data.split("_",1)[1])
-        except:
-            bot.answer_callback_query(call.id, "Неверный ID")
-            return
-        rec = None
-        for r in day_records:
-            if r["id"] == rid:
-                rec = r
-                break
+    # ---------- Редактирование конкретной записи ----------
+    if call.data.startswith("rec_"):
+        rid = int(call.data.split("_")[1])
+        rec = next((r for r in day_records if r["id"] == rid), None)
         if not rec:
             bot.answer_callback_query(call.id, "Запись не найдена")
             return
         sign = "+" if rec["amount"] > 0 else "-"
         text = f"Запись {rec['short_id']}\n{sign}{fmt_num(abs(rec['amount']))} — {rec.get('note','')}\nДобавлена: {rec.get('timestamp')}"
         kb = build_edit_keyboard_for_record(rid)
-        if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка показа детали записи: {e}")
-        else:
-            try:
-                sent = bot.send_message(chat_id, text, reply_markup=kb)
-                set_today_active_window(chat_id, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки детали записи: {e}")
+        edit_window(text, kb)
         bot.answer_callback_query(call.id)
         return
 
-    if call.data and call.data.startswith("preset_add_"):
-        parts = call.data.split("_")
-        try:
-            rid = int(parts[2])
-            delta = int(parts[3])
-        except:
-            bot.answer_callback_query(call.id, "Неверные параметры")
-            return
-        success = False
-        for r in store.get("records", []):
-            if r["id"] == rid:
-                new_amount = r["amount"] + delta
-                new_note = r.get("note","")
-                user = call.from_user
-                success, _ = update_record_in_chat(chat_id, rid, new_amount, new_note, user=user)
-                break
-        update_or_send_today_window(chat_id)
-        bot.answer_callback_query(call.id, "Сумма обновлена" if success else "Не удалось изменить")
-        return
-
-    # /////в одном окне//////
-    #if call.data and call.data.startswith("edit_manual_"):
-        #try:
-            #rid = int(call.data.split("_", 2)[2])
-        #except:
-            #bot.answer_callback_query(call.id, "Неверный ID")
-            #return
-
-        #store["edit_wait"] = "change_value"
-        #store["edit_target"] = rid
-        #save_data(data)
-
-        #text = f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед"
-
-        #try:
-            #bot.edit_message_text(
-                #chat_id=chat_id,
-                #message_id=call.message.message_id,
-                #text=text,
-                #reply_markup=call.message.reply_markup  # <-- сохраняем кнопки
-            #)
-        #except Exception as e:
-           # bot.send_message(chat_id, text)
-
-        #bot.answer_callback_query(call.id)
-        #return
-
-    elif call.data.startswith("edit_manual_"):
-        rid = int(call.data.split("_")[2])
-        bot.answer_callback_query(call.id)
-    
-    # сохраняем ID редактируемой записи
-        store["edit_target"] = rid
-        save_data(data)
-    
-    # если окно активно — редактируем его
-        if active_id:
-            bot.edit_message_text(
-            "Введите новую сумму и описание операции:",
-                chat_id,
-                active_id,
-                reply_markup=call.message.reply_markup  
-            )
-        else:
-            update_or_send_today_window(chat_id)
-    
-    # ждём ручного ввода (без создания нового сообщения)
-        bot.register_next_step_handler_by_chat_id(chat_id, process_manual_input)
-        return
-
-    if call.data and call.data.startswith("edit_delete_"):
-        try:
-            rid = int(call.data.split("_",2)[2])
-        except:
-            bot.answer_callback_query(call.id, "Неверный ID")
-            return
-        if active_id:
-            try:
-                bot.edit_message_text(f"Подтвердите удаление записи R{rid}:", chat_id, active_id, reply_markup=build_confirm_delete_keyboard(rid))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка показа подтверждения удаления: {e}")
-        else:
-            try:
-                sent = bot.send_message(chat_id, f"Подтвердите удаление записи R{rid}:", reply_markup=build_confirm_delete_keyboard(rid))
-                set_today_active_window(chat_id, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки подтверждения удаления: {e}")
-        bot.answer_callback_query(call.id)
-        return
-
-    if call.data and call.data.startswith("confirm_delete_"):
-        try:
-            rid = int(call.data.split("_",2)[2])
-        except:
-            bot.answer_callback_query(call.id, "Неверный ID")
-            return
-        success, _ = delete_record_in_chat(chat_id, rid, user=call.from_user)
-        update_or_send_today_window(chat_id)
-        bot.answer_callback_query(call.id, "Запись удалена" if success else "Запись не найдена")
-        return
-
-    if call.data == "cancel_delete":
-        update_or_send_today_window(chat_id)
-        bot.answer_callback_query(call.id, "Отмена удаления")
-        return
-
-    if call.data in ("back_to_main", "edit_back_to_list", "edit_back"):
-        update_or_send_today_window(chat_id)
-        bot.answer_callback_query(call.id)
-        return
-
-    if call.data == "noop":
-        bot.answer_callback_query(call.id)
-        return
-
+    # ---------- Любые другие кнопки ----------
+    update_or_send_today_window(chat_id)
     bot.answer_callback_query(call.id)
-    return
 
 # -----------------------------
 # Regex для сумм
