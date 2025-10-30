@@ -1,214 +1,185 @@
 # ============================================
-# Финансовый бот — версия 9.9.2
-# Добавлено: Keep-Alive с веб-сервером для пинга
+# Финансовый бот — версия 9.8.7
+# Обновлено: добавлен keep_alive с уведомлением владельцу
 # ============================================
 
 import os
+import time
 import json
 import csv
+import logging
+import threading
+import requests
 import telebot
 from telebot import types
 from datetime import datetime
-import threading
-import time
-from flask import Flask
 
-TOKEN = "ВАШ_ТОКЕН_БОТА"
-OWNER_ID = ВАШ_CHAT_ID  # сюда ставим свой Telegram ID для уведомлений
-bot = telebot.TeleBot(TOKEN)
+# -----------------------------
+# ОТСЕК 1 — Настройки
+# -----------------------------
+TOKEN = os.getenv("BOT_TOKEN", "ВАШ_ТОКЕН_ЗДЕСЬ")
+OWNER_ID = int(os.getenv("OWNER_ID", "123456789"))  # ваш Telegram ID
 
 DATA_FILE = "data.json"
 CSV_FILE = "records.csv"
 
-# -----------------------------
-# Работа с данными
-# -----------------------------
-if os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
-else:
-    data = {"records": []}
+bot = telebot.TeleBot(TOKEN)
 
-def save_data():
+# -----------------------------
+# ОТСЕК 2 — Функции хранения
+# -----------------------------
+def load_data():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return {}
+
+def save_data(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        writer.writerow(["user_id","amount","note","date"])
-        for r in data["records"]:
-            writer.writerow([r["owner"], r["amount"], r["note"], r["date"]])
 
-def get_user_records(chat_id):
-    return [r for r in data["records"] if r["owner"] == chat_id]
+store = load_data()
 
 # -----------------------------
-# Клавиатуры
+# ОТСЕК 3 — Главное меню
 # -----------------------------
-def build_main_keyboard():
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(
-        types.InlineKeyboardButton("💰 Баланс", callback_data="balance"),
-        types.InlineKeyboardButton("📊 Отчёт", callback_data="report")
-    )
-    kb.row(
-        types.InlineKeyboardButton("➕ Добавить", callback_data="add"),
-        types.InlineKeyboardButton("✏️ Редактировать", callback_data="edit_menu")
-    )
-    kb.row(
-        types.InlineKeyboardButton("❌ Удалить", callback_data="delete_menu"),
-        types.InlineKeyboardButton("🗑️ Обнулить", callback_data="reset_confirm")
-    )
-    kb.row(types.InlineKeyboardButton("ℹ️ Инфо", callback_data="info"))
+def main_keyboard():
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("💰 Добавить", "📋 Отчёт", "✏️ Редактировать")
     return kb
 
-# -----------------------------
-# Команды
-# -----------------------------
 @bot.message_handler(commands=["start"])
-def cmd_start(msg):
-    bot.send_message(msg.chat.id, "Привет! Я Финансовый бот.\nВыберите действие:", reply_markup=build_main_keyboard())
+def start(msg):
+    bot.send_message(msg.chat.id, "Добро пожаловать в Финансовый Бот 💼", reply_markup=main_keyboard())
 
 # -----------------------------
-# Обработка callback
+# ОТСЕК 4 — Добавление расходов
 # -----------------------------
-@bot.callback_query_handler(func=lambda c: True)
-def cb_handler(call):
-    cid = call.message.chat.id
-    user_records = get_user_records(cid)
+@bot.message_handler(func=lambda m: m.text == "💰 Добавить")
+def add_entry(msg):
+    bot.send_message(msg.chat.id, "Введите сумму и описание (например: 250 Продукты):")
+    bot.register_next_step_handler(msg, save_entry)
 
-    if call.data == "balance":
-        total = sum(r["amount"] for r in user_records)
-        bot.edit_message_text(f"💰 Ваш баланс: {total}", cid, call.message.message_id, reply_markup=build_main_keyboard())
-
-    elif call.data == "report":
-        if not user_records:
-            text = "Нет записей для отчёта."
-        else:
-            text = "📊 Ваши записи:\n"
-            for r in user_records:
-                text += f'{r["date"]}: {r["amount"]} — {r["note"]}\n'
-        bot.edit_message_text(text, cid, call.message.message_id, reply_markup=build_main_keyboard())
-
-    elif call.data == "add":
-        msg = bot.send_message(cid, "Введите сумму и заметку через пробел, например:\n100 Продукты")
-        bot.register_next_step_handler(msg, add_record)
-
-    elif call.data == "edit_menu":
-        if not user_records:
-            bot.edit_message_text("Нет записей для редактирования.", cid, call.message.message_id, reply_markup=build_main_keyboard())
-            return
-        kb = types.InlineKeyboardMarkup()
-        for i, r in enumerate(user_records):
-            kb.row(types.InlineKeyboardButton(f'{r["date"]}: {r["amount"]} — {r["note"]}', callback_data=f'edit_{i}'))
-        kb.row(types.InlineKeyboardButton("⬅️ Назад", callback_data="back"))
-        bot.edit_message_text("Выберите запись для редактирования:", cid, call.message.message_id, reply_markup=kb)
-
-    elif call.data.startswith("edit_"):
-        index = int(call.data.split("_")[1])
-        record = user_records[index]
-        msg = bot.send_message(cid, f"Введите новую сумму и заметку для {record['date']}:")
-        bot.register_next_step_handler(msg, lambda m, rec=record: edit_record_step2(m, rec))
-
-    elif call.data == "delete_menu":
-        if not user_records:
-            bot.edit_message_text("Нет записей для удаления.", cid, call.message.message_id, reply_markup=build_main_keyboard())
-            return
-        kb = types.InlineKeyboardMarkup()
-        for i, r in enumerate(user_records):
-            kb.row(types.InlineKeyboardButton(f'{r["date"]}: {r["amount"]} — {r["note"]}', callback_data=f'del_{i}'))
-        kb.row(types.InlineKeyboardButton("⬅️ Назад", callback_data="back"))
-        bot.edit_message_text("Выберите запись для удаления:", cid, call.message.message_id, reply_markup=kb)
-
-    elif call.data.startswith("del_"):
-        index = int(call.data.split("_")[1])
-        record = user_records[index]
-        data["records"].remove(record)
-        save_data()
-        bot.edit_message_text("✅ Запись удалена.", cid, call.message.message_id, reply_markup=build_main_keyboard())
-
-    elif call.data == "reset_confirm":
-        kb = types.InlineKeyboardMarkup()
-        kb.row(
-            types.InlineKeyboardButton("✅ Да", callback_data="reset_yes"),
-            types.InlineKeyboardButton("❌ Нет", callback_data="back")
-        )
-        bot.edit_message_text("Вы уверены, что хотите обнулить все записи?", cid, call.message.message_id, reply_markup=kb)
-
-    elif call.data == "reset_yes":
-        data["records"] = [r for r in data["records"] if r["owner"] != cid]
-        save_data()
-        bot.edit_message_text("✅ Все записи удалены.", cid, call.message.message_id, reply_markup=build_main_keyboard())
-
-    elif call.data == "back":
-        bot.edit_message_text("Выберите действие:", cid, call.message.message_id, reply_markup=build_main_keyboard())
-
-    elif call.data == "info":
-        bot.edit_message_text("Финансовый бот — версия 9.9.2\nВсе данные сохраняются автоматически.", cid, call.message.message_id, reply_markup=build_main_keyboard())
-
-# -----------------------------
-# Функции добавления и редактирования
-# -----------------------------
-def add_record(msg):
-    cid = msg.chat.id
-    parts = msg.text.strip().split(" ", 1)
+def save_entry(msg):
     try:
+        parts = msg.text.split(maxsplit=1)
         amount = float(parts[0])
         note = parts[1] if len(parts) > 1 else ""
-    except:
-        bot.send_message(cid, "Ошибка ввода. Используйте формат: сумма заметка")
-        return
-    record = {"owner": cid, "amount": amount, "note": note, "date": datetime.now().strftime("%Y-%m-%d")}
-    data["records"].append(record)
-    save_data()
-    bot.send_message(cid, "✅ Запись добавлена.", reply_markup=build_main_keyboard())
+        date = datetime.now().strftime("%Y-%m-%d")
+        user_id = str(msg.chat.id)
+        if user_id not in store:
+            store[user_id] = []
+        store[user_id].append({"date": date, "amount": amount, "note": note})
+        save_data(store)
+        bot.send_message(msg.chat.id, f"✅ Добавлено: {amount} — {note}", reply_markup=main_keyboard())
+    except Exception:
+        bot.send_message(msg.chat.id, "Ошибка ввода. Попробуйте снова.")
 
-def edit_record_step2(msg, record):
-    cid = msg.chat.id
-    parts = msg.text.strip().split(" ", 1)
+# -----------------------------
+# ОТСЕК 5 — Просмотр отчёта
+# -----------------------------
+@bot.message_handler(func=lambda m: m.text == "📋 Отчёт")
+def show_report(msg):
+    user_id = str(msg.chat.id)
+    records = store.get(user_id, [])
+    if not records:
+        bot.send_message(msg.chat.id, "Записей пока нет.")
+        return
+    text = "📊 Ваши расходы:\n\n"
+    total = 0
+    for r in records[-10:]:
+        text += f"• {r['date']} — {r['amount']} ({r['note']})\n"
+        total += r["amount"]
+    text += f"\n💵 Итого: {total}"
+    bot.send_message(msg.chat.id, text)
+
+# -----------------------------
+# ОТСЕК 6 — Редактирование
+# -----------------------------
+@bot.message_handler(func=lambda m: m.text == "✏️ Редактировать")
+def edit_menu(msg):
+    kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    kb.add("🧾 CSV", "♻️ Обнулить", "✏️ Изменить", "🔙 Назад")
+    bot.send_message(msg.chat.id, "Выберите действие:", reply_markup=kb)
+
+@bot.message_handler(func=lambda m: m.text == "🔙 Назад")
+def back_to_main(msg):
+    bot.send_message(msg.chat.id, "Возврат в главное меню.", reply_markup=main_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "🧾 CSV")
+def export_csv(msg):
+    user_id = str(msg.chat.id)
+    records = store.get(user_id, [])
+    if not records:
+        bot.send_message(msg.chat.id, "Нет данных для экспорта.")
+        return
+    with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Дата", "Сумма", "Описание"])
+        for r in records:
+            writer.writerow([r["date"], r["amount"], r["note"]])
+    with open(CSV_FILE, "rb") as f:
+        bot.send_document(msg.chat.id, f)
+
+@bot.message_handler(func=lambda m: m.text == "♻️ Обнулить")
+def reset_data(msg):
+    user_id = str(msg.chat.id)
+    store[user_id] = []
+    save_data(store)
+    bot.send_message(msg.chat.id, "Все записи удалены.", reply_markup=main_keyboard())
+
+@bot.message_handler(func=lambda m: m.text == "✏️ Изменить")
+def edit_entry(msg):
+    user_id = str(msg.chat.id)
+    records = store.get(user_id, [])
+    if not records:
+        bot.send_message(msg.chat.id, "Нет записей для изменения.")
+        return
+    text = "Выберите номер записи для изменения:\n"
+    for i, r in enumerate(records[-10:], 1):
+        text += f"{i}) {r['date']} — {r['amount']} ({r['note']})\n"
+    bot.send_message(msg.chat.id, text)
+    bot.register_next_step_handler(msg, process_edit_choice)
+
+def process_edit_choice(msg):
+    user_id = str(msg.chat.id)
     try:
+        index = int(msg.text) - 1
+        record = store[user_id][index]
+        bot.send_message(msg.chat.id, f"Введите новые данные (например: 300 Обновлено):")
+        bot.register_next_step_handler(msg, lambda m: update_record(m, index))
+    except:
+        bot.send_message(msg.chat.id, "Неверный номер.")
+
+def update_record(msg, index):
+    user_id = str(msg.chat.id)
+    try:
+        parts = msg.text.split(maxsplit=1)
         amount = float(parts[0])
         note = parts[1] if len(parts) > 1 else ""
+        store[user_id][index].update({"amount": amount, "note": note})
+        save_data(store)
+        bot.send_message(msg.chat.id, "✅ Запись обновлена.", reply_markup=main_keyboard())
     except:
-        bot.send_message(cid, "Ошибка ввода. Используйте формат: сумма заметка")
-        return
-    record["amount"] = amount
-    record["note"] = note
-    save_data()
-    bot.send_message(cid, "✅ Запись обновлена.", reply_markup=build_main_keyboard())
+        bot.send_message(msg.chat.id, "Ошибка обновления.")
 
 # -----------------------------
-# Keep-Alive через веб-сервер
+# ОТСЕК 7 — Keep Alive
 # -----------------------------
-app = Flask("")
-
-@app.route("/")
-def home():
-    return "Бот активен!"
-
-def run_web():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
-threading.Thread(target=run_web, daemon=True).start()
-
-# -----------------------------
-# Keep-Alive уведомления в Telegram
-# -----------------------------
-def keep_alive_notify():
+def keep_alive():
     while True:
         try:
-            bot.send_message(OWNER_ID, "💡 Бот активен и работает!")
-        except:
-            pass
-        time.sleep(100)  # каждые 60 минут
+            requests.get("https://your-render-app-url.onrender.com")  # URL вашего бота
+            bot.send_message(OWNER_ID, "✅ Бот активен и работает стабильно.")
+        except Exception as e:
+            logging.warning(f"Ошибка keep_alive: {e}")
+        time.sleep(900)  # каждые 15 минут
 
-threading.Thread(target=keep_alive_notify, daemon=True).start()
-
-# -----------------------------
-# Уведомление при старте
-# -----------------------------
-bot.send_message(OWNER_ID, "✅ Финансовый бот запущен и активен!")
+# Запуск keep_alive в отдельном потоке
+threading.Thread(target=keep_alive, daemon=True).start()
 
 # -----------------------------
-# Запуск бота
+# ОТСЕК 8 — Запуск бота
 # -----------------------------
-bot.infinity_polling()
+if __name__ == "__main__":
+    bot.infinity_polling(timeout=60, long_polling_timeout=30)
