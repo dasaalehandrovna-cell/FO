@@ -770,22 +770,9 @@ def process_forward_target(message):
 # -----------------------------
 @bot.message_handler(commands=["start", "info"])
 def cmd_start(msg):
-    #----chat_id = msg.chat.id
-    #----update_or_send_today_window(chat_id, create_if_missing=True)
     chat_id = msg.chat.id
-    store = get_chat_store(chat_id)
-    today_key = get_today_key()
-    day_records = store.get("daily_records", {}).get(today_key, [])
-    daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
-    daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
-    overall_balance = store.get("balance", 0)
-    text = (
-        f"📅 {today_key}\n\n"
-        f"💰 Общий остаток: {fmt_num(overall_balance)} ARS\n"
-        f"💵 Приход за сегодня: {fmt_num(daily_income)} ARS\n"
-        f"💸 Расход за сегодня: {fmt_num(abs(daily_expense))} ARS"
-    )
-    bot.send_message(chat_id, text)
+    update_or_send_today_window(chat_id, create_if_missing=True)
+
 
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
