@@ -41,6 +41,23 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
 
+#улаление сообщений
+
+def send_temp_message(chat_id, text, delay=5, **kwargs):
+    """Отправка временного сообщения, которое удаляется через delay секунд."""
+    try:
+        msg = bot.send_message(chat_id, text, **kwargs)
+        threading.Timer(delay, lambda: delete_message_safe(chat_id, msg.message_id)).start()
+    except Exception as e:
+        log_error(f"send_temp_message: не удалось отправить/удалить сообщение: {e}")
+
+def delete_message_safe(chat_id, message_id):
+    """Удаляет сообщение, игнорируя ошибки."""
+    try:
+        bot.delete_message(chat_id, message_id)
+    except:
+        pass
+
 # ----------------------------------------
 # ФУНКЦИЯ ФОРМАТИРОВАНИЯ ЧИСЕЛ
 # ----------------------------------------
