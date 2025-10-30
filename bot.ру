@@ -883,7 +883,7 @@ def cmd_reset(msg):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(types.InlineKeyboardButton("✅ Да, обнулить", callback_data="confirm_reset"),
            types.InlineKeyboardButton("❌ Отмена", callback_data="cancel_reset"))
-    bot.edit_message_text(chat_id, "⚠️ Вы уверены, что хотите обнулить все данные этого чата? Это действие нельзя будет отменить.", reply_markup=call.message.reply_markup)
+    bot.send_message(chat_id, "⚠️ Вы уверены, что хотите обнулить все данные этого чата? Это действие нельзя будет отменить.", reply_markup=call.message.reply_markup)
 
 # Основной обработчик текстовых сообщений
 @bot.message_handler(func=lambda m: True)
