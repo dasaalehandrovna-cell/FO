@@ -672,7 +672,7 @@ def handle_callback(call):
                 reply_markup=call.message.reply_markup  # <-- сохраняем кнопки
             )
         except Exception as e:
-            bot.send_message(chat_id, text)
+           # bot.send_message(chat_id, text)
 
         bot.answer_callback_query(call.id)
         return
