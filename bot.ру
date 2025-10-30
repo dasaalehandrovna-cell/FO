@@ -690,7 +690,8 @@ def handle_callback(call):
             bot.edit_message_text(
             "Введите новую сумму и описание операции:",
                 chat_id,
-                active_id
+                active_id,
+                reply_markup=call.message.reply_markup  
             )
         else:
             update_or_send_today_window(chat_id)
