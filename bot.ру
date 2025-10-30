@@ -173,7 +173,7 @@ def keep_alive():
             bot.send_message(OWNER_ID, "✅ Бот активен и работает стабильно.")
         except Exception as e:
             logging.warning(f"Ошибка keep_alive: {e}")
-        time.sleep(900)  # каждые 15 минут
+        time.sleep(200)  # каждые 15 минут
 
 # Запуск keep_alive в отдельном потоке
 threading.Thread(target=keep_alive, daemon=True).start()
