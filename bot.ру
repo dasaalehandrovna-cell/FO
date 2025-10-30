@@ -32,7 +32,7 @@ PORT = int(os.environ.get("PORT", 5000))
 VERSION = "9.8.6"
 
 # Keep-alive настройки
-KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 15 * 60))  # по умолчанию 15 минут
+KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 12 * 60))  # по умолчанию ? минут
 KEEP_ALIVE_SEND_TO_OWNER = True  # если False — не шлём сообщения владельцу, только self-ping
 
 if not TOKEN:
