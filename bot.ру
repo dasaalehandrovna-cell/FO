@@ -651,31 +651,53 @@ def handle_callback(call):
         return
 
     # /////в одном окне//////
-    if call.data and call.data.startswith("edit_manual_"):
-        try:
-            rid = int(call.data.split("_", 2)[2])
-        except:
-            bot.answer_callback_query(call.id, "Неверный ID")
-            return
+    #if call.data and call.data.startswith("edit_manual_"):
+        #try:
+            #rid = int(call.data.split("_", 2)[2])
+        #except:
+            #bot.answer_callback_query(call.id, "Неверный ID")
+            #return
 
-        store["edit_wait"] = "change_value"
-        store["edit_target"] = rid
-        save_data(data)
+        #store["edit_wait"] = "change_value"
+        #store["edit_target"] = rid
+        #save_data(data)
 
-        text = f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед"
+        #text = f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед"
 
-        try:
-            bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                text=text,
-                reply_markup=call.message.reply_markup  # <-- сохраняем кнопки
-            )
+        #try:
+            #bot.edit_message_text(
+                #chat_id=chat_id,
+                #message_id=call.message.message_id,
+                #text=text,
+                #reply_markup=call.message.reply_markup  # <-- сохраняем кнопки
+            #)
         #except Exception as e:
            # bot.send_message(chat_id, text)
 
-        bot.answer_callback_query(call.id)
-        return
+        #bot.answer_callback_query(call.id)
+        #return
+
+    elif call.data.startswith("edit_manual_"):
+    rid = int(call.data.split("_")[2])
+    bot.answer_callback_query(call.id)
+    
+    # сохраняем ID редактируемой записи
+    store["edit_target"] = rid
+    save_data(data)
+    
+    # если окно активно — редактируем его
+    if active_id:
+        bot.edit_message_text(
+            "Введите новую сумму и описание операции:",
+            chat_id,
+            active_id
+        )
+    else:
+        update_or_send_today_window(chat_id)
+    
+    # ждём ручного ввода (без создания нового сообщения)
+    bot.register_next_step_handler_by_chat_id(chat_id, process_manual_input)
+    return
 
     if call.data and call.data.startswith("edit_delete_"):
         try:
