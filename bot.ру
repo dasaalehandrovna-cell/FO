@@ -1,6 +1,6 @@
 # ============================================
-# Финансовый бот — версия 9.8.7
-# Обновлено: добавлен keep_alive с уведомлением владельцу
+# Финансовый бот — версия 9.8.9
+# Работает на Render + Flask keep_alive сервер
 # ============================================
 
 import os
@@ -13,12 +13,14 @@ import requests
 import telebot
 from telebot import types
 from datetime import datetime
+from flask import Flask
 
 # -----------------------------
 # ОТСЕК 1 — Настройки
 # -----------------------------
 TOKEN = os.getenv("BOT_TOKEN", "ВАШ_ТОКЕН_ЗДЕСЬ")
-OWNER_ID = int(os.getenv("OWNER_ID", "123456789"))  # ваш Telegram ID
+OWNER_ID = int(os.getenv("OWNER_ID", "123456789"))
+RENDER_URL = os.getenv("RENDER_URL", "https://your-render-app-url.onrender.com")
 
 DATA_FILE = "data.json"
 CSV_FILE = "records.csv"
@@ -67,9 +69,7 @@ def save_entry(msg):
         note = parts[1] if len(parts) > 1 else ""
         date = datetime.now().strftime("%Y-%m-%d")
         user_id = str(msg.chat.id)
-        if user_id not in store:
-            store[user_id] = []
-        store[user_id].append({"date": date, "amount": amount, "note": note})
+        store.setdefault(user_id, []).append({"date": date, "amount": amount, "note": note})
         save_data(store)
         bot.send_message(msg.chat.id, f"✅ Добавлено: {amount} — {note}", reply_markup=main_keyboard())
     except Exception:
@@ -145,8 +145,7 @@ def process_edit_choice(msg):
     user_id = str(msg.chat.id)
     try:
         index = int(msg.text) - 1
-        record = store[user_id][index]
-        bot.send_message(msg.chat.id, f"Введите новые данные (например: 300 Обновлено):")
+        bot.send_message(msg.chat.id, "Введите новые данные (например: 300 Обновлено):")
         bot.register_next_step_handler(msg, lambda m: update_record(m, index))
     except:
         bot.send_message(msg.chat.id, "Неверный номер.")
@@ -164,22 +163,71 @@ def update_record(msg, index):
         bot.send_message(msg.chat.id, "Ошибка обновления.")
 
 # -----------------------------
-# ОТСЕК 7 — Keep Alive
+# ОТСЕК 7 — Keep Alive + Flask
 # -----------------------------
+app = Flask('')
+
+@app.route('/')
+def home():
+    return "✅ Bot is alive"
+
+def run_flask():
+    app.run(host="0.0.0.0", port=10000)
+
 def keep_alive():
+    start_time = time.time()
     while True:
         try:
-            requests.get("https://your-render-app-url.onrender.com")  # URL вашего бота
-            bot.send_message(OWNER_ID, "✅ Бот активен и работает стабильно.")
+            requests.get(RENDER_URL)
+            uptime = int((time.time() - start_time) // 60)
+            bot.send_message(
+                OWNER_ID,
+                f"✅ Бот активен | Время: {datetime.now().strftime('%H:%M:%S')} | Аптайм: {uptime} мин"
+            )
         except Exception as e:
             logging.warning(f"Ошибка keep_alive: {e}")
-        time.sleep(200)  # каждые 15 минут
+        time.sleep(120)  # каждые 15 минут
 
-# Запуск keep_alive в отдельном потоке
+threading.Thread(target=run_flask, daemon=True).start()
 threading.Thread(target=keep_alive, daemon=True).start()
 
 # -----------------------------
-# ОТСЕК 8 — Запуск бота
+# ОТСЕК 8 — Реакция на сообщения
+# -----------------------------
+@bot.message_handler(func=lambda m: True)
+def handle_messages(msg):
+    user_id = str(msg.chat.id)
+    text = msg.text.strip()
+
+    # 1. Чистое число → сумма
+    if text.replace(".", "", 1).isdigit():
+        amount = float(text)
+        date = datetime.now().strftime("%Y-%m-%d")
+        store.setdefault(user_id, []).append({"date": date, "amount": amount, "note": "Без описания"})
+        save_data(store)
+        bot.send_message(msg.chat.id, f"💾 Добавлено {amount} без описания.")
+        return
+
+    # 2. Число + текст → запись
+    words = text.split()
+    if any(ch.isdigit() for ch in text):
+        try:
+            amount = float(words[0])
+            note = " ".join(words[1:])
+            date = datetime.now().strftime("%Y-%m-%d")
+            store.setdefault(user_id, []).append({"date": date, "amount": amount, "note": note})
+            save_data(store)
+            bot.send_message(msg.chat.id, f"✅ Добавлено: {amount} — {note}")
+            return
+        except:
+            pass
+
+    # 3. Просто ответ
+    replies = ["Я вас понял ✅", "Принято 💬", "Записал!", "Окей 👍", "Есть контакт!"]
+    bot.send_message(msg.chat.id, replies[hash(text) % len(replies)])
+
+# -----------------------------
+# ОТСЕК 9 — Запуск
 # -----------------------------
 if __name__ == "__main__":
     bot.infinity_polling(timeout=60, long_polling_timeout=30)
