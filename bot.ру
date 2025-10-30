@@ -860,7 +860,7 @@ def handle_message(msg):
             note = msg.text.replace(m.group(0), "").strip()
             add_record_to_chat(chat_id, amount, note, msg.from_user.id)
             update_or_send_today_window(chat_id)
-            bot.send_message(chat_id, "✅ Запись добавлена")
+            send_temp_message(chat_id, "✅ Запись добавлена", delay=5)
         except Exception as e:
             log_error(f"Ошибка авто-добавления записи: {e}")
             bot.send_message(chat_id, "❌ Ошибка при добавлении записи. Проверьте формат.")
