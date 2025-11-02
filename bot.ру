@@ -33,7 +33,12 @@ from flask import Flask, request
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_ID")  # строка с числом или None
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
-TZ = ZoneInfo(os.getenv("TZ", "America/Argentina/Catamarca"))
+
+from datetime import timezone, timedelta
+try:
+    TZ = ZoneInfo(os.getenv("TZ", "America/Argentina/Buenos_Aires").strip())
+except Exception:
+    TZ = timezone(timedelta(hours=-3))  # запасной вариант (UTC-3, Буэнос-Айрес)
 
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
