@@ -1,13 +1,13 @@
 # ============================================
 # Финансовый бот — версия 9.8.6-fo_6
-# ID Code_019a
+# ID Code_019b
 # ~1265 строк
 # ============================================
 # Обновлено:
+#  • 📆 Календарь последних 31 дня: при выборе даты календарь закрывается
 #  • 🔄 Кнопка «Обновить» — редактирует текущее окно дня (без пересоздания)
 #  • ℹ️ «Инфо» — подробная справка и команды (как в fo_1)
 #  • Независимые окна по датам: удаляем только прежнее окно выбранной даты
-#  • Календарь «последние 31 день» (7 в ряд); после выбора календарь остаётся
 #  • Защита TZ: fallback на UTC−3 при отсутствии tzdata
 # ============================================
 
@@ -15,7 +15,6 @@ import os
 import json
 import csv
 import re
-import io
 import logging
 import threading
 import time
@@ -38,7 +37,7 @@ APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
 try:
     TZ = ZoneInfo((os.getenv("TZ") or "America/Argentina/Buenos_Aires").strip())
 except Exception:
-    TZ = timezone(timedelta(hours=-3))  # UTC-3
+    TZ = timezone(timedelta(hours=-3))  # UTC-3 fallback
 
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
@@ -137,6 +136,7 @@ def load_data():
     for k, v in base.items():
         if k not in d:
             d[k] = v
+    # sanity-check active_messages
     if isinstance(d.get("active_messages"), dict):
         for k, v in list(d["active_messages"].items()):
             if not (isinstance(k, str) and len(k) == 10 and "-" in k and isinstance(v, dict)):
@@ -319,10 +319,8 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
         data["records"] = [x if x["id"] != rid else found for x in data.get("records", [])]
         data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
         save_data(data)
-        try:
-            export_to_csv(data)
-        except:
-            pass
+        try: export_to_csv(data)
+        except: pass
         if notify_forward and store.get("forward_enabled"):
             target = store.get("forward_target_id") or (int(OWNER_ID) if OWNER_ID else None)
             if target:
@@ -348,10 +346,8 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None, notify_forward=True
         data["records"] = [x for x in data.get("records", []) if x["id"] != rid]
         data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
         save_data(data)
-        try:
-            export_to_csv(data)
-        except:
-            pass
+        try: export_to_csv(data)
+        except: pass
         if notify_forward and store.get("forward_enabled"):
             target = store.get("forward_target_id") or (int(OWNER_ID) if OWNER_ID else None)
             if target:
@@ -385,9 +381,7 @@ def build_main_keyboard(day_key: str, chat_id: int | None = None):
         types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
         types.InlineKeyboardButton("📆 Выбрать день", callback_data=f"d:{day_key}:pick_date"),
     )
-    kb.row(
-        types.InlineKeyboardButton("ℹ️ Инфо", callback_data=f"d:{day_key}:info"),
-    )
+    kb.row(types.InlineKeyboardButton("ℹ️ Инфо", callback_data=f"d:{day_key}:info"))
     bal = ""
     if chat_id is not None:
         bal = f"💰 {fmt_num(get_chat_store(chat_id).get('balance', 0))} ARS"
@@ -430,18 +424,18 @@ def build_confirm_delete_keyboard(day_key: str, rid: int):
     return kb
 
 # -----------------------------
-# Календарь «последние 31 день»
+# Календарь «последние 31 день» — вариант B (закрывается после выбора)
 # -----------------------------
 def build_last_31days_calendar():
     today = now_local().date()
-    days = [today - timedelta(days=i) for i in range(0, 31)]
+    days = [today - timedelta(days=i) for i in range(0, 31)]  # старое поведение: только назад
     kb = types.InlineKeyboardMarkup()
     row = []
     for idx, d in enumerate(days, start=1):
         label = d.strftime("%d/%m")
         day_key = d.strftime("%Y-%m-%d")
-        # Вариант A: обычный open — календарь НЕ закрывается
-        row.append(types.InlineKeyboardButton(text=label, callback_data=f"d:{day_key}:open"))
+        # вариант B — используем calopen, чтобы закрыть календарь
+        row.append(types.InlineKeyboardButton(text=label, callback_data=f"d:{day_key}:calopen"))
         if idx % 7 == 0:
             kb.row(*row)
             row = []
@@ -559,7 +553,21 @@ def handle_callback(call):
 
     set_current_view_day(chat_id, day_key)
 
-    # Открыть/Навигация
+    # --- Новая ветка: open из календаря — закрывает календарь (источник) ---
+    if action == "calopen":
+        update_or_send_day_window(
+            chat_id,
+            day_key,
+            create_if_missing=True,
+            force_new=ALWAYS_CREATE_NEW_ON_NAV,
+            delete_target_old=DELETE_TARGET_OLD_WINDOW_ON_NAV,
+            delete_source_old=True,              # ✅ закрыть календарь
+            source_day_key=prev_day
+        )
+        bot.answer_callback_query(call.id, f"Открыт день {day_key}")
+        return
+
+    # Обычный open/навигация
     if action == "open":
         update_or_send_day_window(
             chat_id,
@@ -573,7 +581,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, f"Открыт день {day_key}")
         return
 
-    # Календарь 31 день — показать (календарь остаётся)
+    # Календарь 31 день — показать
     if action == "pick_date":
         kb = build_last_31days_calendar()
         update_or_send_day_window(
@@ -771,7 +779,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         return
 
-    # Удаление/редактирование записи
+    # Редактирование: списки/детали/удаление
     if action == "edit_list":
         day_records = store.get("daily_records", {}).get(day_key, [])
         if not day_records:
