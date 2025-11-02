@@ -1,13 +1,11 @@
-# 9.8.6 fo_3 — навигация по дням, CSV за день, «Сегодня», фикс вперёд
-# ============================================
-# Финансовый бот — версия 9.8.6-fo_3
+# 9.8.6 fo_4 — чистые окна при навигации, выбор дня кнопкой, CSV за день, «Сегодня»
+# 1241 строк
+#============================================
+# Финансовый бот — версия 9.8.6-fo_4
 # Обновлено:
-#  • /view YYYY-MM-DD — открыть окно выбранного дня
-#  • /prev, /next — переход от ПОСЛЕДНЕГО открытого дня
-#  • Кнопки ⬅️/➡️ — корректно переключают и запоминают день
-#  • «📅 Сегодня» — мгновенный переход на текущий день
-#  • «📅 CSV за день» — выгрузка data_YYYY-MM-DD.csv (в корне рядом с data.csv)
-#  • Сохранена логика форварда и пересчёта общего баланса при изменениях в прошлом
+#  • Навигация (⬅️/➡️/📅 Сегодня/Открыть) создаёт новое окно дня и удаляет прежние окна (цели и источника)
+#  • Кнопка «📆 Выбрать день» с ручным вводом даты YYYY-MM-DD
+#  • Поддержка /view, /prev, /next, CSV за день, форвард, пересчёт балансов
 # ============================================
 
 import os
@@ -34,11 +32,16 @@ DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 LOG_FILE = "log.txt"
 PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.8.6-fo_3"
+VERSION = "9.8.6-fo_4"
 
 # Keep-alive
 KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 11 * 60))
 KEEP_ALIVE_SEND_TO_OWNER = True
+
+# Управление поведением навигации
+DELETE_SOURCE_WINDOW_ON_NAV = True   # при переходе удалять окно исходного дня
+DELETE_TARGET_OLD_WINDOW_ON_NAV = True  # при переходе удалять прежнее окно выбранного дня
+ALWAYS_CREATE_NEW_ON_NAV = True      # при навигации не редактировать, а создавать новое сообщение
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
@@ -46,7 +49,7 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
 
-# -------- Автоудаление --------
+# -------- Автоудаление и вспомогательные --------
 def delete_message_safe(chat_id, message_id):
     try:
         bot.delete_message(chat_id, message_id)
@@ -63,9 +66,7 @@ def send_temp_message(chat_id, text, delay=5, **kwargs):
     except Exception as e:
         logging.error(f"send_temp_message: не удалось отправить/удалить сообщение: {e}")
         return None
-# --------------------------------
 
-# Функции дат/форматов
 def today_key():
     return datetime.now(TZ).strftime("%Y-%m-%d")
 
@@ -162,7 +163,7 @@ if OWNER_ID:
         pass
 
 # -----------------------------
-# Вспомогательные хранилища
+# Вспомогательные хранилища/окна
 # -----------------------------
 def get_chat_store(chat_id):
     cid = str(chat_id)
@@ -187,16 +188,24 @@ def get_chat_store(chat_id):
     save_data(data)
     return store
 
-def set_active_window(chat_id, day_key, message_id):
-    if "active_messages" not in data:
-        data["active_messages"] = {}
-    if day_key not in data["active_messages"]:
-        data["active_messages"][day_key] = {}
-    data["active_messages"][day_key][str(chat_id)] = message_id
-    save_data(data)
-
 def get_active_window_id(chat_id, day_key):
     return data.setdefault("active_messages", {}).setdefault(day_key, {}).get(str(chat_id))
+
+def set_active_window(chat_id, day_key, message_id):
+    data.setdefault("active_messages", {}).setdefault(day_key, {})[str(chat_id)] = message_id
+    save_data(data)
+
+def clear_active_window(chat_id, day_key):
+    am = data.setdefault("active_messages", {}).setdefault(day_key, {})
+    if str(chat_id) in am:
+        am.pop(str(chat_id), None)
+        save_data(data)
+
+def delete_active_window_if_exists(chat_id, day_key):
+    old_id = get_active_window_id(chat_id, day_key)
+    if old_id:
+        delete_message_safe(chat_id, old_id)
+        clear_active_window(chat_id, day_key)
 
 def set_current_view_day(chat_id, day_key):
     store = get_chat_store(chat_id)
@@ -208,7 +217,7 @@ def get_current_view_day(chat_id):
     return store.get("current_view_day", today_key())
 
 # -----------------------------
-# Работа с CSV
+# CSV
 # -----------------------------
 def export_to_csv(d):
     """Полный экспорт всех чатов/дней -> data.csv"""
@@ -255,14 +264,10 @@ def add_record_to_chat(chat_id, amount, note, owner):
         "note": note,
         "owner": owner
     }
-    # глобальный реестр
     data.setdefault("records", []).append(rec)
-    # по чату (все записи)
     store.setdefault("records", []).append(rec)
-    # по текущему дню (добавление всегда в СЕГОДНЯ)
     day = today_key()
     store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
-    # балансы
     store["balance"] = store.get("balance", 0) + amount
     data["overall_balance"] = data.get("overall_balance", 0) + amount
     data["next_id"] = rid + 1
@@ -388,9 +393,9 @@ def build_main_keyboard(day_key, chat_id=None):
         types.InlineKeyboardButton("✏️ Редактировать", callback_data=f"d:{day_key}:edit_menu")
     )
     kb.row(
-        types.InlineKeyboardButton("🚀 Обновить", callback_data=f"d:{day_key}:start"),
-        types.InlineKeyboardButton("ℹ️ Инфо", callback_data=f"d:{day_key}:info"),
-        types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open")
+        types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
+        types.InlineKeyboardButton("📆 Выбрать день", callback_data=f"d:{day_key}:pick_date"),
+        types.InlineKeyboardButton("ℹ️ Инфо", callback_data=f"d:{day_key}:info")
     )
     # Нижняя строка — баланс
     balance_text = ""
@@ -438,14 +443,9 @@ def build_confirm_delete_keyboard(day_key, rid):
     return kb
 
 # -----------------------------
-# Окна по конкретному дню
+# Рендер окна дня (с выбором: редактировать/новое)
 # -----------------------------
-def update_or_send_day_window(chat_id, day_key=None, create_if_missing=True):
-    day_key = day_key or today_key()
-    store = get_chat_store(chat_id)
-    store["current_view_day"] = day_key
-    save_data(data)
-
+def render_day_text(store, day_key):
     day_records = store.get("daily_records", {}).get(day_key, [])
     daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
     daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
@@ -473,29 +473,50 @@ def update_or_send_day_window(chat_id, day_key=None, create_if_missing=True):
 
     # статус форварда
     try:
-        forward_info = ""
         if store.get("forward_enabled"):
             tgt = store.get("forward_target_id") or OWNER_ID
-            forward_info = f"\n\n📨 Пересылка: Включена → {tgt}"
+            text += f"\n\n📨 Пересылка: Включена → {tgt}"
         else:
-            forward_info = f"\n\n📨 Пересылка: Выключена"
-        text = text + forward_info
+            text += f"\n\n📨 Пересылка: Выключена"
     except:
         pass
+    return text
 
+def update_or_send_day_window(chat_id, day_key=None, create_if_missing=True, force_new=False, delete_target_old=False, delete_source_old=False, source_day_key=None):
+    """
+    Рендерит окно дня.
+    force_new=True -> всегда создаём новое сообщение (не редактируем).
+    delete_target_old=True -> перед созданием удаляем старое окно выбранного дня.
+    delete_source_old=True -> удаляем окно исходного дня (из которого пришли).
+    """
+    day_key = day_key or today_key()
+    store = get_chat_store(chat_id)
+
+    # удалить старые окна, если надо
+    if delete_target_old:
+        delete_active_window_if_exists(chat_id, day_key)
+    if delete_source_old and source_day_key and source_day_key != day_key:
+        delete_active_window_if_exists(chat_id, source_day_key)
+
+    # обновить "последний открытый день"
+    set_current_view_day(chat_id, day_key)
+
+    text = render_day_text(store, day_key)
     kb = build_main_keyboard(day_key, chat_id)
     active_id = get_active_window_id(chat_id, day_key)
 
-    if active_id:
+    # если не нужно новое — редактируем существующее
+    if not force_new and active_id:
         try:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
         except telebot.apihelper.ApiException as e:
-            log_error(f"Не удалось редактировать окно {active_id} для чата {chat_id} ({day_key}): {e}")
+            log_error(f"Не удалось редактировать окно {active_id} для {chat_id} ({day_key}): {e}")
         return
 
-    if not create_if_missing:
+    if not create_if_missing and not force_new:
         return
 
+    # создаём новое сообщение и запоминаем
     try:
         sent = bot.send_message(chat_id, text, reply_markup=kb)
         set_active_window(chat_id, day_key, sent.message_id)
@@ -528,18 +549,26 @@ def handle_callback(call):
     action_tail = parts[2:]
     action = action_tail[0] if action_tail else ""
     store = get_chat_store(chat_id)
-    store["current_view_day"] = day_key  # фикс: запоминаем контекст дня при любом клике
-    save_data(data)
+    prev_day = get_current_view_day(chat_id)  # исходный день до перехода
 
-    day_records = store.get("daily_records", {}).get(day_key, [])
-    active_id = get_active_window_id(chat_id, day_key)
+    # фикс: запоминаем контекст дня при любом клике
+    set_current_view_day(chat_id, day_key)
 
-    # Открыть указанный день (используется для навигации и «Сегодня»)
+    # Открыть/Навигация/«Сегодня»
     if action == "open":
-        update_or_send_day_window(chat_id, day_key)
+        update_or_send_day_window(
+            chat_id,
+            day_key,
+            create_if_missing=True,
+            force_new=ALWAYS_CREATE_NEW_ON_NAV,
+            delete_target_old=DELETE_TARGET_OLD_WINDOW_ON_NAV,
+            delete_source_old=DELETE_SOURCE_WINDOW_ON_NAV,
+            source_day_key=prev_day
+        )
         bot.answer_callback_query(call.id, f"Открыт день {day_key}")
         return
 
+    # Меню редактирования
     if action == "edit_menu":
         text = (
             "✏️ Меню редактирования\n\n"
@@ -549,21 +578,28 @@ def handle_callback(call):
             "👤 Получатель — задать ID для пересылки\n"
             "⚙️ Обнулить — очистить все данные (всего чата)\n"
         )
+        # показываем меню в новом окне выбранного дня (согласно новой логике)
+        update_or_send_day_window(
+            chat_id,
+            day_key,
+            create_if_missing=True,
+            force_new=ALWAYS_CREATE_NEW_ON_NAV,
+            delete_target_old=DELETE_TARGET_OLD_WINDOW_ON_NAV,
+            delete_source_old=False
+        )
+        # заменим только что созданное окно текстом меню
+        active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
                 bot.edit_message_text(text, chat_id, active_id, reply_markup=build_edit_menu_keyboard(day_key, chat_id))
             except telebot.apihelper.ApiException as e:
                 log_error(f"Ошибка открытия подменю редактирования: {e}")
-        else:
-            try:
-                sent = bot.send_message(chat_id, text, reply_markup=build_edit_menu_keyboard(day_key, chat_id))
-                set_active_window(chat_id, day_key, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки подменю редактирования: {e}")
         bot.answer_callback_query(call.id)
         return
 
+    # Баланс/Отчёт — редактируем текущее окно (без создания нового)
     if action == "balance":
+        day_records = store.get("daily_records", {}).get(day_key, [])
         daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
         daily_expense = sum(r["amount"] for r in day_records if r["amount"] < 0)
         overall_balance = store.get("balance", 0)
@@ -573,17 +609,19 @@ def handle_callback(call):
             f"💸 Расход за день: {fmt_num(abs(daily_expense))} ARS\n"
             f"💰 Общий остаток: {fmt_num(overall_balance)} ARS"
         )
+        active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
                 bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
             except telebot.apihelper.ApiException as e:
                 log_error(f"Ошибка редактирования окна (Баланс): {e}")
         else:
-            update_or_send_day_window(chat_id, day_key)
+            update_or_send_day_window(chat_id, day_key, create_if_missing=True)
         bot.answer_callback_query(call.id, "Баланс обновлён ✅")
         return
 
     if action == "report":
+        day_records = store.get("daily_records", {}).get(day_key, [])
         expenses = [r for r in day_records if r["amount"] < 0]
         daily_expense_total = sum(abs(r["amount"]) for r in expenses)
         if not expenses:
@@ -594,16 +632,18 @@ def handle_callback(call):
                 lines.append(f"{r['short_id']}: -{fmt_num(abs(r['amount']))} — {r.get('note','')}")
             lines.append(f"\n💸 Расход за день: {fmt_num(daily_expense_total)} ARS")
             text = "\n".join(lines)
+        active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
                 bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
             except telebot.apihelper.ApiException as e:
                 log_error(f"Ошибка редактирования окна (Отчёт): {e}")
         else:
-            update_or_send_day_window(chat_id, day_key)
+            update_or_send_day_window(chat_id, day_key, create_if_missing=True)
         bot.answer_callback_query(call.id, "Отчёт обновлён 📊")
         return
 
+    # CSV
     if action == "csv_all":
         try:
             export_to_csv(data)
@@ -630,11 +670,12 @@ def handle_callback(call):
             bot.answer_callback_query(call.id)
         return
 
+    # Форвард
     if action == "toggle_forward":
         store["forward_enabled"] = not store.get("forward_enabled", False)
         save_data(data)
         status = "включена ✅" if store["forward_enabled"] else "выключена ❌"
-        update_or_send_day_window(chat_id, day_key)
+        update_or_send_day_window(chat_id, day_key)  # без new
         bot.answer_callback_query(call.id, f"Пересылка {status}")
         return
 
@@ -649,57 +690,32 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, "Не удалось запросить ID получателя.")
         return
 
+    # Выбор дня кнопкой
+    if action == "pick_date":
+        bot.answer_callback_query(call.id)
+        sent = send_temp_message(chat_id, "🗓 Введите дату в формате YYYY-MM-DD (например, 2025-11-02):", delay=30)
+        if sent:
+            bot.register_next_step_handler(sent, lambda m: process_pick_date(m))
+        return
+
+    # Сброс (через команду /reset)
     if action == "reset":
-        if active_id:
-            try:
-                bot.edit_message_text("Для обнуления используйте команду /reset (введите `/reset` в чате).", chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
-            except:
-                pass
-        bot.answer_callback_query(call.id)
-        return
-
-    if action == "start":
+        # Подсказываем использовать /reset (с подтверждением)
         update_or_send_day_window(chat_id, day_key)
-        bot.answer_callback_query(call.id, "Окно обновлено 🔄")
+        bot.answer_callback_query(call.id, "Для обнуления используйте команду /reset")
         return
 
-    if action == "info":
-        info_text = (
-            f"ℹ️ Финансовый бот — версия {VERSION}\n\n"
-            "📌 Команды:\n"
-            "/start — открыть окно сегодняшнего дня\n"
-            "/view YYYY-MM-DD — открыть окно конкретного дня\n"
-            "/prev — предыдущий день от последнего открытого\n"
-            "/next — следующий день от последнего открытого\n"
-            "/balance, /report, /csv, /reset, /ping, /help\n\n"
-            "📝 Добавление операций (форматы):\n"
-            "+500 Зарплата    (или ^+^500^)\n"
-            "-150 Обед        (или ^-^150^)\n"
-        )
-        if active_id:
-            try:
-                bot.edit_message_text(info_text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка редактирования окна (Инфо): {e}")
-        else:
-            try:
-                sent = bot.send_message(chat_id, info_text, reply_markup=build_main_keyboard(day_key, chat_id))
-                set_active_window(chat_id, day_key, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки инфо: {e}")
+    if action in ("back_main", "edit_back", "noop", "start", "info"):
+        update_or_send_day_window(chat_id, day_key)
         bot.answer_callback_query(call.id)
         return
 
+    # Детали записи и редактирование
     if action == "edit_list":
+        day_records = store.get("daily_records", {}).get(day_key, [])
         if not day_records:
             text = f"📅 {day_key}\nПока нет операций в этот день."
-            if active_id:
-                try:
-                    bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
-                except telebot.apihelper.ApiException as e:
-                    log_error(f"Ошибка редактирования окна (пустой список редактирования): {e}")
-            else:
-                update_or_send_day_window(chat_id, day_key)
+            update_or_send_day_window(chat_id, day_key)
             bot.answer_callback_query(call.id, "Нет записей для редактирования")
             return
 
@@ -710,18 +726,18 @@ def handle_callback(call):
             label = f"{r['short_id']}: {sign}{fmt_num(abs(r['amount']))} — {r.get('note','')}"
             kb.add(types.InlineKeyboardButton(label, callback_data=f"d:{day_key}:rec:{r['id']}"))
         kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main"))
-        text = "\n".join(lines)
+        # Рисуем новый экран списка (согласно логике новых окон)
+        update_or_send_day_window(
+            chat_id, day_key,
+            create_if_missing=True, force_new=True,
+            delete_target_old=True, delete_source_old=False
+        )
+        active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
+                bot.edit_message_text("\n".join(lines), chat_id, active_id, reply_markup=kb)
             except telebot.apihelper.ApiException as e:
                 log_error(f"Ошибка показа списка редактирования: {e}")
-        else:
-            try:
-                sent = bot.send_message(chat_id, text, reply_markup=kb)
-                set_active_window(chat_id, day_key, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки списка редактирования: {e}")
         bot.answer_callback_query(call.id)
         return
 
@@ -731,28 +747,26 @@ def handle_callback(call):
         except:
             bot.answer_callback_query(call.id, "Неверный ID")
             return
-        rec = None
-        for r in day_records:
-            if r["id"] == rid:
-                rec = r
-                break
+        day_records = store.get("daily_records", {}).get(day_key, [])
+        rec = next((r for r in day_records if r["id"] == rid), None)
         if not rec:
             bot.answer_callback_query(call.id, "Запись не найдена")
             return
         sign = "+" if rec["amount"] > 0 else "-"
         text = f"Запись {rec['short_id']}\n{sign}{fmt_num(abs(rec['amount']))} — {rec.get('note','')}\nДобавлена: {rec.get('timestamp')}"
         kb = build_edit_keyboard_for_record(day_key, rid)
+        # рисуем новое окно с деталью записи
+        update_or_send_day_window(
+            chat_id, day_key,
+            create_if_missing=True, force_new=True,
+            delete_target_old=True, delete_source_old=False
+        )
+        active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
                 bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
             except telebot.apihelper.ApiException as e:
                 log_error(f"Ошибка показа детали записи: {e}")
-        else:
-            try:
-                sent = bot.send_message(chat_id, text, reply_markup=kb)
-                set_active_window(chat_id, day_key, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки детали записи: {e}")
         bot.answer_callback_query(call.id)
         return
 
@@ -775,18 +789,18 @@ def handle_callback(call):
         except:
             bot.answer_callback_query(call.id, "Неверный ID")
             return
+        # подтверждение — рисуем новое окно подтверждения
+        update_or_send_day_window(
+            chat_id, day_key,
+            create_if_missing=True, force_new=True,
+            delete_target_old=True, delete_source_old=False
+        )
+        active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
                 bot.edit_message_text(f"Подтвердите удаление записи R{rid}:", chat_id, active_id, reply_markup=build_confirm_delete_keyboard(day_key, rid))
             except telebot.apihelper.ApiException as e:
                 log_error(f"Ошибка показа подтверждения удаления: {e}")
-        else:
-            try:
-                sent = send_temp_message(chat_id, f"Подтвердите удаление записи R{rid}:", delay=25, reply_markup=build_confirm_delete_keyboard(day_key, rid))
-                if sent:
-                    set_active_window(chat_id, day_key, sent.message_id)
-            except Exception as e:
-                log_error(f"Ошибка отправки подтверждения удаления: {e}")
         bot.answer_callback_query(call.id)
         return
 
@@ -797,22 +811,53 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, "Неверный ID")
             return
         success, _ = delete_record_in_chat(chat_id, rid, user=call.from_user, notify_forward=True)
-        update_or_send_day_window(chat_id, day_key)
+        # после удаления перерисовываем окно дня как новое (чтобы не плодить)
+        update_or_send_day_window(
+            chat_id, day_key,
+            create_if_missing=True, force_new=True,
+            delete_target_old=True, delete_source_old=False
+        )
         bot.answer_callback_query(call.id, "Запись удалена" if success else "Запись не найдена")
         return
 
     if action == "cancel_delete":
-        update_or_send_day_window(chat_id, day_key)
+        update_or_send_day_window(
+            chat_id, day_key,
+            create_if_missing=True, force_new=True,
+            delete_target_old=True, delete_source_old=False
+        )
         bot.answer_callback_query(call.id, "Отмена удаления")
         return
 
-    if action in ("back_main", "edit_back", "noop"):
-        update_or_send_day_window(chat_id, day_key)
-        bot.answer_callback_query(call.id)
-        return
-
+    # Нечто иное
     bot.answer_callback_query(call.id)
     return
+
+# -----------------------------
+# Выбор дня (ручной ввод после «📆 Выбрать день»)
+# -----------------------------
+def process_pick_date(message):
+    try:
+        chat_id = message.chat.id
+        text = (message.text or "").strip()
+        d = parse_date_key(text)
+        if not d:
+            send_temp_message(chat_id, "❌ Неверный формат даты. Пример: 2025-11-02", delay=12)
+            return
+        day_key = d.strftime("%Y-%m-%d")
+        prev_day = get_current_view_day(chat_id)
+        update_or_send_day_window(
+            chat_id,
+            day_key,
+            create_if_missing=True,
+            force_new=True,
+            delete_target_old=True,
+            delete_source_old=True,
+            source_day_key=prev_day
+        )
+    except Exception as e:
+        log_error(f"Ошибка process_pick_date: {e}")
+        send_temp_message(message.chat.id, "❌ Ошибка при выборе даты. Попробуйте ещё раз.", delay=10)
 
 # -----------------------------
 # Обработка установки получателя форварда (next-step)
@@ -869,7 +914,12 @@ def parse_amount_token(token: str):
 @bot.message_handler(commands=["start", "info"])
 def cmd_start(msg):
     chat_id = msg.chat.id
-    update_or_send_day_window(chat_id, today_key(), create_if_missing=True)
+    # Открываем сегодня как новое окно (чтобы не плодить — удалим старые окна сегодняшнего дня)
+    update_or_send_day_window(
+        chat_id, today_key(),
+        create_if_missing=True, force_new=True,
+        delete_target_old=True, delete_source_old=False
+    )
 
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
@@ -897,21 +947,37 @@ def cmd_view(msg):
         send_temp_message(chat_id, "Неверный формат даты. Пример: /view 2025-11-02")
         return
     day_key = d.strftime("%Y-%m-%d")
-    update_or_send_day_window(chat_id, day_key, create_if_missing=True)
+    prev_day = get_current_view_day(chat_id)
+    update_or_send_day_window(
+        chat_id, day_key,
+        create_if_missing=True, force_new=True,
+        delete_target_old=True, delete_source_old=True,
+        source_day_key=prev_day
+    )
 
 @bot.message_handler(commands=["prev"])
 def cmd_prev(msg):
     chat_id = msg.chat.id
     current = get_current_view_day(chat_id)
     prev_key = shift_date_key(current, -1)
-    update_or_send_day_window(chat_id, prev_key, create_if_missing=True)
+    update_or_send_day_window(
+        chat_id, prev_key,
+        create_if_missing=True, force_new=True,
+        delete_target_old=True, delete_source_old=True,
+        source_day_key=current
+    )
 
 @bot.message_handler(commands=["next"])
 def cmd_next(msg):
     chat_id = msg.chat.id
     current = get_current_view_day(chat_id)
     next_key = shift_date_key(current, +1)
-    update_or_send_day_window(chat_id, next_key, create_if_missing=True)
+    update_or_send_day_window(
+        chat_id, next_key,
+        create_if_missing=True, force_new=True,
+        delete_target_old=True, delete_source_old=True,
+        source_day_key=current
+    )
 
 @bot.message_handler(commands=["balance"])
 def cmd_balance(msg):
@@ -983,23 +1049,31 @@ def _confirm_reset_all(call):
     except:
         data["overall_balance"] = 0
     save_data(data)
-    update_or_send_day_window(chat_id, today_key())
+    update_or_send_day_window(
+        chat_id, today_key(),
+        create_if_missing=True, force_new=True,
+        delete_target_old=True, delete_source_old=False
+    )
     bot.answer_callback_query(call.id, "Данные сброшены 🧹")
 
 @bot.callback_query_handler(func=lambda c: c.data and c.data.startswith(f"d:{today_key()}:cancel_reset_all"))
 def _cancel_reset_all(call):
     chat_id = call.message.chat.id
-    update_or_send_day_window(chat_id, today_key())
+    update_or_send_day_window(
+        chat_id, today_key(),
+        create_if_missing=True, force_new=True,
+        delete_target_old=True, delete_source_old=False
+    )
     bot.answer_callback_query(call.id, "Отмена")
 
-# Основной обработчик текстовых сообщений (добавление записей и ручное редактирование)
+# Основной обработчик текстовых сообщений (добавление и ручное редактирование)
 @bot.message_handler(func=lambda m: True)
 def handle_message(msg):
     chat_id = msg.chat.id
     store = get_chat_store(chat_id)
     wait_action = store.get("edit_wait")
 
-    # Если ожидаем ввод вручную для редактирования: формат "change_value:YYYY-MM-DD"
+    # Ручное изменение записи: "change_value:YYYY-MM-DD"
     if wait_action and wait_action.startswith("change_value"):
         day_key = today_key()
         if ":" in wait_action:
@@ -1020,14 +1094,19 @@ def handle_message(msg):
             store["edit_wait"] = None
             store["edit_target"] = None
             save_data(data)
-            update_or_send_day_window(chat_id, day_key)
+            # Перерисуем окно как НОВОЕ и удалим предыдущее окно этого дня
+            update_or_send_day_window(
+                chat_id, day_key,
+                create_if_missing=True, force_new=True,
+                delete_target_old=True, delete_source_old=False
+            )
             send_temp_message(chat_id, f"✅ Запись R{rid} {'изменена' if success else 'не найдена'}")
         except Exception as e:
             log_error(f"Ошибка при изменении записи вручную: {e}")
             send_temp_message(chat_id, "Ошибка при вводе суммы. Введите в формате +500 Зарплата или ^+^500^ Зарплата или ^-^150^ Обед", delay=15)
         return
 
-    # Обычное добавление записи в ТЕКУЩИЙ день (по тексту)
+    # Добавление новой записи (всегда в СЕГОДНЯ)
     if not msg.text:
         return
     m = re.search(num_re, msg.text)
@@ -1038,14 +1117,19 @@ def handle_message(msg):
             amount = parse_amount_token(raw_clean)
             note = msg.text.replace(m.group(0), "").strip()
             add_record_to_chat(chat_id, amount, note, msg.from_user.id)
-            update_or_send_day_window(chat_id, today_key())
+            # Обновим окно сегодняшнего дня как НОВОЕ, удаляя старое
+            update_or_send_day_window(
+                chat_id, today_key(),
+                create_if_missing=True, force_new=True,
+                delete_target_old=True, delete_source_old=False
+            )
             send_temp_message(chat_id, "✅ Запись добавлена")
         except Exception as e:
             log_error(f"Ошибка авто-добавления записи: {e}")
             send_temp_message(chat_id, "❌ Ошибка при добавлении записи. Проверьте формат.")
         return
 
-    # Если сообщение не распознано как добавление — подсказка
+    # Подсказка
     send_temp_message(chat_id, "Чтобы добавить запись, отправьте сумму в формате +500 Заметка. Для помощи — /help", delay=10)
     return
 
@@ -1063,7 +1147,7 @@ def index():
     return f"Финансовый бот «ФО» — версия {VERSION} работает", 200
 
 # -----------------------------
-# Keep-alive / self-ping / notify owner
+# Keep-alive / self-pинг / notify owner
 # -----------------------------
 def keep_alive_task():
     while True:
@@ -1120,7 +1204,12 @@ def schedule_daily_window_creation():
                         except:
                             continue
                         try:
-                            update_or_send_day_window(chat_id, current_day)
+                            # На смене дня — создаём новое окно нового дня и удаляем старое окно нового дня
+                            update_or_send_day_window(
+                                chat_id, current_day,
+                                create_if_missing=True, force_new=True,
+                                delete_target_old=True, delete_source_old=False
+                            )
                         except Exception as e:
                             log_error(f"Ошибка при создании окна нового дня для {chat_id}: {e}")
                     last_day = current_day
