@@ -47,7 +47,7 @@ PORT = int(os.environ.get("PORT", 5000))
 VERSION = "9.8.6-fo_5"
 
 # Keep-alive
-KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 11 * 60))
+KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 2 * 60))
 KEEP_ALIVE_SEND_TO_OWNER = True
 
 # -----------------------------
@@ -1109,7 +1109,7 @@ def keep_alive_task():
             if KEEP_ALIVE_SEND_TO_OWNER and OWNER_ID:
                 try:
                     tgt = int(OWNER_ID)
-                    send_temp_message(tgt, f"🟢 Keep-alive: бот {VERSION} работает. {now_local().isoformat(timespec='seconds')}")
+                    send_temp_message(tgt, f"🟢 Keep-alive: бот {VERSION} работает. {now_local().isoformat(timespec='seconds')}", delay=30)
                 except Exception as e:
                     log_error(f"Keep-alive notify owner: {e}")
         except Exception as e:
