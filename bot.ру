@@ -912,25 +912,55 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, "Неверный ID")
             return
 
+        # сохраняем состояние ожидания
         store["edit_wait"] = f"change_value:{day_key}"
         store["edit_target"] = rid
         save_data(data)
 
+        # формируем текст подсказки
         text = (
             f"✏️ Редактирование записи R{rid}\n\n"
             "Введите новую сумму и заметку:\n"
             "+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед"
-        )
-        kb = types.InlineKeyboardMarkup()
-        kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_list"))
+    )
+
+    # клавиатура с кнопкой «Назад» для отмены
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_list"))
+
+    # обновляем текущее окно
+    active_id = get_active_window_id(chat_id, day_key)
+    if active_id:
+        try:
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
+        except telebot.apihelper.ApiException as e:
+            log_error(f"edit_manual edit: {e}")
+    else:
+        # если окна нет — создаём новое
+        update_or_send_day_window(chat_id, day_key, create_if_missing=True)
+
+    bot.answer_callback_query(call.id, "Ожидание новой суммы ✏️")
+        return
+
+    if action == "edit_delete" and len(action_tail) >= 2:
+        try:
+            rid = int(action_tail[1])
+        except:
+            bot.answer_callback_query(call.id, "Неверный ID")
+            return
 
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-            except Exception as e:
-                log_error(f"edit_manual edit: {e}")
-        bot.answer_callback_query(call.id, "Ожидание новой суммы ✏️")
+                bot.edit_message_text(
+                    f"❗ Подтвердите удаление записи R{rid}:",
+                    chat_id,
+                    active_id,
+                    reply_markup=build_confirm_delete_keyboard(day_key, rid)
+                )
+            except telebot.apihelper.ApiException as e:
+                log_error(f"edit_delete confirm edit: {e}")
+        bot.answer_callback_query(call.id)
         return
 
     if action == "confirm_delete" and len(action_tail) >= 2:
