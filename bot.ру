@@ -382,7 +382,7 @@ def _schedule_csv_backup_debounced():
 
 
 def safe_csv_backup_to_telegram():
-    """Отправляет или обновляет CSV-файл в чате владельца, с автосозданием при сбое"""
+    """Отправляет или обновляет CSV-файл в чате владельца, пересоздаёт при удалении"""
     try:
         if not OWNER_ID:
             log_info("⚠️ CSV-бэкап пропущен — OWNER_ID не задан.")
@@ -394,9 +394,9 @@ def safe_csv_backup_to_telegram():
         message_id = meta.get("message_id")
 
         with open(CSV_FILE, "rb") as f:
-            # Попытка обновления существующего файла
-            if message_id:
-                try:
+            try:
+                # 🔁 Попытка обновить старый CSV в Telegram
+                if message_id:
                     bot.edit_message_media(
                         chat_id=owner_id,
                         message_id=message_id,
@@ -404,22 +404,28 @@ def safe_csv_backup_to_telegram():
                     )
                     log_info("✅ CSV-бэкап успешно обновлён в Telegram.")
                     return
-                except telebot.apihelper.ApiTelegramException as e:
-                    err = str(e)
-                    log_error(f"CSV edit_message_media error: {err}")
-                    # Проверяем, не удалён ли файл (или нет доступа)
-                    if "message to edit not found" in err.lower() or "not found" in err.lower():
-                        log_info("♻️ Старый CSV-файл удалён или недоступен. Создаю новый...")
-                    else:
-                        raise
 
-            # Если не было message_id или произошла ошибка — создаём новый CSV
-            f.seek(0)
-            sent = bot.send_document(owner_id, f, caption="📊 Новый CSV-бэкап (создан повторно автоматически)")
-            meta["message_id"] = sent.message_id
-            meta["timestamp"] = datetime.now(TZ).isoformat(timespec="seconds")
-            _save_csv_meta(meta)
-            log_info("✅ CSV-бэкап пересоздан и теперь будет обновляться автоматически.")
+            except telebot.apihelper.ApiTelegramException as e:
+                err = str(e).lower()
+                log_error(f"CSV edit_message_media error: {err}")
+                if "message to edit not found" in err or "not found" in err or "invalid message" in err:
+                    log_info("♻️ Старый CSV-файл удалён или недоступен. Создаю новый...")
+                else:
+                    # Если ошибка не связана с отсутствием файла — пробрасываем дальше
+                    raise
+
+            # ♻️ Создаём новый CSV, если старый отсутствует
+            try:
+                f.seek(0)  # возвращаем указатель в начало файла
+                sent = bot.send_document(
+                    owner_id, f, caption="📊 Новый CSV-бэкап данных (создан повторно автоматически)"
+                )
+                meta["message_id"] = sent.message_id
+                meta["timestamp"] = datetime.now(TZ).isoformat(timespec="seconds")
+                _save_csv_meta(meta)
+                log_info("✅ CSV-бэкап пересоздан и теперь будет обновляться автоматически.")
+            except Exception as e2:
+                log_error(f"Ошибка при повторном создании CSV-бэкапа: {e2}")
 
     except Exception as e:
         log_error(f"safe_csv_backup_to_telegram: {e}")
