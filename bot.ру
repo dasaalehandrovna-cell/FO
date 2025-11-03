@@ -625,29 +625,38 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         return
 
-    # Меню редактирования
-    if action == "edit_menu":
-        text = (
-            "✏️ Меню редактирования\n\n"
-            "📂 Общий CSV — полный экспорт\n"
-            "📅 CSV за день — экспорт только этого дня\n"
-            "📨 Форвард — включить/выключить пересылку\n"
-            "👤 Получатель — задать ID для пересылки\n"
-            "⚙️ Обнулить — очистить все данные чата\n"
-        )
-        update_or_send_day_window(
-            chat_id, day_key,
-            create_if_missing=True, force_new=True,
-            delete_target_old=True, delete_source_old=False
-        )
-        active_id = get_active_window_id(chat_id, day_key)
-        if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_edit_menu_keyboard(day_key, chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"edit menu msg: {e}")
-        bot.answer_callback_query(call.id)
-        return
+    # ✅ Однооконное редактирование (не создаёт новое сообщение)
+if action == "edit_menu":
+    text = (
+        "✏️ Меню редактирования\n\n"
+        "📂 Общий CSV — полный экспорт\n"
+        "📅 CSV за день — экспорт только этого дня\n"
+        "📨 Форвард — включить/выключить пересылку\n"
+        "👤 Получатель — задать ID для пересылки\n"
+        "⚙️ Обнулить — очистить все данные чата\n\n"
+        "🔙 Назад — вернуться в основное окно."
+    )
+
+    # Получаем ID активного окна
+    active_id = get_active_window_id(chat_id, day_key)
+
+    # Если окно существует — просто обновляем текст и клавиатуру
+    if active_id:
+        try:
+            bot.edit_message_text(
+                text,
+                chat_id,
+                active_id,
+                reply_markup=build_edit_menu_keyboard(day_key, chat_id)
+            )
+        except telebot.apihelper.ApiException as e:
+            log_error(f"edit_menu edit: {e}")
+    else:
+        # Если почему-то окна нет — создаём его заново
+        update_or_send_day_window(chat_id, day_key, create_if_missing=True)
+
+    bot.answer_callback_query(call.id, "Меню редактирования ✏️")
+    return
 
     # 🔄 Обновить — просто редактируем текущее окно
     if action == "refresh":
@@ -721,18 +730,42 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, "Баланс обновлён ✅")
         return
     
-    # 🧮 Общий остаток (итог за всё время)
+    # 🧮 Общий итог за всё время
     if action == "total":
+        # Получаем все записи
+        all_records = data.get("records", [])
         total = data.get("overall_balance", 0)
-        text = f"💰 Общий остаток за всё время: {fmt_num(total)} ARS"
+
+    # Суммируем общий приход и расход
+        total_income = sum(r["amount"] for r in all_records if r["amount"] > 0)
+        total_expense = sum(r["amount"] for r in all_records if r["amount"] < 0)
+
+    # Формируем текст отчёта
+        text = (
+            f"📊 Общие данные за всё время:\n\n"
+            f"💵 Общий приход: {fmt_num(total_income)} ARS\n"
+            f"💸 Общий расход: {fmt_num(abs(total_expense))} ARS\n"
+            f"💰 Общий остаток: {fmt_num(total)} ARS"
+        )
+
+    # Обновляем текущее окно
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
-            bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
+            try:
+                bot.edit_message_text(
+                    text,
+                    chat_id,
+                    active_id,
+                    reply_markup=build_main_keyboard(day_key, chat_id)
+                )
+            except telebot.apihelper.ApiException as e:
+                 log_error(f"total edit: {e}")
         else:
             update_or_send_day_window(chat_id, day_key)
-        bot.answer_callback_query(call.id, "Общий остаток 📊")
-        return
 
+        bot.answer_callback_query(call.id, "Общий итог 📊")
+        return
+    
     # Отчёт
     if action == "report":
         day_records = store.get("daily_records", {}).get(day_key, [])
