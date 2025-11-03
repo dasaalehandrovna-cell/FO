@@ -1055,7 +1055,7 @@ def schedule_csv_backup():
 
 
 # --------------------------------------------
-# 🧩 ОТСЕК 15. Самовосстановление из CSV при старте
+# 🧩 ОТСЕК 15. Самовосстановление из CSV при старте (без getUpdates)
 # --------------------------------------------
 def _restore_from_local_csv():
     """Если есть локальный data.csv — перечитываем и строим базу."""
@@ -1089,75 +1089,72 @@ def _restore_from_local_csv():
         log_error(f"_restore_from_local_csv: {e}")
         return False
 
+
 def _restore_from_owner_chat_csv():
     """
-    Если локального CSV нет (или он пуст), пробуем взять ПОСЛЕДНЮЮ версию CSV у владельца:
-    - если есть сохранённый message_id/file_id — скачиваем по file_id;
-    - если meta нет — пытаемся найти последнее сообщение-документ с именем data.csv среди недавних апдейтов.
+    ⚙️ Безопасная версия для режима webhook.
+    Использует только сохранённый file_id из csv_meta.json.
+    Если webhook активен — пропускает getUpdates.
     """
     owner = _owner_id_int()
     if not owner:
         return False
     try:
+        # если webhook активен — пропускаем попытку через getUpdates
+        webhook_info = bot.get_webhook_info()
+        if webhook_info and webhook_info.url:
+            log_info("⚠️ Webhook активен — пропускаем поиск CSV через getUpdates.")
+        
         meta = _load_csv_meta()
         file_id = meta.get("file_id")
-        # если нет file_id — пробуем поискать в последних апдейтах
-        if not file_id:
-            updates = bot.get_updates(limit=50)
-            for u in reversed(updates):
-                m = getattr(u, "message", None)
-                if not m or not getattr(m, "document", None):
-                    continue
-                fn = m.document.file_name.lower()
-                if fn == "data.csv" and m.chat and m.chat.id == owner:
-                    file_id = m.document.file_id
-                    # заодно сохраним meta (чтобы дальше работать стабильно)
-                    meta["message_id"] = m.message_id
-                    meta["file_id"] = file_id
-                    meta["updated_at"] = datetime.now(TZ).isoformat(timespec="seconds")
-                    _save_csv_meta(meta)
-                    break
 
         if not file_id:
+            log_info("⚠️ CSV file_id не найден — невозможно восстановить из Telegram.")
             return False
 
+        log_info(f"🔄 Восстанавливаем CSV из Telegram по file_id = {file_id}")
         file_info = bot.get_file(file_id)
         raw = bot.download_file(file_info.file_path)
         with open(CSV_FILE, "wb") as f:
             f.write(raw)
 
-        return _restore_from_local_csv()
+        ok = _restore_from_local_csv()
+        if ok:
+            log_info("✅ CSV успешно восстановлен из Telegram file_id.")
+        else:
+            log_error("❌ Ошибка при восстановлении локально после скачивания CSV.")
+        return ok
+    except telebot.apihelper.ApiException as e:
+        log_error(f"_restore_from_owner_chat_csv ApiException: {e}")
+        return False
     except Exception as e:
         log_error(f"_restore_from_owner_chat_csv: {e}")
         return False
 
+
 def restore_from_csv_on_start():
     """
     Последовательность восстановления при старте:
-      1) Если локальный data.json пуст или отсутствует — пробуем локальный CSV.
-      2) Если локального CSV нет — пробуем скачать CSV из чата владельца.
-      3) После успешного восстановления — выполнить export_to_csv ещё раз (нормализуем).
+      1️⃣ Если локальный data.json пуст — пробуем локальный CSV.
+      2️⃣ Если CSV нет — пробуем восстановление из Telegram по file_id.
+      3️⃣ После восстановления — экспортируем CSV для нормализации.
     """
-    # проверим, есть ли содержимое в data.json
     d = _read_json_file(DATA_FILE, None)
     base_needed = (not d) or (isinstance(d, dict) and not d.get("records"))
     if not base_needed:
         return
 
-    # 1) локальный CSV
     if _restore_from_local_csv():
         export_to_csv(load_data())
         log_info("🔄 Восстановлено из ЛОКАЛЬНОГО CSV.")
         return
 
-    # 2) CSV у владельца
     if _restore_from_owner_chat_csv():
         export_to_csv(load_data())
         log_info("🔄 Восстановлено из CSV владельца (Telegram).")
         return
 
     log_info("⚠️ Восстановление из CSV пропущено — источники не найдены.")
-
 
 # --------------------------------------------
 # 🧩 ОТСЕК 16. Webhook, keep-alive, расписания и запуск
