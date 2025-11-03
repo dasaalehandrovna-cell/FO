@@ -574,10 +574,9 @@ def handle_callback(call):
     action = action_tail[0] if action_tail else ""
     store = get_chat_store(chat_id)
     prev_day = get_current_view_day(chat_id)
-
     set_current_view_day(chat_id, day_key)
 
-    # --- Новая ветка: open из календаря — закрывает календарь (источник) ---
+    # --- Календарь: открытие даты ---
     if action == "calopen":
         update_or_send_day_window(
             chat_id,
@@ -585,13 +584,13 @@ def handle_callback(call):
             create_if_missing=True,
             force_new=ALWAYS_CREATE_NEW_ON_NAV,
             delete_target_old=DELETE_TARGET_OLD_WINDOW_ON_NAV,
-            delete_source_old=True,              # ✅ закрыть календарь
+            delete_source_old=True,
             source_day_key=prev_day
         )
         bot.answer_callback_query(call.id, f"Открыт день {day_key}")
         return
 
-    # Обычный open/навигация
+    # --- Открытие обычного дня ---
     if action == "open":
         update_or_send_day_window(
             chat_id,
@@ -605,65 +604,67 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, f"Открыт день {day_key}")
         return
 
-    # Календарь 31 день — показать
+    # --- Календарь выбора даты ---
     if action == "pick_date":
         kb = build_last_31days_calendar()
-        update_or_send_day_window(
-            chat_id,
-            day_key,
-            create_if_missing=True,
-            force_new=True,
-            delete_target_old=True,
-            delete_source_old=False
-        )
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
-                bot.edit_message_text("🗓 Выберите дату (последние 31 день):", chat_id, active_id, reply_markup=kb)
+                bot.edit_message_text(
+                    "🗓 Выберите дату (последние 31 день):",
+                    chat_id,
+                    active_id,
+                    reply_markup=kb
+                )
             except telebot.apihelper.ApiException as e:
                 log_error(f"calendar edit: {e}")
+        else:
+            update_or_send_day_window(chat_id, day_key)
         bot.answer_callback_query(call.id)
-        return# 
-    ✅ Однооконное редактирование (не создаёт новое сообщение)
+        return
+
+    # ✅ Однооконное редактирование (без создания нового сообщения)
     if action == "edit_menu":
         text = (
             "✏️ Меню редактирования\n\n"
-            "📂 Общий CSV — полный экспорт\n"
-            "📅 CSV за день — экспорт только этого дня\n"
-            "📨 Форвард — включить/выключить пересылку\n"
+            "📝 Редактировать запись — изменить или удалить операцию\n"
+            "📂 Общий CSV — полный экспорт всех данных\n"
+            "📅 CSV за день — экспорт только выбранного дня\n"
+            "📨 Форвард — включить/выключить пересылку владельцу\n"
             "👤 Получатель — задать ID для пересылки\n"
             "⚙️ Обнулить — очистить все данные чата\n\n"
-            "🔙 Назад — вернуться в основное окно."
+            "📅 Сегодня / 📆 Выбрать день / ℹ️ Инфо / 🔙 Назад"
         )
 
-        # Получаем ID активного окна
         active_id = get_active_window_id(chat_id, day_key)
-
-        # Если окно существует — просто обновляем текст и клавиатуру
         if active_id:
             try:
                 bot.edit_message_text(
                     text,
                     chat_id,
-		                active_id,
-		                reply_markup=build_edit_menu_keyboard(day_key, chat_id)
-		            )
-		        except telebot.apihelper.ApiException as e:
-		            log_error(f"edit_menu edit: {e}")
-		    else:
-		        # Если почему-то окна нет — создаём его заново
-		        update_or_send_day_window(chat_id, day_key, create_if_missing=True)
+                    active_id,
+                    reply_markup=build_edit_menu_keyboard(day_key, chat_id)
+                )
+            except telebot.apihelper.ApiException as e:
+                log_error(f"edit_menu edit: {e}")
+        else:
+            update_or_send_day_window(chat_id, day_key, create_if_missing=True)
 
-		    bot.answer_callback_query(call.id, "Меню редактирования ✏️")
-		    return
-    
-    # 🔄 Обновить — просто редактируем текущее окно
+        bot.answer_callback_query(call.id, "Меню редактирования ✏️")
+        return
+
+    # 🔄 Обновить — просто обновляет текущее окно
     if action == "refresh":
         active_id = get_active_window_id(chat_id, day_key)
         text = render_day_text(store, day_key)
         if active_id:
             try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
+                bot.edit_message_text(
+                    text,
+                    chat_id,
+                    active_id,
+                    reply_markup=build_main_keyboard(day_key, chat_id)
+                )
             except telebot.apihelper.ApiException as e:
                 log_error(f"refresh edit: {e}")
         else:
@@ -671,42 +672,40 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, "Обновлено 🔄")
         return
 
-    # ℹ️ Инфо — как в fo_1 (расширенная справка)
+    # ℹ️ Инфо
     if action == "info":
         info_text = (
             f"ℹ️ Финансовый бот — версия {VERSION}\n\n"
-            "📌 Доступные команды:\n"
-            "/start — создать/показать окно за сегодня\n"
-            "/view YYYY-MM-DD — открыть любой день\n"
+            "📌 Команды:\n"
+            "/start — открыть окно за сегодня\n"
+            "/view YYYY-MM-DD — открыть указанный день\n"
             "/prev /next — навигация по дням\n"
-            "/balance — показать общий остаток\n"
-            "/report — список расходов за день\n"
+            "/balance — остаток за день\n"
+            "/report — список расходов\n"
             "/csv — общий CSV\n"
-            "/reset — очистить записи чата (с подтверждением)\n"
-            "/ping — проверить жив ли бот\n"
-            "/help — помощь\n\n"
-            "📝 Добавление операций:\n"
-            "+500 Зарплата   (или ^+^500^ Зарплата)\n"
-            "-150 Обед       (или ^-^150^ Обед)\n\n"
-            "⚙️ Системно: CSV, форвард, webhook, keep-alive — активны.\n"
-            f"💾 Файл данных: {DATA_FILE}\n"
+            "/reset — обнуление чата\n"
+            "/ping — проверка активности\n\n"
+            "📝 Добавление записей:\n"
+            "+500 Зарплата или -150 Обед\n\n"
+            "⚙️ Системно: CSV, форвард, webhook, keep-alive активны."
         )
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
-                bot.edit_message_text(info_text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
+                bot.edit_message_text(
+                    info_text,
+                    chat_id,
+                    active_id,
+                    reply_markup=build_main_keyboard(day_key, chat_id)
+                )
             except telebot.apihelper.ApiException as e:
                 log_error(f"info edit: {e}")
         else:
-            try:
-                sent = bot.send_message(chat_id, info_text, reply_markup=build_main_keyboard(day_key, chat_id))
-                set_active_window(chat_id, day_key, sent.message_id)
-            except Exception as e:
-                log_error(f"info send: {e}")
+            update_or_send_day_window(chat_id, day_key)
         bot.answer_callback_query(call.id)
         return
 
-    # Баланс
+    # 💰 Баланс за день
     if action == "balance":
         day_records = store.get("daily_records", {}).get(day_key, [])
         daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
@@ -716,38 +715,8 @@ def handle_callback(call):
             f"📅 {day_key}\n\n"
             f"💵 Приход за день: {fmt_num(daily_income)} ARS\n"
             f"💸 Расход за день: {fmt_num(abs(daily_expense))} ARS\n"
-            f"💰 Общий остаток: {fmt_num(overall_balance)} ARS"
+            f"💰 Остаток: {fmt_num(overall_balance)} ARS"
         )
-        active_id = get_active_window_id(chat_id, day_key)
-        if active_id:
-            try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"balance edit: {e}")
-        else:
-            update_or_send_day_window(chat_id, day_key, create_if_missing=True)
-        bot.answer_callback_query(call.id, "Баланс обновлён ✅")
-        return
-    
-    # 🧮 Общий итог за всё время
-    if action == "total":
-        # Получаем все записи
-        all_records = data.get("records", [])
-        total = data.get("overall_balance", 0)
-
-    # Суммируем общий приход и расход
-        total_income = sum(r["amount"] for r in all_records if r["amount"] > 0)
-        total_expense = sum(r["amount"] for r in all_records if r["amount"] < 0)
-
-    # Формируем текст отчёта
-        text = (
-            f"📊 Общие данные за всё время:\n\n"
-            f"💵 Общий приход: {fmt_num(total_income)} ARS\n"
-            f"💸 Общий расход: {fmt_num(abs(total_expense))} ARS\n"
-            f"💰 Общий остаток: {fmt_num(total)} ARS"
-        )
-
-    # Обновляем текущее окно
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
@@ -758,14 +727,41 @@ def handle_callback(call):
                     reply_markup=build_main_keyboard(day_key, chat_id)
                 )
             except telebot.apihelper.ApiException as e:
-                 log_error(f"total edit: {e}")
+                log_error(f"balance edit: {e}")
         else:
             update_or_send_day_window(chat_id, day_key)
+        bot.answer_callback_query(call.id, "Баланс обновлён ✅")
+        return
 
+    # 🧮 Общий итог за всё время
+    if action == "total":
+        all_records = data.get("records", [])
+        total = data.get("overall_balance", 0)
+        total_income = sum(r["amount"] for r in all_records if r["amount"] > 0)
+        total_expense = sum(r["amount"] for r in all_records if r["amount"] < 0)
+        text = (
+            f"📊 Общие данные за всё время:\n\n"
+            f"💵 Общий приход: {fmt_num(total_income)} ARS\n"
+            f"💸 Общий расход: {fmt_num(abs(total_expense))} ARS\n"
+            f"💰 Общий остаток: {fmt_num(total)} ARS"
+        )
+        active_id = get_active_window_id(chat_id, day_key)
+        if active_id:
+            try:
+                bot.edit_message_text(
+                    text,
+                    chat_id,
+                    active_id,
+                    reply_markup=build_main_keyboard(day_key, chat_id)
+                )
+            except telebot.apihelper.ApiException as e:
+                log_error(f"total edit: {e}")
+        else:
+            update_or_send_day_window(chat_id, day_key)
         bot.answer_callback_query(call.id, "Общий итог 📊")
         return
-    
-    # Отчёт
+
+    # 📋 Отчёт
     if action == "report":
         day_records = store.get("daily_records", {}).get(day_key, [])
         expenses = [r for r in day_records if r["amount"] < 0]
@@ -781,15 +777,20 @@ def handle_callback(call):
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
-                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
+                bot.edit_message_text(
+                    text,
+                    chat_id,
+                    active_id,
+                    reply_markup=build_main_keyboard(day_key, chat_id)
+                )
             except telebot.apihelper.ApiException as e:
                 log_error(f"report edit: {e}")
         else:
-            update_or_send_day_window(chat_id, day_key, create_if_missing=True)
+            update_or_send_day_window(chat_id, day_key)
         bot.answer_callback_query(call.id, "Отчёт обновлён 📊")
         return
 
-    # CSV
+    # 📂 CSV (общий и дневной)
     if action == "csv_all":
         try:
             export_to_csv(data)
