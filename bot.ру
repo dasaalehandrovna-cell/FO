@@ -847,7 +847,8 @@ def handle_callback(call):
         update_or_send_day_window(chat_id, day_key)
         bot.answer_callback_query(call.id)
         return
-
+    
+     # --- Меню редактирования записей ---
     # Редактирование: списки/детали/удаление
     if action == "edit_list":
         day_records = store.get("daily_records", {}).get(day_key, [])
@@ -876,6 +877,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         return
 
+    # --- Открыть запись ---
     if action == "rec" and len(action_tail) >= 2:
         try:
             rid = int(action_tail[1])
@@ -902,6 +904,7 @@ def handle_callback(call):
         bot.answer_callback_query(call.id)
         return
 
+    # --- ✅ Исправленный edit_manual (в том же окне) ---
     if action == "edit_manual" and len(action_tail) >= 2:
         try:
             rid = int(action_tail[1])
@@ -913,29 +916,21 @@ def handle_callback(call):
         store["edit_target"] = rid
         save_data(data)
 
+        text = (
+            f"✏️ Редактирование записи R{rid}\n\n"
+            "Введите новую сумму и заметку:\n"
+            "+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед"
+        )
+        kb = types.InlineKeyboardMarkup()
+        kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_list"))
+
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
-                bot.edit_message_text(chat_id, f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-150 Обед")
-        #send_temp_message(chat_id, f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед", delay=25)
-
-        bot.answer_callback_query(call.id)
-        return
-
-    if action == "edit_delete" and len(action_tail) >= 2:
-        try:
-            rid = int(action_tail[1])
-        except:
-            bot.answer_callback_query(call.id, "Неверный ID")
-            return
-       
-        active_id = get_active_window_id(chat_id, day_key)
-        if active_id:
-            try:
-                bot.edit_message_text(f"Подтвердите удаление записи R{rid}:", chat_id, active_id, reply_markup=build_confirm_delete_keyboard(day_key, rid))
-            except telebot.apihelper.ApiException as e:
-                log_error(f"Ошибка показа подтверждения удаления: {e}")
-        bot.answer_callback_query(call.id)
+                bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
+            except Exception as e:
+                log_error(f"edit_manual edit: {e}")
+        bot.answer_callback_query(call.id, "Ожидание новой суммы ✏️")
         return
 
     if action == "confirm_delete" and len(action_tail) >= 2:
@@ -964,7 +959,7 @@ def handle_callback(call):
         return
 
     bot.answer_callback_query(call.id)
-    return
+    returnа
 
 # -----------------------------
 # Ручные процессы — получатель форварда
