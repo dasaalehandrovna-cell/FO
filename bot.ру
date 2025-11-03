@@ -363,8 +363,10 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None, notify_forward=True
 # -----------------------------
 
 def build_main_keyboard(day_key: str, chat_id: int | None = None):
-    """Главное окно дня — компактное меню из 5 кнопок"""
+    """✅ Главное окно дня — компактное меню из 5 кнопок с общим остатком"""
     kb = types.InlineKeyboardMarkup(row_width=2)
+
+    # 🧭 Верхние кнопки
     kb.row(
         types.InlineKeyboardButton("💰 Баланс", callback_data=f"d:{day_key}:balance"),
         types.InlineKeyboardButton("📊 Отчёт", callback_data=f"d:{day_key}:report"),
@@ -373,15 +375,22 @@ def build_main_keyboard(day_key: str, chat_id: int | None = None):
         types.InlineKeyboardButton("🔄 Обновить", callback_data=f"d:{day_key}:refresh"),
         types.InlineKeyboardButton("✏️ Редактировать", callback_data=f"d:{day_key}:edit_menu"),
     )
-    if chat_id is not None:
-        bal = f"💰 {fmt_num(get_chat_store(chat_id).get('balance', 0))} ARS"
-    kb.add(types.InlineKeyboardButton(bal or "💰 0 ARS", callback_data=f"d:{day_key}:noop"))
-    prev_btn, next_btn = kb_nav_row(day_key)
-    kb.row(prev_btn, next_btn)
+
+    # 📊 Получаем общий баланс из глобальных данных
+    try:
+        total = fmt_num(data.get("overall_balance", 0))
+    except Exception:
+        total = "0"
+
+    # 🧮 Нижняя строка — общий остаток (кликабельная кнопка)
+    kb.add(
+        types.InlineKeyboardButton(
+            f"💰 Общий остаток: {total} ARS",
+            callback_data=f"d:{day_key}:total"
+        )
+    )
+
     return kb
-    # нижняя строка — общий остаток (итог за всё время)
-    #kb.add(types.InlineKeyboardButton("💰 Общий остаток", callback_data=f"d:{day_key}:total"))
-    #return kb
 
 
 def build_edit_menu_keyboard(day_key: str, chat_id=None):
