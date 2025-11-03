@@ -939,8 +939,8 @@ def handle_callback(call):
             return
         success, _ = delete_record_in_chat(chat_id, rid, user=call.from_user, notify_forward=True)
         text = "✅ Запись удалена" if success else "⚠️ Запись не найдена"
-         active_id = get_active_window_id(chat_id, day_key)
-         if active_id:
+        active_id = get_active_window_id(chat_id, day_key)
+        if active_id:
             bot.edit_message_text(text, chat_id, active_id, reply_markup=build_edit_menu_keyboard(day_key, chat_id))
 
     
