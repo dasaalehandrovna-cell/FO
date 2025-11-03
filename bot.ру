@@ -222,6 +222,111 @@ def save_data(d):
     except Exception as e:
         log_error(f"Ошибка при сохранении данных: {e}")
 
+# -----------------------------
+# 🔄 Восстановление данных из CSV при запуске
+# -----------------------------
+def restore_from_csv_if_needed():
+    """Проверяет наличие CSV и восстанавливает данные из него или Telegram при старте"""
+    try:
+        restored = None
+
+        # 1️⃣ Проверяем локальный CSV
+        if os.path.exists(CSV_FILE):
+            log_info("📂 Найден локальный data.csv — восстанавливаю из него...")
+            restored = _build_data_from_csv(CSV_FILE)
+            if restored:
+                _save_json(DATA_FILE, restored)
+                log_info("✅ Восстановление из локального CSV завершено.")
+                return restored
+
+        # 2️⃣ Проверяем Telegram CSV-бэкап по метаданным
+        meta = _load_csv_meta()
+        file_id = meta.get("file_id")
+        message_id = meta.get("message_id")
+
+        if OWNER_ID and message_id:
+            log_info("🔍 Локальный CSV не найден. Пробую загрузить из Telegram по message_id...")
+            try:
+                # Пытаемся получить файл из Telegram
+                file_info = bot.get_file(file_id) if file_id else None
+                if not file_info:
+                    log_info("❕ file_id не найден, пробую найти CSV среди последних сообщений владельца...")
+                    updates = bot.get_updates(limit=50)
+                    for u in reversed(updates):
+                        m = getattr(u, "message", None)
+                        if not m or not getattr(m, "document", None):
+                            continue
+                        fn = m.document.file_name.lower()
+                        if fn.startswith("data") and fn.endswith(".csv"):
+                            file_id = m.document.file_id
+                            meta["file_id"] = file_id
+                            _save_csv_meta(meta)
+                            log_info(f"📦 Найден CSV в Telegram: {fn}")
+                            break
+
+                if not file_id:
+                    log_info("⚠️ CSV-бэкап не найден ни локально, ни в Telegram.")
+                    return None
+
+                file_info = bot.get_file(file_id)
+                downloaded = bot.download_file(file_info.file_path)
+                tmp = "restore_telegram.csv"
+                with open(tmp, "wb") as f:
+                    f.write(downloaded)
+
+                restored = _build_data_from_csv(tmp)
+                if restored:
+                    _save_json(DATA_FILE, restored)
+                    log_info("✅ Данные успешно восстановлены из CSV Telegram.")
+                    return restored
+
+            except Exception as e:
+                log_error(f"Ошибка восстановления из Telegram CSV: {e}")
+
+        log_info("⚠️ CSV не найден — используется пустая структура данных.")
+        return None
+
+    except Exception as e:
+        log_error(f"restore_from_csv_if_needed: {e}")
+        return None
+
+
+def _build_data_from_csv(path: str):
+    """Преобразует CSV-файл в структуру данных для бота"""
+    try:
+        restored = default_data()
+        with open(path, "r", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                chat_id = str(row["chat_id"])
+                rec = {
+                    "id": int(row["ID"]),
+                    "short_id": row["short_id"],
+                    "timestamp": row["timestamp"],
+                    "amount": int(row["amount"]),
+                    "note": row["note"],
+                    "owner": row["owner"]
+                }
+                restored["records"].append(rec)
+                restored["chats"].setdefault(chat_id, {
+                    "records": [],
+                    "daily_records": {},
+                    "balance": 0,
+                    "forward_enabled": False,
+                    "forward_target_id": None,
+                    "current_view_day": today_key()
+                })
+                restored["chats"][chat_id]["records"].append(rec)
+                day = row["day_key"]
+                restored["chats"][chat_id]["daily_records"].setdefault(day, []).append(rec)
+                restored["chats"][chat_id]["balance"] += rec["amount"]
+                restored["overall_balance"] += rec["amount"]
+                restored["next_id"] = max(restored["next_id"], rec["id"] + 1)
+        return restored
+    except Exception as e:
+        log_error(f"_build_data_from_csv: {e}")
+        return None
+
 def auto_update_task():
     """🕒 Автоматическое обновление файлов каждые 3 часа"""
     while True:
@@ -1561,9 +1666,11 @@ def set_webhook():
 
 
 if __name__ == "__main__":
-    """Точка входа — запуск приложения"""
-    # 🔄 Восстановление из Telegram CSV при старте (если есть)
-    restore_from_telegram_backup()
+    # 🔄 Попытка восстановить данные из CSV (локального или Telegram)
+    restored_data = restore_from_csv_if_needed()
+    if restored_data:
+        data = restored_data
+        log_info("💾 Данные успешно восстановлены из CSV и загружены в память.")
 
     # 🪝 Webhook
     set_webhook()
