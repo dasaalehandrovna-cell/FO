@@ -218,7 +218,7 @@ def save_data(d):
     try:
         _save_json(DATA_FILE, d)
         export_to_csv(d)
-        _schedule_csv_backup_debounced()  # ☁️ автообновление CSV в Telegram
+        _schedule_csv_backup_debounced()  # ☁️ автообновление CSV в Telegram с самовосстановлением
     except Exception as e:
         log_error(f"Ошибка при сохранении данных: {e}")
 
@@ -342,7 +342,7 @@ def export_to_csv(d):
         log_error(f"export_to_csv: {e}")
 
 # -----------------------------
-# ☁️ Автообновление CSV в Telegram (бэкап в чат владельца)
+# ☁️ Автообновление CSV в Telegram (устойчивый бэкап с самовосстановлением)
 # -----------------------------
 _CSV_BACKUP_META = "csv_meta.json"
 _CSV_DEBOUNCE_SECONDS = 3
@@ -351,16 +351,18 @@ _csv_backup_lock = threading.Lock()
 
 
 def _load_csv_meta():
+    """Загружает метаинформацию о CSV-бэкапе (message_id и др.)"""
     try:
         if os.path.exists(_CSV_BACKUP_META):
             with open(_CSV_BACKUP_META, "r", encoding="utf-8") as f:
                 return json.load(f)
-    except:
-        pass
+    except Exception as e:
+        log_error(f"_load_csv_meta: {e}")
     return {}
 
 
 def _save_csv_meta(meta: dict):
+    """Сохраняет метаинформацию о CSV-бэкапе"""
     try:
         with open(_CSV_BACKUP_META, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -369,7 +371,7 @@ def _save_csv_meta(meta: dict):
 
 
 def _schedule_csv_backup_debounced():
-    """Планирует авто-бэкап CSV в Telegram с защитой от спама."""
+    """Планирует авто-бэкап CSV в Telegram с задержкой (антиспам)"""
     global _csv_backup_timer
     with _csv_backup_lock:
         if _csv_backup_timer and _csv_backup_timer.is_alive():
@@ -380,7 +382,7 @@ def _schedule_csv_backup_debounced():
 
 
 def safe_csv_backup_to_telegram():
-    """Отправляет или обновляет CSV-файл в чате владельца."""
+    """Отправляет или обновляет CSV-файл в чате владельца, с автосозданием при сбое"""
     try:
         if not OWNER_ID:
             log_info("⚠️ CSV-бэкап пропущен — OWNER_ID не задан.")
@@ -388,11 +390,11 @@ def safe_csv_backup_to_telegram():
 
         owner_id = int(OWNER_ID)
         export_to_csv(data)
-
         meta = _load_csv_meta()
         message_id = meta.get("message_id")
 
         with open(CSV_FILE, "rb") as f:
+            # Попытка обновления существующего файла
             if message_id:
                 try:
                     bot.edit_message_media(
@@ -403,13 +405,21 @@ def safe_csv_backup_to_telegram():
                     log_info("✅ CSV-бэкап успешно обновлён в Telegram.")
                     return
                 except telebot.apihelper.ApiTelegramException as e:
-                    log_error(f"CSV edit_message_media error: {e}")
+                    err = str(e)
+                    log_error(f"CSV edit_message_media error: {err}")
+                    # Проверяем, не удалён ли файл (или нет доступа)
+                    if "message to edit not found" in err.lower() or "not found" in err.lower():
+                        log_info("♻️ Старый CSV-файл удалён или недоступен. Создаю новый...")
+                    else:
+                        raise
 
-            sent = bot.send_document(owner_id, f, caption="📊 Первый CSV-бэкап данных (автоматически)")
+            # Если не было message_id или произошла ошибка — создаём новый CSV
+            f.seek(0)
+            sent = bot.send_document(owner_id, f, caption="📊 Новый CSV-бэкап (создан повторно автоматически)")
             meta["message_id"] = sent.message_id
             meta["timestamp"] = datetime.now(TZ).isoformat(timespec="seconds")
             _save_csv_meta(meta)
-            log_info("✅ CSV-бэкап успешно отправлен владельцу (первичный).")
+            log_info("✅ CSV-бэкап пересоздан и теперь будет обновляться автоматически.")
 
     except Exception as e:
         log_error(f"safe_csv_backup_to_telegram: {e}")
