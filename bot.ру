@@ -917,13 +917,24 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, "Отчёт обновлён 📊")
         return
 
-    # --- CSV: общий и дневной ---
+        # --- CSV: общий и дневной ---
     if action == "csv_all":
         try:
             export_to_csv(data)
             with open(CSV_FILE, "rb") as f:
-                bot.send_document(chat_id, f, caption="📂 Полный экспорт: data.csv")
+                sent = bot.send_document(chat_id, f, caption="📂 Полный экспорт: data.csv")
+
+            # 🧩 Если файл выслан владельцу — считаем это новым бэкапом
+            if OWNER_ID and chat_id == int(OWNER_ID):
+                meta = {
+                    "message_id": sent.message_id,
+                    "timestamp": datetime.now(TZ).isoformat(timespec="seconds")
+                }
+                _save_csv_meta(meta)
+                log_info("✅ Новый CSV назначен как активный Telegram-бэкап.")
+
             bot.answer_callback_query(call.id, "CSV отправлен 📁")
+
         except Exception as e:
             send_temp_message(chat_id, f"❌ Ошибка при отправке CSV: {e}")
             bot.answer_callback_query(call.id)
