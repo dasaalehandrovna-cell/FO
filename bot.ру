@@ -152,7 +152,7 @@ data = load_data()
 # 📂 Автосохранение и восстановление CSV
 # -----------------------------
 def restore_from_telegram_backup():
-    """🔄 Восстанавливает данные из последнего CSV в чате владельца"""
+    """🔄 Восстанавливает данные из последнего CSV или создаёт новый, если ничего не найдено"""
     try:
         if not OWNER_ID:
             log_info("⚠️ Восстановление пропущено — OWNER_ID не задан.")
@@ -162,6 +162,8 @@ def restore_from_telegram_backup():
 
         updates = bot.get_updates(limit=50)
         file_id = None
+
+        # 🔎 Поиск последнего файла CSV у владельца
         for u in reversed(updates):
             m = getattr(u, "message", None)
             if not m or not getattr(m, "document", None):
@@ -172,17 +174,53 @@ def restore_from_telegram_backup():
                 log_info(f"📦 Найден файл бэкапа: {fn}")
                 break
 
+        # ⚠️ Если ничего не найдено — создаём новый CSV и мета-файл
         if not file_id:
-            log_info("❕ Файл CSV не найден, используется локальный data.json.")
-            return
+            log_info("⚠️ CSV file_id не найден — создаём новый CSV-бэкап и csv_meta.json.")
 
+            try:
+                # 🔹 Создаём локальный CSV
+                export_to_csv(data)
+                with open(CSV_FILE, "rb") as f:
+                    msg = bot.send_document(
+                        owner_id,
+                        f,
+                        caption="📂 Новый авто-бэкап создан (data.csv)."
+                    )
+
+                # 🔹 Создаём метаданные
+                meta = {
+                    "file_id": msg.document.file_id,
+                    "message_id": msg.message_id,
+                    "updated_at": now_local().isoformat(timespec="seconds")
+                }
+
+                with open("csv_meta.json", "w", encoding="utf-8") as m:
+                    json.dump(meta, m, ensure_ascii=False, indent=2)
+
+                # 🔹 Отправляем csv_meta.json следом
+                with open("csv_meta.json", "rb") as f2:
+                    bot.send_document(
+                        owner_id,
+                        f2,
+                        caption="🧩 Создан новый файл метаданных (csv_meta.json)."
+                    )
+
+                log_info(f"✅ Новый CSV и csv_meta.json отправлены владельцу ({owner_id}).")
+                return
+
+            except Exception as e:
+                log_error(f"❌ Ошибка при автосоздании нового CSV: {e}")
+                return
+
+        # 🟢 Если файл найден — восстанавливаем базу из него
         file_info = bot.get_file(file_id)
         downloaded = bot.download_file(file_info.file_path)
         tmp = "restore.csv"
         with open(tmp, "wb") as f:
             f.write(downloaded)
 
-        # Преобразуем CSV → JSON-структуру
+        # 📥 Читаем CSV и восстанавливаем данные
         import csv
         restored = default_data()
         with open(tmp, "r", encoding="utf-8") as f:
@@ -206,11 +244,32 @@ def restore_from_telegram_backup():
                 restored["overall_balance"] += rec["amount"]
                 restored["next_id"] = max(restored["next_id"], rec["id"] + 1)
 
+        # 💾 Сохраняем восстановленные данные
         _save_json(DATA_FILE, restored)
         log_info("✅ Данные успешно восстановлены из Telegram CSV.")
+
+        # 🧩 Проверяем наличие csv_meta.json
+        if not os.path.exists("csv_meta.json"):
+            log_info("⚠️ Файл csv_meta.json отсутствует — создаём и отправляем заново.")
+            meta = {
+                "file_id": file_id,
+                "message_id": None,
+                "updated_at": now_local().isoformat(timespec="seconds")
+            }
+            with open("csv_meta.json", "w", encoding="utf-8") as m:
+                json.dump(meta, m, ensure_ascii=False, indent=2)
+            try:
+                with open("csv_meta.json", "rb") as f2:
+                    bot.send_document(
+                        owner_id,
+                        f2,
+                        caption="🧩 Восстановлен новый файл метаданных (csv_meta.json)."
+                    )
+            except Exception as e:
+                log_error(f"Ошибка при автосоздании csv_meta.json: {e}")
+
     except Exception as e:
         log_error(f"Ошибка восстановления из Telegram: {e}")
-
 
 def save_data(d):
     """💾 Сохраняет JSON, обновляет CSV и планирует Telegram-бэкап"""
@@ -917,25 +976,55 @@ def handle_callback(call):
         bot.answer_callback_query(call.id, "Отчёт обновлён 📊")
         return
 
-        # --- CSV: общий и дневной ---
+        # -----------------------------
+    # 📂 Экспорт CSV и метаданных
+    # -----------------------------
     if action == "csv_all":
         try:
+            # 1️⃣ Генерируем и сохраняем актуальный CSV
             export_to_csv(data)
+
+            # 2️⃣ Отправляем файл data.csv владельцу или в текущий чат
             with open(CSV_FILE, "rb") as f:
-                sent = bot.send_document(chat_id, f, caption="📂 Полный экспорт: data.csv")
+                msg = bot.send_document(
+                   chat_id,
+                    f,
+                    caption=(
+                        "📂 Полный экспорт данных (data.csv)\n"
+                        "Содержит все операции всех дат."
+                    )
+                )
 
-            # 🧩 Если файл выслан владельцу — считаем это новым бэкапом
-            if OWNER_ID and chat_id == int(OWNER_ID):
-                meta = {
-                    "message_id": sent.message_id,
-                    "timestamp": datetime.now(TZ).isoformat(timespec="seconds")
-                }
-                _save_csv_meta(meta)
-                log_info("✅ Новый CSV назначен как активный Telegram-бэкап.")
+            # 3️⃣ Формируем мета-информацию о CSV (file_id, message_id, дата)
+            meta = {
+               "file_id": msg.document.file_id,
+                "message_id": msg.message_id,
+                "updated_at": now_local().isoformat(timespec="seconds")
+            }
 
-            bot.answer_callback_query(call.id, "CSV отправлен 📁")
+            # 4️⃣ Сохраняем мета-файл локально
+            with open("csv_meta.json", "w", encoding="utf-8") as m:
+                json.dump(meta, m, ensure_ascii=False, indent=2)
+
+            # 5️⃣ Отправляем csv_meta.json — для бэкапа в Telegram
+            try:
+                with open("csv_meta.json", "rb") as f2:
+                    bot.send_document(
+                        chat_id,
+                        f2,
+                        caption=(
+                            "🧩 Файл метаданных (csv_meta.json)\n"
+                            "Содержит file_id, message_id и дату последнего обновления CSV."
+                        )
+                    )
+            except Exception as e:
+                log_error(f"Ошибка при отправке csv_meta.json: {e}")
+
+            # 6️⃣ Подтверждаем операцию пользователю
+            bot.answer_callback_query(call.id, "📦 CSV и мета-файл успешно отправлены ✅")
 
         except Exception as e:
+            log_error(f"csv_all send error: {e}")
             send_temp_message(chat_id, f"❌ Ошибка при отправке CSV: {e}")
             bot.answer_callback_query(call.id)
         return
@@ -953,6 +1042,7 @@ def handle_callback(call):
             send_temp_message(chat_id, f"❌ Ошибка при отправке {filename}: {e}")
             bot.answer_callback_query(call.id)
         return
+
     # --- Пересылка: вкл/выкл ---
     if action == "toggle_forward":
         store["forward_enabled"] = not store.get("forward_enabled", False)
