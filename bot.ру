@@ -908,10 +908,17 @@ def handle_callback(call):
         except:
             bot.answer_callback_query(call.id, "Неверный ID")
             return
+
         store["edit_wait"] = f"change_value:{day_key}"
         store["edit_target"] = rid
         save_data(data)
-        send_temp_message(chat_id, f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед", delay=25)
+
+        active_id = get_active_window_id(chat_id, day_key)
+        if active_id:
+            try:
+                bot.edit_message_text(chat_id, f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-150 Обед")
+        #send_temp_message(chat_id, f"Введите новую сумму и заметку для записи R{rid} в формате:\n+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед", delay=25)
+
         bot.answer_callback_query(call.id)
         return
 
