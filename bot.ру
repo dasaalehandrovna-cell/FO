@@ -853,7 +853,9 @@ def handle_callback(call):
         day_records = store.get("daily_records", {}).get(day_key, [])
         if not day_records:
             text = f"📅 {day_key}\nПока нет операций в этот день."
-            update_or_send_day_window(chat_id, day_key)
+            active_id = get_active_window_id(chat_id, day_key)
+            if active_id:
+                bot.edit_message_text(text, chat_id, active_id, reply_markup=build_edit_menu_keyboard(day_key, chat_id))
             bot.answer_callback_query(call.id, "Нет записей для редактирования")
             return
 
@@ -864,11 +866,7 @@ def handle_callback(call):
             label = f"{r['short_id']}: {sign}{fmt_num(abs(r['amount']))} — {r.get('note','')}"
             kb.add(types.InlineKeyboardButton(label, callback_data=f"d:{day_key}:rec:{r['id']}"))
         kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main"))
-        update_or_send_day_window(
-            chat_id, day_key,
-            create_if_missing=True, force_new=True,
-            delete_target_old=True, delete_source_old=False
-        )
+ 
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
@@ -884,19 +882,17 @@ def handle_callback(call):
         except:
             bot.answer_callback_query(call.id, "Неверный ID")
             return
+
         day_records = store.get("daily_records", {}).get(day_key, [])
         rec = next((r for r in day_records if r["id"] == rid), None)
         if not rec:
             bot.answer_callback_query(call.id, "Запись не найдена")
             return
+
         sign = "+" if rec["amount"] > 0 else "-"
         text = f"Запись {rec['short_id']}\n{sign}{fmt_num(abs(rec['amount']))} — {rec.get('note','')}\nДобавлена: {rec.get('timestamp')}"
         kb = build_edit_keyboard_for_record(day_key, rid)
-        update_or_send_day_window(
-            chat_id, day_key,
-            create_if_missing=True, force_new=True,
-            delete_target_old=True, delete_source_old=False
-        )
+        
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
@@ -925,11 +921,7 @@ def handle_callback(call):
         except:
             bot.answer_callback_query(call.id, "Неверный ID")
             return
-        update_or_send_day_window(
-            chat_id, day_key,
-            create_if_missing=True, force_new=True,
-            delete_target_old=True, delete_source_old=False
-        )
+       
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
             try:
@@ -946,20 +938,21 @@ def handle_callback(call):
             bot.answer_callback_query(call.id, "Неверный ID")
             return
         success, _ = delete_record_in_chat(chat_id, rid, user=call.from_user, notify_forward=True)
-        update_or_send_day_window(
-            chat_id, day_key,
-            create_if_missing=True, force_new=True,
-            delete_target_old=True, delete_source_old=False
-        )
+        text = "✅ Запись удалена" if success else "⚠️ Запись не найдена"
+         active_id = get_active_window_id(chat_id, day_key)
+         if active_id:
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=build_edit_menu_keyboard(day_key, chat_id))
+
+    
         bot.answer_callback_query(call.id, "Запись удалена" if success else "Запись не найдена")
         return
 
     if action == "cancel_delete":
-        update_or_send_day_window(
-            chat_id, day_key,
-            create_if_missing=True, force_new=True,
-            delete_target_old=True, delete_source_old=False
-        )
+        active_id = get_active_window_id(chat_id, day_key)
+        if active_id:
+            text = "✏️ Меню редактирования"
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=build_edit_menu_keyboard(day_key, chat_id))
+    
         bot.answer_callback_query(call.id, "Отмена удаления")
         return
 
