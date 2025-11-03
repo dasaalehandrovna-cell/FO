@@ -922,24 +922,23 @@ def handle_callback(call):
             f"✏️ Редактирование записи R{rid}\n\n"
             "Введите новую сумму и заметку:\n"
             "+500 Зарплата  или  ^+^500^ Зарплата  или  ^-^150^ Обед"
-    )
+        )
+        # клавиатура с кнопкой «Назад» для отмены
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_list"))
 
-    # клавиатура с кнопкой «Назад» для отмены
-    kb = types.InlineKeyboardMarkup(row_width=1)
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_list"))
+        # обновляем текущее окно
+        active_id = get_active_window_id(chat_id, day_key)
+        if active_id:
+            try:
+                bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
+            except telebot.apihelper.ApiException as e:
+                log_error(f"edit_manual edit: {e}")
+        else:
+            # если окна нет — создаём новое
+            update_or_send_day_window(chat_id, day_key, create_if_missing=True)
 
-    # обновляем текущее окно
-    active_id = get_active_window_id(chat_id, day_key)
-    if active_id:
-        try:
-            bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
-        except telebot.apihelper.ApiException as e:
-            log_error(f"edit_manual edit: {e}")
-    else:
-        # если окна нет — создаём новое
-        update_or_send_day_window(chat_id, day_key, create_if_missing=True)
-
-    bot.answer_callback_query(call.id, "Ожидание новой суммы ✏️")
+        bot.answer_callback_query(call.id, "Ожидание новой суммы ✏️")
         return
 
     if action == "edit_delete" and len(action_tail) >= 2:
