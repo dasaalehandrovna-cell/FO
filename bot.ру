@@ -720,6 +720,18 @@ def handle_callback(call):
             update_or_send_day_window(chat_id, day_key, create_if_missing=True)
         bot.answer_callback_query(call.id, "Баланс обновлён ✅")
         return
+    
+    # 🧮 Общий остаток (итог за всё время)
+    if action == "total":
+        total = data.get("overall_balance", 0)
+        text = f"💰 Общий остаток за всё время: {fmt_num(total)} ARS"
+        active_id = get_active_window_id(chat_id, day_key)
+        if active_id:
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
+        else:
+            update_or_send_day_window(chat_id, day_key)
+        bot.answer_callback_query(call.id, "Общий остаток 📊")
+        return
 
     # Отчёт
     if action == "report":
