@@ -22,7 +22,8 @@ from flask import Flask, request
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_ID")  # строкой; приводим к int при использовании
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
-CSV_META_FILE_ID = os.getenv("CSV_META_FILE_ID", "").strip()  # опционально
+CSV_META_FILE_ID = #BQACAgEAAxkDAAItM2kKjpKccXwDBQ9qMAy3DKYZSPd6AAJPCAAC9B5QRO3VcmXv6KWnNgQ"
+#os.getenv("CSV_META_FILE_ID", "").strip()  # опционально
 try:
     TZ = ZoneInfo((os.getenv("TZ") or "America/Argentina/Buenos_Aires").strip())
 except Exception:
