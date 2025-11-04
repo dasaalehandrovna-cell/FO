@@ -1200,6 +1200,45 @@ def handle_uploaded_file(msg):
     except Exception as e:
         log_error(f"handle_uploaded_file: {e}")
         bot.send_message(chat_id, f"❌ Ошибка при обработке файла: {e}")
+# --------------------------------------------
+# 🧩 ОТСЕК X. Автоматическое восстановление перед запуском вебхука
+# --------------------------------------------
+def restore_from_csv_before_webhook():
+    """Проверяет csv_meta.json и восстанавливает данные из Telegram-бэкапа."""
+    meta_path = "csv_meta.json"
+    try:
+        log_info("🔍 Проверка наличия локального csv_meta.json...")
+        if not os.path.exists(meta_path):
+            log_info("⚠️ csv_meta.json не найден — пропуск восстановления.")
+            return
+
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+
+        file_id = meta.get("file_id")
+        if not file_id:
+            log_info("⚠️ В csv_meta.json отсутствует file_id — пропуск восстановления.")
+            return
+
+        log_info(f"📦 Найден file_id: {file_id}")
+        log_info("📥 Попытка восстановления CSV из Telegram...")
+
+        file_info = bot.get_file(file_id)
+        file_data = requests.get(f"https://api.telegram.org/file/bot{TOKEN}/{file_info.file_path}")
+        if file_data.status_code != 200:
+            log_error(f"❌ Ошибка загрузки CSV по file_id {file_id}: {file_data.status_code}")
+            return
+
+        # Сохраняем полученный CSV
+        with open("data.csv", "wb") as out:
+            out.write(file_data.content)
+
+        log_info("✅ CSV успешно восстановлен из Telegram.")
+    except Exception as e:
+        log_error(f"restore_from_csv_before_webhook: {e}")
+
+# --- Выполнить восстановление перед запуском webhook ---
+restore_from_csv_before_webhook()
 
 # --------------------------------------------
 # 🧩 ОТСЕК 16. Webhook, keep-alive, расписания и запуск
