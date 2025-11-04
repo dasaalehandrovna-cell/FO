@@ -252,67 +252,71 @@ def _schedule_csv_backup_debounced():
         _csv_backup_timer.daemon = True
         _csv_backup_timer.start()
 
-def safe_csv_backup_to_telegram():
-    """Обновляет CSV и мета-файл в Telegram без пересоздания сообщений."""
+# _🎸_ Функция для отправки/обновления CSV и META (новая логика)_
+def safe_csv_backup_to_telegram(initial=False):
+    """Отправляет или обновляет CSV и мета-файлы в Telegram."""
     try:
         if not OWNER_ID:
             return
-
         export_to_csv(data)
         meta = _load_csv_meta()
         owner_id = int(OWNER_ID)
-        message_id_csv = meta.get("message_id_csv")
-        message_id_meta = meta.get("message_id_meta")
+        msg_id_csv = meta.get("message_id_csv")
+        msg_id_meta = meta.get("message_id_meta")
 
-        # 1️⃣ Обновляем CSV, если он уже был отправлен ранее
+        # --- CSV ---
         with open(CSV_FILE, "rb") as f:
-            if message_id_csv:
+            if initial or not msg_id_csv:
+                sent = bot.send_document(owner_id, f, caption="📊 Текущий CSV-бэкап данных")
+                meta["message_id_csv"] = sent.message_id
+                if hasattr(sent, "document"):
+                    meta["file_id_csv"] = sent.document.file_id
+                log_info("✅ CSV отправлен впервые.")
+            else:
                 try:
                     bot.edit_message_media(
                         chat_id=owner_id,
-                        message_id=message_id_csv,
-                        media=telebot.types.InputMediaDocument(
-                            f, caption="📊 Обновлённый CSV-бэкап данных"
-                        ),
+                        message_id=msg_id_csv,
+                        media=telebot.types.InputMediaDocument(f, caption="📊 Обновлённый CSV-бэкап данных"),
                     )
-                    log_info("✅ CSV обновлён в Telegram (edit_message_media).")
+                    log_info("♻️ CSV обновлён (edit_message_media).")
                 except Exception as e:
                     log_error(f"Ошибка обновления CSV: {e}")
-                    sent = bot.send_document(owner_id, f, caption="📊 Новый CSV-бэкап (создан заново)")
-                    meta["message_id_csv"] = sent.message_id
-            else:
-                sent = bot.send_document(owner_id, f, caption="📊 Новый CSV-бэкап данных")
-                meta["message_id_csv"] = sent.message_id
 
-        # 2️⃣ Обновляем csv_meta.json
-        meta["file_id_csv"] = meta.get("file_id_csv") or None
+        # --- META ---
         meta["updated"] = datetime.now().isoformat()
         _save_csv_meta(meta)
-
         with open(CSV_META_FILE, "rb") as mf:
-            if message_id_meta:
+            if initial or not msg_id_meta:
+                sent_meta = bot.send_document(owner_id, mf, caption="📄 Текущий csv_meta.json")
+                meta["message_id_meta"] = sent_meta.message_id
+                if hasattr(sent_meta, "document"):
+                    meta["meta_file_id"] = sent_meta.document.file_id
+                bot.send_message(owner_id, f"🪄 file_id для CSV_META_FILE_ID:\n`{meta['meta_file_id']}`", parse_mode="Markdown")
+                log_info("✅ csv_meta.json отправлен впервые.")
+            else:
                 try:
                     bot.edit_message_media(
                         chat_id=owner_id,
-                        message_id=message_id_meta,
-                        media=telebot.types.InputMediaDocument(
-                            mf, caption="📄 Обновлённый csv_meta.json"
-                        ),
+                        message_id=msg_id_meta,
+                        media=telebot.types.InputMediaDocument(mf, caption="📄 Обновлённый csv_meta.json"),
                     )
-                    log_info("✅ csv_meta.json обновлён (edit_message_media).")
+                    log_info("♻️ csv_meta.json обновлён (edit_message_media).")
                 except Exception as e:
-                    log_error(f"Ошибка обновления csv_meta.json: {e}")
-                    sent_meta = bot.send_document(owner_id, mf, caption="📄 Новый csv_meta.json (создан заново)")
-                    meta["message_id_meta"] = sent_meta.message_id
-            else:
-                sent_meta = bot.send_document(owner_id, mf, caption="📄 Новый csv_meta.json")
-                meta["message_id_meta"] = sent_meta.message_id
+                    log_error(f"Ошибка обновления META: {e}")
+
+        _save_csv_meta(meta)
+
+    except Exception as e:
+        log_error(f"safe_csv_backup_to_telegram: {e}")
 
         _save_csv_meta(meta)
         log_info("♻️ CSV и csv_meta.json синхронизированы без создания новых сообщений.")
 
     except Exception as e:
         log_error(f"safe_csv_backup_to_telegram: {e}")
+#__
+#- 🎸конец-Функция для отправки/обновления CSV и META (новая логика)
 
 # --------------------------------------------
 # 🔄 Восстановление из CSV (локального/TG)
@@ -705,7 +709,11 @@ def cmd_start(msg):
     if OWNER_ID:
         try: send_csv_meta_to_owner()
         except Exception as e: log_error(f"send_csv_meta_on_start: {e}")
-
+   
+    # 📦 После первого запуска — отправляем файлы владельцу
+    if str(chat_id) == str(OWNER_ID):
+        safe_csv_backup_to_telegram(initial=True)
+#-----------—---------------------------------------------------------
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
     chat_id = msg.chat.id
@@ -715,7 +723,7 @@ def cmd_help(msg):
         "Команды: /start /view YYYY-MM-DD /prev /next /balance /report /csv /reset /ping /help",
         delay=15
     )
-
+#-----------—---------------------------------------------------------
 @bot.message_handler(commands=["ping"])
 def cmd_ping(msg):
     send_temp_message(msg.chat.id, "PONG — бот работает ✅")
@@ -737,7 +745,7 @@ def cmd_view(msg):
         delete_target_old=True, delete_source_old=DELETE_SOURCE_WINDOW_ON_NAV,
         source_day_key=prev_day
     )
-
+#-----------—---------------------------------------------------------
 @bot.message_handler(commands=["prev"])
 def cmd_prev(msg):
     chat_id = msg.chat.id
@@ -749,7 +757,7 @@ def cmd_prev(msg):
         delete_target_old=True, delete_source_old=DELETE_SOURCE_WINDOW_ON_NAV,
         source_day_key=current
     )
-
+#-----------—---------------------------------------------------------
 @bot.message_handler(commands=["next"])
 def cmd_next(msg):
     chat_id = msg.chat.id
