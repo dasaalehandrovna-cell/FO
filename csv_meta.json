@@ -7,5 +7,10 @@
   "total_records": 142,
   "last_sync": "2025-11-04T10:52:36",
   "source": "telegram_backup",
-  "description": "Автоматический CSV-бэкап для восстановления состояния бота после перезапуска"
+  "description": "Автоматический CSV-бэкап для восстановления состояния бота после перезапуска",
+  "message_id_csv": 11312,
+  "file_id_csv": "BQACAgEAAxkDAAIsMGkKbzZQ1t1360-8f-P1sJAwTyW_AAJ8BwAC9B5QRAGm-tYtIczfNgQ",
+  "updated": "2025-11-04T21:25:44.043451",
+  "message_id_meta": 11313,
+  "meta_file_id": "BQACAgEAAxkDAAIsMWkKbzaSYefWhHA49gEdyYBSAmjJAAJ9BwAC9B5QRFxP7cKqH6KWNgQ"
 }
