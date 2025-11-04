@@ -924,6 +924,8 @@ def handle_message(msg):
     update_or_send_day_window(chat_id, get_today_key())
     if added:
         send_temp_message(chat_id, f"✅ Добавлено записей: {added}")
+
+
 # --------------------------------------------
 # 🧩 ОТСЕК 14. CSV-бэкап в Telegram (владелец)
 # --------------------------------------------
@@ -1156,6 +1158,50 @@ def restore_from_csv_on_start():
     log_info("⚠️ Восстановление из CSV пропущено — источники не найдены.")
 
 # --------------------------------------------
+# 🧩 ОТСЕК 17. Ручное восстановление из файла, присланного в Telegram
+# --------------------------------------------
+@bot.message_handler(content_types=["document"])
+def handle_uploaded_file(msg):
+    chat_id = msg.chat.id
+    doc = msg.document
+    file_name = doc.file_name.lower()
+
+    try:
+        # 📥 Скачиваем файл
+        file_info = bot.get_file(doc.file_id)
+        file_data = bot.download_file(file_info.file_path)
+
+        # сохраняем как есть
+        with open(file_name, "wb") as f:
+            f.write(file_data)
+
+        if file_name.endswith(".csv"):
+            # если это CSV — восстанавливаем базу
+            ok = _restore_from_local_csv()
+            if ok:
+                bot.send_message(chat_id, "✅ Данные успешно восстановлены из CSV!")
+                export_to_csv(load_data())
+            else:
+                bot.send_message(chat_id, "⚠️ Ошибка при восстановлении из CSV.")
+        elif file_name.endswith(".json"):
+            # если JSON (например data.json)
+            try:
+                with open(file_name, "r", encoding="utf-8") as f:
+                    restored = json.load(f)
+                _write_json_file(DATA_FILE, restored)
+                export_to_csv(restored)
+                bot.send_message(chat_id, "✅ База успешно восстановлена из JSON!")
+            except Exception as e:
+                log_error(f"restore from json: {e}")
+                bot.send_message(chat_id, "❌ Ошибка при восстановлении из JSON.")
+        else:
+            bot.send_message(chat_id, "⚠️ Неподдерживаемый формат файла. Пришлите .csv или .json")
+
+    except Exception as e:
+        log_error(f"handle_uploaded_file: {e}")
+        bot.send_message(chat_id, f"❌ Ошибка при обработке файла: {e}")
+
+# --------------------------------------------
 # 🧩 ОТСЕК 16. Webhook, keep-alive, расписания и запуск
 # --------------------------------------------
 @app.route(f"/{TOKEN}", methods=["POST"])
@@ -1250,3 +1296,4 @@ if __name__ == "__main__":
         log_error(f"startup notify: {e}")
 
     app.run(host="0.0.0.0", port=PORT)
+
