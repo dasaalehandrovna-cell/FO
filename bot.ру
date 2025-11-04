@@ -721,11 +721,11 @@ def cmd_start(msg):
         try:
             safe_csv_backup_to_telegram(initial=True)
             log_info("📦 Первичная отправка CSV и META выполнена после /start.")
+             bot.send_message(chat_id, "📦 Инициализация завершена — файлы сохранены и синхронизированы.")
         except Exception as e:
             log_error(f"send_initial_backup_on_start: {e}")
         
-         bot.send_message(chat_id, "📦 Инициализация завершена — файлы сохранены и синхронизированы.")
-
+         
 #-----------—---------------------------------------------------------
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
