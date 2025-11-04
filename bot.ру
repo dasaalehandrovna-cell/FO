@@ -709,22 +709,15 @@ def cmd_start(msg):
         delete_target_old=True,
         delete_source_old=False
     )
-    #•••••••••
-    # по твоему требованию — отправляем csv_meta.json при запуске
-    #if OWNER_ID:
-        #try: send_csv_meta_to_owner()
-        #except Exception as e: log_error(f"send_csv_meta_on_start: {e}")
-    #•••••••••••
 
     # 📦 Только владелец получает файлы при первом запуске
     if str(chat_id) == str(OWNER_ID):
         try:
             safe_csv_backup_to_telegram(initial=True)
             log_info("📦 Первичная отправка CSV и META выполнена после /start.")
-             bot.send_message(chat_id, "📦 Инициализация завершена — файлы сохранены и синхронизированы.")
+            bot.send_message(chat_id, "📦 Инициализация завершена — файлы сохранены и синхронизированы.")
         except Exception as e:
             log_error(f"send_initial_backup_on_start: {e}")
-        
          
 #-----------—---------------------------------------------------------
 @bot.message_handler(commands=["help"])
