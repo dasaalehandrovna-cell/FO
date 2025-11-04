@@ -1,5 +1,11 @@
 {
-  "file_id": "BQACAgEAAxkDAAIqimkJTgVJ7y_JQzb9exAIu3ylKSbYAAJoBgAC7nFQRJDSL1NnwL03NgQ",
-  "message_id": 10890,
-  "updated_at": "2025-11-03T21:51:17-03:00"
+  "file_id": "BQACAgIAAxkBAAIBUmZb8v45Q7NAAAGc8W6W1iIu0M9KAwACcBgAArbYyUuUuR1Q8DqA6jQE",
+  "date": "2025-11-04",
+  "backup_type": "telegram",
+  "filename": "data_2025-11-04.csv",
+  "overall_balance": 15780,
+  "total_records": 142,
+  "last_sync": "2025-11-04T10:52:36",
+  "source": "telegram_backup",
+  "description": "Автоматический CSV-бэкап для восстановления состояния бота после перезапуска"
 }
