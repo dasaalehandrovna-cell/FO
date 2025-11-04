@@ -508,6 +508,17 @@ def export_day_csv(chat_id: int, day_key: str):
         return None
     return filename
 
+def auto_update_task():
+    """🕒 Автоматическое обновление файлов каждые 3 часа"""
+    while True:
+        try:
+            log_info("🕒 Плановое обновление JSON и CSV...")
+            save_data(data)
+            time.sleep(3 * 60 * 60)  # каждые 3 часа
+        except Exception as e:
+            log_error(f"Ошибка фонового обновления: {e}")
+            time.sleep(60)
+
 
 # -----------------------------
 # ➕/✏️/🗑 Операции с записями
