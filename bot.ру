@@ -699,19 +699,24 @@ def parse_amount_token(token: str) -> int:
 # -----------------------------
 @bot.message_handler(commands=["start", "info"])
 def cmd_start(msg):
+    """Команда /start — открывает окно текущего дня и запускает первую синхронизацию файлов"""
     chat_id = msg.chat.id
     update_or_send_day_window(
-        chat_id, today_key(),
-        create_if_missing=True, force_new=True,
-        delete_target_old=True, delete_source_old=False
+        chat_id,
+        today_key(),
+        create_if_missing=True,
+        force_new=True,
+        delete_target_old=True,
+        delete_source_old=False
     )
-#•••••••••
+    #•••••••••
     # по твоему требованию — отправляем csv_meta.json при запуске
     #if OWNER_ID:
         #try: send_csv_meta_to_owner()
         #except Exception as e: log_error(f"send_csv_meta_on_start: {e}")
-#•••••••••••
-    # 📦 Только если владелец — делаем первую отправку
+    #•••••••••••
+
+    # 📦 Только владелец получает файлы при первом запуске
     if str(chat_id) == str(OWNER_ID):
         try:
             safe_csv_backup_to_telegram(initial=True)
