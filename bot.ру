@@ -195,6 +195,7 @@ def restore_from_telegram_backup():
             if fn.startswith("data") and fn.endswith(".csv"):
                 file_id = m.document.file_id
                 log_info(f"📦 Найден файл бэкапа: {fn}")
+                 log_chat(f"📦 Найден файл бэкапа: {fn}\nfile_id: `{file_id}`", error=False)
                 break
 
         if not file_id:
@@ -1615,12 +1616,26 @@ def set_webhook():
 if __name__ == "__main__":
     """Точка входа — запуск приложения"""
     log_chat("🚀 Запуск приложения и попытка восстановления CSV...")
-    # 🔄 Восстановление из Telegram CSV при старте (если есть)
-    restore_from_telegram_backup()
 
-    # 🪝 Webhook
-    set_webhook()
-    log_chat("🪝 Webhook установлен успешно.")
+    try:
+        # 🧹 Сначала удаляем webhook, чтобы Telegram разрешил get_updates
+        bot.delete_webhook()
+        log_info("🔧 Webhook временно отключён для восстановления CSV.")
+        time.sleep(2)
+
+        # 🔄 Пробуем восстановить CSV из чата владельца
+        restore_from_telegram_backup()
+
+        # 🕐 Короткая пауза, чтобы Telegram не вернул пустые апдейты
+        time.sleep(1)
+
+        # 🪝 Ставим webhook обратно
+        set_webhook()
+        log_chat("🪝 Webhook установлен успешно.")
+
+    except Exception as e:
+        log_chat(f"❌ Ошибка при восстановлении/установке webhook: {e}", error=True)
+        log_error(f"startup sequence error: {e}")
 
     # 🗓 Плановое создание нового окна при смене дня
     schedule_daily_window_creation()
@@ -1639,4 +1654,5 @@ if __name__ == "__main__":
     except Exception as e:
         log_error(f"send startup msg: {e}")
 
+    # 🌐 Запуск Flask-приложения
     app.run(host="0.0.0.0", port=PORT)
