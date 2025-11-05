@@ -238,19 +238,29 @@ def _load_csv_meta():
 def _save_csv_meta(meta):
     safe_json_write(CSV_META_FILE, meta)
 
-# дебаунс авто-бэкапа в TG
 _CSV_DEBOUNCE_SECONDS = 3
 _csv_backup_timer = None
 _csv_backup_lock = threading.Lock()
 
-def _schedule_csv_backup_debounced():
+def _schedule_csv_backup_debounced(force=False):
+    """Запускает безопасное обновление CSV и META с задержкой (по умолчанию 3 сек)."""
     global _csv_backup_timer
     with _csv_backup_lock:
+        # если уже есть активный таймер — сбрасываем
         if _csv_backup_timer and _csv_backup_timer.is_alive():
             _csv_backup_timer.cancel()
+
+        # если указан флаг force=True — выполняем немедленно
+        if force:
+            log_info("⚡ Немедленное обновление csv_meta.json и Telegram-бэкапа.")
+            safe_csv_backup_to_telegram()
+            return
+
+        # иначе планируем с небольшой задержкой
         _csv_backup_timer = threading.Timer(_CSV_DEBOUNCE_SECONDS, safe_csv_backup_to_telegram)
         _csv_backup_timer.daemon = True
         _csv_backup_timer.start()
+        log_info("🕒 Планируется обновление CSV и csv_meta.json через 3 секунды.")
 
 #_____________________
 # _🎸_ Функция для отправки/обновления CSV и META (новая логика)_
@@ -405,20 +415,17 @@ def restore_from_csv_if_needed():
         log_error(f"restore_from_csv_if_needed: {e}")
         return None
 
-def save_data(d):
-    """Сохраняет JSON, обновляет CSV, csv_meta.json и планирует Telegram-бэкап."""
+def save_data(d, force_backup: bool = False):
+    """
+    Сохраняет JSON, обновляет CSV, csv_meta.json и запускает Telegram-бэкап.
+    Если force_backup=True, выполняет обновление мгновенно.
+    """
     try:
-        # 1. Сохранить основные данные
         _save_json(DATA_FILE, d)
         export_to_csv(d)
-
-        # 2. Автоматически обновить csv_meta.json (время, размер, актуальность)
         auto_update_csv_meta()
-
-        # 3. Запланировать Telegram-бэкап (через дебаунс — без спама)
-        safe_csv_backup_to_telegram()
-
-        log_info("💾 save_data: данные, CSV и META обновлены.")
+        _schedule_csv_backup_debounced(force=force_backup)
+        log_info("💾 save_data: данные, CSV и META обновлены и синхронизируются.")
     except Exception as e:
         log_error(f"save_data: {e}")
 
