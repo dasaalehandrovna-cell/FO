@@ -416,7 +416,7 @@ def save_data(d):
         auto_update_csv_meta()
 
         # 3. Запланировать Telegram-бэкап (через дебаунс — без спама)
-        _schedule_csv_backup_debounced()
+        safe_csv_backup_to_telegram()
 
         log_info("💾 save_data: данные, CSV и META обновлены.")
     except Exception as e:
