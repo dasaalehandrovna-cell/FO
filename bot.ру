@@ -195,7 +195,7 @@ def restore_from_telegram_backup():
             if fn.startswith("data") and fn.endswith(".csv"):
                 file_id = m.document.file_id
                 log_info(f"📦 Найден файл бэкапа: {fn}")
-                 log_chat(f"📦 Найден файл бэкапа: {fn}\nfile_id: `{file_id}`", error=False)
+                log_chat(f"📦 Найден файл бэкапа: {fn}\nfile_id: `{file_id}`", error=False)
                 break
 
         if not file_id:
