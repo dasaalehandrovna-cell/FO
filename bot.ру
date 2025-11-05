@@ -1,11 +1,12 @@
-#-1528- 💰 Финансовый бот — версия 9.8.7-fo_6+autoCSV+jsonsyncHybrid
-# ID Code_021
+# ============================================
+# 💰 Финансовый бот — версия 9.8.7-fo_6+autoCSV+jsonsyncHybrid+syncAll
+# ID Code_021A
 # ============================================
 # 🧭 Функции:
-#  • Полная логика 9.8.6-fo_6+autoCSV (окна, календарь, редактирование, /prev /next)
-#  • csv_meta.json: отправка при запуске и при экспорте
+#  • Полная логика 9.8.6-fo_6+autoCSV
+#  • csv_meta.json + Telegram file_id синхронизация
+#  • sync_all_backups(): обновляет CSV, META и file_id в тех же сообщениях
 #  • Автовосстановление из Telegram, если локальные файлы потеряны
-#  • Поддержка CSV_META_FILE_ID (env) для подтягивания меты
 # ============================================
 
 import os, io, re, csv, json, time, threading, logging, requests
@@ -19,31 +20,26 @@ from flask import Flask, request
 # ⚙️ Конфигурация
 # --------------------------------------------
 TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID")  # строкой; приводим к int при использовании
+OWNER_ID = os.getenv("OWNER_ID")
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
-CSV_META_FILE_ID = os.getenv("CSV_META_FILE_ID", "").strip()  # опционально
-#"BQACAgEAAxkDAAItM2kKjpKccXwDBQ9qMAy3DKYZSPd6AAJPCAAC9B5QRO3VcmXv6KWnNgQ"#
+CSV_META_FILE_ID = os.getenv("CSV_META_FILE_ID", "").strip()
 try:
     TZ = ZoneInfo((os.getenv("TZ") or "America/Argentina/Buenos_Aires").strip())
 except Exception:
-    TZ = timezone(timedelta(hours=-3))  # fallback UTC−3
+    TZ = timezone(timedelta(hours=-3))
 
 PORT = int(os.environ.get("PORT", 5000))
 KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 11 * 60))
 KEEP_ALIVE_SEND_TO_OWNER = True
 
-# Поведение навигации — независимые окна по датам (как было)
 DELETE_SOURCE_WINDOW_ON_NAV = False
 DELETE_TARGET_OLD_WINDOW_ON_NAV = True
 ALWAYS_CREATE_NEW_ON_NAV = True
 
-VERSION = "9.8.7-fo_6+autoCSV+jsonsyncHybrid"
+VERSION = "9.8.7-fo_6+autoCSV+jsonsyncHybrid+syncAll"
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
-
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен!")
 
 bot = telebot.TeleBot(TOKEN, threaded=True)
 app = Flask(__name__)
@@ -56,7 +52,6 @@ logging.basicConfig(
 )
 def log_info(msg): logging.info(msg)
 def log_error(msg): logging.error(msg)
-
 log_info(f"🚀 Запуск версии {VERSION}")
 
 # --------------------------------------------
@@ -75,7 +70,7 @@ def fmt_num(v):
     except: return str(v)
 
 # --------------------------------------------
-# 🧩 CSV_META.JSON — утилиты
+# 📁 JSON/CSV META — базовые утилиты
 # --------------------------------------------
 def safe_json_load(path, fallback):
     try:
@@ -93,99 +88,39 @@ def safe_json_write(path, payload):
     except Exception as e:
         log_error(f"safe_json_write: {e}")
 
+def _load_csv_meta():
+    return safe_json_load(CSV_META_FILE, {})
+
+def _save_csv_meta(meta):
+    safe_json_write(CSV_META_FILE, meta)
+
+# --------------------------------------------
+# 🧩 ensure_local_meta_or_fetch
+# --------------------------------------------
 def ensure_local_meta_or_fetch():
-    """Гарантирует наличие csv_meta.json; если нет, пробует скачать по CSV_META_FILE_ID; иначе создаёт новый."""
+    """Гарантирует наличие csv_meta.json; если нет — пытается скачать по CSV_META_FILE_ID"""
     if os.path.exists(CSV_META_FILE):
         return
     if CSV_META_FILE_ID:
         try:
-            log_info("🔎 csv_meta.json отсутствует, пытаюсь скачать по CSV_META_FILE_ID...")
-            # CSV_META_FILE_ID может быть либо file_id документа, либо file_id самого json
+            log_info("🔎 csv_meta.json отсутствует — скачиваю по CSV_META_FILE_ID...")
             fobj = bot.get_file(CSV_META_FILE_ID)
             url = f"https://api.telegram.org/file/bot{TOKEN}/{fobj.file_path}"
             resp = requests.get(url, timeout=30)
-            resp.raise_for_status()
             with open(CSV_META_FILE, "wb") as f:
                 f.write(resp.content)
-            log_info("✅ csv_meta.json скачан из Telegram по CSV_META_FILE_ID.")
+            log_info("✅ csv_meta.json скачан из Telegram.")
             return
         except Exception as e:
             log_error(f"ensure_local_meta_or_fetch: {e}")
-    # создаём новый пустой meta
     safe_json_write(CSV_META_FILE, {"file_id_csv": None, "meta_file_id": None, "updated": datetime.now().isoformat()})
     log_info("📄 Создан новый csv_meta.json")
 
-def send_csv_meta_to_owner():
-    """Отправляет csv_meta.json владельцу и обновляет meta_file_id в нём."""
-    ensure_local_meta_or_fetch()
-    try:
-        with open(CSV_META_FILE, "rb") as f:
-            msg = bot.send_document(int(OWNER_ID), f, caption="📄 Текущий csv_meta.json")
-        meta = safe_json_load(CSV_META_FILE, {})
-        if hasattr(msg, "document") and msg.document:
-            meta["meta_file_id"] = msg.document.file_id
-        meta["updated"] = datetime.now().isoformat()
-        safe_json_write(CSV_META_FILE, meta)
-        log_info(f"✅ csv_meta.json отправлен владельцу. FILE_ID={meta.get('meta_file_id')}")
-
-        # 🪄 Новое: уведомление владельца с file_id прямо в Telegram
-        try:
-            bot.send_message(
-                int(OWNER_ID),
-                f"🪄 file_id для CSV_META_FILE_ID:\n`{meta.get('meta_file_id')}`",
-                parse_mode="Markdown"
-            )
-        except Exception as notify_err:
-            log_error(f"send_csv_meta_to_owner notify: {notify_err}")
-
-    except Exception as e:
-        log_error(f"send_csv_meta_to_owner: {e}")
-
-def restore_from_telegram_backup_if_possible(current_data):
-    """
-    Если в csv_meta.json есть file_id_csv — скачивает data.csv из Telegram и
-    восстанавливает локальное состояние из него. Возвращает обновлённые данные.
-    """
-    try:
-        meta = safe_json_load(CSV_META_FILE, {})
-        fid = meta.get("file_id_csv")
-        if not fid:
-            log_info("ℹ️ В мета-файле нет file_id_csv — пропуск восстановления из Telegram.")
-            return current_data
-        log_info(f"📦 Восстановление из Telegram по file_id_csv={fid}...")
-        fobj = bot.get_file(fid)
-        url = f"https://api.telegram.org/file/bot{TOKEN}/{fobj.file_path}"
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
-        with open(CSV_FILE, "wb") as f:
-            f.write(resp.content)
-        # теперь построим JSON из CSV
-        restored = _build_data_from_csv(CSV_FILE)
-        if restored:
-            _save_json(DATA_FILE, restored)
-            log_info("✅ Данные восстановлены из Telegram-бэкапа.")
-            return restored
-        else:
-            log_info("⚠️ Не удалось собрать данные из загруженного data.csv")
-            return current_data
-    except Exception as e:
-        log_error(f"restore_from_telegram_backup_if_possible: {e}")
-        return current_data
-
 # --------------------------------------------
-# 💾 Базовые IO (как в 9.8.6, оставлены)
+# 💾 Структуры данных
 # --------------------------------------------
 def default_data():
-    return {
-        "overall_balance": 0,
-        "records": [],
-        "chats": {},
-        "active_messages": {},
-        "processed_messages": [],
-        "forward_targets": [],
-        "tracked_messages": {},
-        "next_id": 1
-    }
+    return {"overall_balance": 0, "records": [], "chats": {}, "active_messages": {}, "next_id": 1}
 
 def _load_json(path, fallback):
     try:
@@ -214,146 +149,77 @@ def load_data():
 data = load_data()
 
 # --------------------------------------------
-# 📤 Экспорт общего CSV и меты
+# 📤 CSV экспорт
 # --------------------------------------------
 def export_to_csv(d):
     try:
         with open(CSV_FILE, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(["chat_id","ID","short_id","timestamp","amount","note","owner","day_key"])
+            w = csv.writer(f)
+            w.writerow(["chat_id","ID","short_id","timestamp","amount","note","owner","day_key"])
             for cid, cdata in d.get("chats", {}).items():
-                for dk, records in cdata.get("daily_records", {}).items():
-                    for r in records:
-                        writer.writerow([
-                            cid,
-                            r.get("id"), r.get("short_id"), r.get("timestamp"),
-                            r.get("amount"), r.get("note"), r.get("owner"), dk
-                        ])
+                for dk, recs in cdata.get("daily_records", {}).items():
+                    for r in recs:
+                        w.writerow([cid, r["id"], r["short_id"], r["timestamp"], r["amount"], r["note"], r["owner"], dk])
     except Exception as e:
         log_error(f"export_to_csv: {e}")
 
-def _load_csv_meta():
-    return safe_json_load(CSV_META_FILE, {})
-
-def _save_csv_meta(meta):
-    safe_json_write(CSV_META_FILE, meta)
-
 # --------------------------------------------
-# 🔁 Отложенное или немедленное обновление CSV и META
+# 🔁 Новая функция — полная синхронизация трёх сообщений
 # --------------------------------------------
-_CSV_DEBOUNCE_SECONDS = 3
-_csv_backup_timer = None
-_csv_backup_lock = threading.Lock()
-
-def _schedule_csv_backup_debounced(force=False):
-    """Запускает безопасное обновление CSV и META с задержкой (по умолчанию 3 сек)."""
-    global _csv_backup_timer
-    with _csv_backup_lock:
-        if _csv_backup_timer and _csv_backup_timer.is_alive():
-            _csv_backup_timer.cancel()
-
-        if force:
-            log_info("⚡ Немедленное обновление csv_meta.json и Telegram-бэкапа.")
-            safe_csv_backup_to_telegram()
-            return
-
-        _csv_backup_timer = threading.Timer(_CSV_DEBOUNCE_SECONDS, safe_csv_backup_to_telegram)
-        _csv_backup_timer.daemon = True
-        _csv_backup_timer.start()
-        log_info("🕒 Планируется обновление CSV и csv_meta.json через 3 секунды.")
-
-#_____________________
-# _🎸_ Функция для отправки/обновления CSV и META (новая логика)_
-#---------------------
-def safe_csv_backup_to_telegram(initial=False):
-    """Отправляет или обновляет CSV и мета-файлы в Telegram (CSV + json + file_id)."""
+def sync_all_backups(force=False):
+    """Обновляет CSV, META и сообщение с file_id в тех же сообщениях"""
     try:
         if not OWNER_ID:
             return
-        export_to_csv(data)
-        auto_update_csv_meta()  # вот это добавляем
-        meta = _load_csv_meta()
         owner_id = int(OWNER_ID)
+        meta = _load_csv_meta()
 
-        msg_id_csv = meta.get("message_id_csv")
-        msg_id_meta = meta.get("message_id_meta")
-        msg_id_fileid = meta.get("message_id_fileid")
-
-        # --- CSV ---
+        # 1️⃣ Экспорт и обновление CSV
+        export_to_csv(data)
+        csv_msg_id = meta.get("message_id_csv")
         with open(CSV_FILE, "rb") as f:
-            if initial or not msg_id_csv:
-                sent = bot.send_document(owner_id, f, caption="📊 Текущий CSV-бэкап данных")
-                meta["message_id_csv"] = sent.message_id
-                if hasattr(sent, "document"):
-                    meta["file_id_csv"] = sent.document.file_id
-                log_info("✅ CSV отправлен впервые.")
-            else:
-                try:
-                    bot.edit_message_media(
-                        chat_id=owner_id,
-                        message_id=msg_id_csv,
-                        media=telebot.types.InputMediaDocument(f, caption="📊 Обновлённый CSV-бэкап данных"),
-                    )
-                    log_info("♻️ CSV обновлён (edit_message_media).")
-                except Exception as e:
-                    log_error(f"Ошибка обновления CSV: {e}")
+            try:
+                bot.edit_message_media(
+                    chat_id=owner_id,
+                    message_id=csv_msg_id,
+                    media=telebot.types.InputMediaDocument(f, caption="📊 Обновлённый CSV-бэкап данных"),
+                )
+                log_info("♻️ CSV обновлён в исходном сообщении.")
+            except Exception as e:
+                log_error(f"sync_all_backups CSV edit: {e}")
 
-        # --- META ---
+        # 2️⃣ META — обновление json и Telegram сообщения
         meta["updated"] = datetime.now().isoformat()
+        if os.path.exists(CSV_FILE):
+            meta["csv_size"] = os.path.getsize(CSV_FILE)
         _save_csv_meta(meta)
+        meta_msg_id = meta.get("message_id_meta")
+        with open(CSV_META_FILE, "rb") as f:
+            try:
+                bot.edit_message_media(
+                    chat_id=owner_id,
+                    message_id=meta_msg_id,
+                    media=telebot.types.InputMediaDocument(f, caption="📄 Обновлённый csv_meta.json"),
+                )
+                log_info("♻️ META обновлена в том же сообщении.")
+            except Exception as e:
+                log_error(f"sync_all_backups META edit: {e}")
 
-        with open(CSV_META_FILE, "rb") as mf:
-            if initial or not msg_id_meta:
-                sent_meta = bot.send_document(owner_id, mf, caption="📄 Текущий csv_meta.json")
-                meta["message_id_meta"] = sent_meta.message_id
-                if hasattr(sent_meta, "document"):
-                    meta["meta_file_id"] = sent_meta.document.file_id
-                log_info("✅ csv_meta.json отправлен впервые.")
-            else:
-                try:
-                    bot.edit_message_media(
-                        chat_id=owner_id,
-                        message_id=msg_id_meta,
-                        media=telebot.types.InputMediaDocument(mf, caption="📄 Обновлённый csv_meta.json"),
-                    )
-                    log_info("♻️ csv_meta.json обновлён (edit_message_media).")
-                except Exception as e:
-                    log_error(f"Ошибка обновления META: {e}")
-
-                # --- FILE_ID сообщение ---
+        # 3️⃣ file_id сообщение
+        fileid_msg_id = meta.get("message_id_fileid")
+        fileid_text = (
+            f"🪄 file_id для CSV_META_FILE_ID:\n`{meta.get('meta_file_id', '—')}`\n"
+            f"⏱ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
         try:
-            fileid_text = (
-                f"🪄 file_id для CSV_META_FILE_ID:\n`{meta.get('meta_file_id')}`\n"
-                f"⏱ Обновлено: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
-            if initial or not msg_id_fileid:
-                msg = bot.send_message(owner_id, fileid_text, parse_mode="Markdown")
-                meta["message_id_fileid"] = msg.message_id
-                log_info("✅ Отправлено первое сообщение с file_id.")
-            else:
-                try:
-                    bot.edit_message_text(fileid_text, owner_id, msg_id_fileid, parse_mode="Markdown")
-                    log_info("♻️ Сообщение с file_id обновлено.")
-                except telebot.apihelper.ApiException as e:
-                    if "message is not modified" in str(e):
-                        log_info("ℹ️ file_id сообщение не изменилось — Telegram пропустил обновление.")
-                    else:
-                        log_error(f"Ошибка обновления сообщения file_id: {e}")
-
-            # сохраняем обновлённую мету в любом случае
-            _save_csv_meta(meta)
-            log_info("♻️ CSV, csv_meta.json и сообщение с file_id синхронизированы.")
-
+            bot.edit_message_text(fileid_text, owner_id, fileid_msg_id, parse_mode="Markdown")
+            log_info("♻️ Сообщение с file_id обновлено.")
         except Exception as e:
-            log_error(f"Ошибка при обновлении/отправке сообщения с file_id: {e}")
+            log_error(f"sync_all_backups file_id edit: {e}")
 
+        _save_csv_meta(meta)
     except Exception as e:
-        log_error(f"safe_csv_backup_to_telegram: {e}")
-
-#- 🎸конец-Функция для отправки/обновления CSV и META (новая логика)
-#- 🎸конец-Функция для отправки/обновления CSV и META (новая логика)
-
+        log_error(f"sync_all_backups: {e}")
 # --------------------------------------------
 # 🔄 Восстановление из CSV (локального/TG)
 # --------------------------------------------
@@ -392,6 +258,29 @@ def _build_data_from_csv(path: str):
         log_error(f"_build_data_from_csv: {e}")
         return None
 
+def restore_from_telegram_backup_if_possible(current_data):
+    """Если есть file_id_csv — пытается скачать CSV из Telegram"""
+    try:
+        meta = _load_csv_meta()
+        fid = meta.get("file_id_csv")
+        if not fid:
+            log_info("ℹ️ Нет file_id_csv — пропуск восстановления.")
+            return current_data
+        fobj = bot.get_file(fid)
+        url = f"https://api.telegram.org/file/bot{TOKEN}/{fobj.file_path}"
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+        with open(CSV_FILE, "wb") as f:
+            f.write(resp.content)
+        restored = _build_data_from_csv(CSV_FILE)
+        if restored:
+            _save_json(DATA_FILE, restored)
+            log_info("✅ Данные восстановлены из Telegram-бэкапа.")
+            return restored
+    except Exception as e:
+        log_error(f"restore_from_telegram_backup_if_possible: {e}")
+    return current_data
+
 def restore_from_csv_if_needed():
     """1) локальный CSV → восстановить; 2) иначе — по мета из TG; 3) иначе — пустая структура."""
     try:
@@ -402,84 +291,44 @@ def restore_from_csv_if_needed():
                 _save_json(DATA_FILE, restored)
                 log_info("✅ Восстановление из локального CSV завершено.")
                 return restored
-
-        # если локального нет — попробуем по мета из TG
         ensure_local_meta_or_fetch()
         restored_after_tg = restore_from_telegram_backup_if_possible(data)
         if restored_after_tg is not data:
             return restored_after_tg
-
         log_info("⚠️ CSV не найден — стартую с пустой структурой.")
-        return None
     except Exception as e:
         log_error(f"restore_from_csv_if_needed: {e}")
-        return None
+    return None
 
 # --------------------------------------------
-# 💾 Сохранение и автоматическая синхронизация
+# 💾 Сохранение и авто-синхронизация
 # --------------------------------------------
 def save_data(d, force_backup: bool = False):
     """
-    Сохраняет JSON, обновляет CSV и csv_meta.json, а также синхронизирует их в Telegram.
-    Если force_backup=True — выполняет немедленную отправку без ожидания.
+    Сохраняет JSON, обновляет CSV и csv_meta.json,
+    а также синхронизирует три сообщения (CSV/META/file_id).
     """
     try:
         _save_json(DATA_FILE, d)
         export_to_csv(d)
-        auto_update_csv_meta(send_to_owner=False)
-
-        if force_backup:
-            log_info("⚡ Немедленный Telegram-бэкап CSV и META.")
-            safe_csv_backup_to_telegram()
-        else:
-            _schedule_csv_backup_debounced(force=False)
-
-        log_info("💾 save_data: данные, CSV и META сохранены и запланирована отправка.")
-    except Exception as e:
-        log_error(f"save_data: {e}")
-
-# --------------------------------------------
-# 🧩 Автообновление csv_meta.json при изменениях (с отправкой в Telegram)
-# --------------------------------------------
-def auto_update_csv_meta(send_to_owner: bool = True):
-    """Обновляет csv_meta.json после изменений данных и, при необходимости, отправляет его владельцу."""
-    try:
         meta = _load_csv_meta()
-        if not isinstance(meta, dict):
-            meta = {}
-
         meta["updated"] = datetime.now().isoformat()
         if os.path.exists(CSV_FILE):
             meta["csv_size"] = os.path.getsize(CSV_FILE)
         _save_csv_meta(meta)
-
-        log_info("💾 csv_meta.json обновлён после изменения данных (локально)")
-
-        if send_to_owner and OWNER_ID:
-            try:
-                with open(CSV_META_FILE, "rb") as f:
-                    if meta.get("message_id_meta"):
-                        bot.edit_message_media(
-                            chat_id=int(OWNER_ID),
-                            message_id=meta["message_id_meta"],
-                            media=telebot.types.InputMediaDocument(f, caption="📄 Обновлённый csv_meta.json"),
-                        )
-                        log_info("♻️ csv_meta.json обновлён в чате владельца (edit_message_media).")
-                    else:
-                        msg = bot.send_document(int(OWNER_ID), f, caption="📄 Текущий csv_meta.json")
-                        meta["message_id_meta"] = msg.message_id
-                        if hasattr(msg, "document"):
-                            meta["meta_file_id"] = msg.document.file_id
-                        log_info("✅ csv_meta.json впервые отправлен владельцу.")
-                    _save_csv_meta(meta)
-            except Exception as tg_err:
-                log_error(f"auto_update_csv_meta -> Telegram error: {tg_err}")
+        log_info("💾 Данные и csv_meta.json сохранены локально.")
+        # Основной механизм синхронизации
+        if force_backup:
+            log_info("⚡ Немедленная синхронизация всех сообщений.")
+            sync_all_backups(force=True)
+        else:
+            threading.Timer(3, sync_all_backups).start()
     except Exception as e:
-        log_error(f"auto_update_csv_meta: {e}")
+        log_error(f"save_data: {e}")
 
-# -----------------------------
-# 🗃 Хранилище чатов и окон
-# -----------------------------
+# --------------------------------------------
+# 🗃 Работа с хранилищем окон
+# --------------------------------------------
 def get_chat_store(chat_id: int) -> dict:
     cid = str(chat_id)
     if cid not in data["chats"]:
@@ -546,10 +395,9 @@ def set_current_view_day(chat_id: int, day_key: str):
 def get_current_view_day(chat_id: int) -> str:
     store = get_chat_store(chat_id)
     return store.get("current_view_day", today_key())
-
-# -----------------------------
+# --------------------------------------------
 # ⌨️ Клавиатуры
-# -----------------------------
+# --------------------------------------------
 def build_main_keyboard(day_key: str, chat_id: int | None = None):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
@@ -595,14 +443,6 @@ def build_edit_keyboard_for_record(day_key: str, rid: int):
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_back"))
     return kb
 
-def build_confirm_delete_keyboard(day_key: str, rid: int):
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(
-        types.InlineKeyboardButton("✅ Да, удалить", callback_data=f"d:{day_key}:confirm_delete:{rid}"),
-        types.InlineKeyboardButton("❌ Отмена", callback_data=f"d:{day_key}:cancel_delete")
-    )
-    return kb
-
 def build_reset_confirm_keyboard(day_key: str):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
@@ -611,23 +451,9 @@ def build_reset_confirm_keyboard(day_key: str):
     )
     return kb
 
-def build_last_31days_calendar():
-    today = now_local().date()
-    days = [today - timedelta(days=i) for i in range(0, 31)]
-    kb = types.InlineKeyboardMarkup()
-    row = []
-    for idx, d in enumerate(days, start=1):
-        label = d.strftime("%d/%m")
-        dk = d.strftime("%Y-%m-%d")
-        row.append(types.InlineKeyboardButton(text=label, callback_data=f"d:{dk}:calopen"))
-        if idx % 7 == 0:
-            kb.row(*row); row = []
-    if row: kb.row(*row)
-    return kb
-
-# -----------------------------
+# --------------------------------------------
 # 🖼 Рендер окна дня
-# -----------------------------
+# --------------------------------------------
 def render_day_text(store: dict, day_key: str) -> str:
     day_records = store.get("daily_records", {}).get(day_key, [])
     daily_income = sum(r["amount"] for r in day_records if r["amount"] > 0)
@@ -654,19 +480,168 @@ def render_day_text(store: dict, day_key: str) -> str:
         )
         text = "\n".join(lines)
 
-    try:
-        if store.get("forward_enabled"):
-            tgt = store.get("forward_target_id") or OWNER_ID
-            text += f"\n\n📨 Пересылка: Включена → {tgt}"
-        else:
-            text += f"\n\n📨 Пересылка: Выключена"
-    except:
-        pass
+    if store.get("forward_enabled"):
+        tgt = store.get("forward_target_id") or OWNER_ID
+        text += f"\n\n📨 Пересылка: Включена → {tgt}"
+    else:
+        text += f"\n\n📨 Пересылка: Выключена"
     return text
 
-# -----------------------------
+# --------------------------------------------
+# ➕ / ✏️ / 🗑 Операции
+# --------------------------------------------
+def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
+    store = get_chat_store(chat_id)
+    rid = data.get("next_id", 1)
+    rec = {
+        "id": rid,
+        "short_id": f"R{rid}",
+        "timestamp": now_local().isoformat(timespec="seconds"),
+        "amount": amount,
+        "note": note,
+        "owner": owner
+    }
+    data.setdefault("records", []).append(rec)
+    store.setdefault("records", []).append(rec)
+    day = today_key()
+    store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
+    store["balance"] += amount
+    data["overall_balance"] += amount
+    data["next_id"] = rid + 1
+    save_data(data, force_backup=True)
+    return rec
+
+def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str, user=None):
+    store = get_chat_store(chat_id)
+    found = None
+    for r in store.get("records", []):
+        if r["id"] == rid:
+            r["amount"], r["note"] = new_amount, new_note
+            found = r
+            break
+    if found:
+        for day_recs in store.get("daily_records", {}).values():
+            for r in day_recs:
+                if r["id"] == rid: r.update(found)
+        store["balance"] = sum(x["amount"] for x in store["records"])
+        data["records"] = [x if x["id"] != rid else found for x in data["records"]]
+        data["overall_balance"] = sum(x["amount"] for x in data["records"])
+        save_data(data, force_backup=True)
+        return True, found
+    return False, None
+
+def delete_record_in_chat(chat_id: int, rid: int, user=None):
+    store = get_chat_store(chat_id)
+    removed = None
+    for r in list(store["records"]):
+        if r["id"] == rid:
+            removed = r
+            store["records"].remove(r)
+            break
+    if removed:
+        for dk, recs in store["daily_records"].items():
+            store["daily_records"][dk] = [x for x in recs if x["id"] != rid]
+        store["balance"] = sum(x["amount"] for x in store["records"])
+        data["records"] = [x for x in data["records"] if x["id"] != rid]
+        data["overall_balance"] = sum(x["amount"] for x in data["records"])
+        save_data(data, force_backup=True)
+        return True, removed
+    return False, None
+
+# --------------------------------------------
+# 🧰 Команды
+# --------------------------------------------
+@bot.message_handler(commands=["start"])
+def cmd_start(msg):
+    chat_id = msg.chat.id
+    update_or_send_day_window(chat_id, today_key(), create_if_missing=True, force_new=True)
+    if str(chat_id) == str(OWNER_ID):
+        try:
+            sync_all_backups(force=True)
+            bot.send_message(chat_id, "📦 Инициализация завершена — файлы сохранены и синхронизированы.")
+        except Exception as e:
+            log_error(f"/start: {e}")
+
+@bot.message_handler(commands=["help"])
+def cmd_help(msg):
+    send_temp_message(
+        msg.chat.id,
+        "📘 Добавляйте записи: +500 Зарплата / -150 Обед.\n"
+        "Команды: /start /view YYYY-MM-DD /prev /next /balance /report /csv /reset /ping /help",
+        delay=15
+    )
+
+@bot.message_handler(commands=["ping"])
+def cmd_ping(msg):
+    send_temp_message(msg.chat.id, "PONG — бот работает ✅")
+
+@bot.message_handler(commands=["csv"])
+def cmd_csv(msg):
+    """Обновляет все три сообщения (CSV + META + file_id)"""
+    chat_id = msg.chat.id
+    if str(chat_id) != str(OWNER_ID):
+        send_temp_message(chat_id, "⚠️ Эта команда доступна только владельцу.")
+        return
+    try:
+        sync_all_backups(force=True)
+        send_temp_message(chat_id, "📂 Все файлы обновлены в этих же сообщениях.")
+    except Exception as e:
+        log_error(f"/csv: {e}")
+        send_temp_message(chat_id, f"❌ Ошибка: {e}")
+
+@bot.message_handler(commands=["sync"])
+def cmd_sync(msg):
+    chat_id = msg.chat.id
+    if str(chat_id) != str(OWNER_ID):
+        send_temp_message(chat_id, "⚠️ Эта команда только для владельца.")
+        return
+    try:
+        sync_all_backups(force=True)
+        send_temp_message(chat_id, "🔄 Синхронизация CSV/META/file_id выполнена.")
+    except Exception as e:
+        log_error(f"/sync: {e}")
+        send_temp_message(chat_id, f"❌ Ошибка синхронизации: {e}")
+
+@bot.message_handler(commands=["file_id"])
+def cmd_file_id(msg):
+    meta = _load_csv_meta()
+    fid = meta.get("meta_file_id")
+    bot.send_message(msg.chat.id, fid or "file_id не найден")
+
+@bot.message_handler(commands=["reset"])
+def cmd_reset(msg):
+    chat_id = msg.chat.id
+    dk = today_key()
+    active_id = get_active_window_id(chat_id, dk)
+    kb = build_reset_confirm_keyboard(dk)
+    text = "⚠️ Вы уверены, что хотите обнулить все данные этого чата?"
+    if active_id:
+        try:
+            bot.edit_message_text(text, chat_id, active_id, reply_markup=kb)
+        except Exception:
+            bot.send_message(chat_id, text, reply_markup=kb)
+    else:
+        bot.send_message(chat_id, text, reply_markup=kb)
+# --------------------------------------------
+# 📅 Календарь последних 31 дня
+# --------------------------------------------
+def build_last_31days_calendar():
+    today = now_local().date()
+    days = [today - timedelta(days=i) for i in range(0, 31)]
+    kb = types.InlineKeyboardMarkup()
+    row = []
+    for idx, d in enumerate(days, start=1):
+        label = d.strftime("%d/%m")
+        dk = d.strftime("%Y-%m-%d")
+        row.append(types.InlineKeyboardButton(text=label, callback_data=f"d:{dk}:calopen"))
+        if idx % 7 == 0:
+            kb.row(*row); row = []
+    if row: kb.row(*row)
+    return kb
+
+# --------------------------------------------
 # 🔁 Обновление/создание окна дня
-# -----------------------------
+# --------------------------------------------
 def update_or_send_day_window(
     chat_id: int,
     day_key: str = None,
@@ -706,276 +681,9 @@ def update_or_send_day_window(
     except Exception as e:
         log_error(f"send new window: {e}")
 
-# -----------------------------
-# ➕/✏️/🗑 Операции
-# -----------------------------
-def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
-    store = get_chat_store(chat_id)
-    rid = data.get("next_id", 1)
-    rec = {
-        "id": rid,
-        "short_id": f"R{rid}",
-        "timestamp": now_local().isoformat(timespec="seconds"),
-        "amount": amount,
-        "note": note,
-        "owner": owner
-    }
-    data.setdefault("records", []).append(rec)
-    store.setdefault("records", []).append(rec)
-    day = today_key()
-    store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
-
-    store["balance"] = store.get("balance", 0) + amount
-    data["overall_balance"] = data.get("overall_balance", 0) + amount
-    data["next_id"] = rid + 1
-
-    save_data(data, force_backup=True)
-    return rec
-
-def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str, user=None):
-    store = get_chat_store(chat_id)
-    found = None
-    for r in store.get("records", []):
-        if r["id"] == rid:
-            r["amount"] = new_amount
-            r["note"] = new_note
-            found = r
-            break
-    if found:
-        for day_recs in store.get("daily_records", {}).values():
-            for r in day_recs:
-                if r["id"] == rid:
-                    r.update(found)
-        store["balance"] = sum(x["amount"] for x in store.get("records", []))
-        data["records"] = [x if x["id"] != rid else found for x in data.get("records", [])]
-        data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
-        save_data(data, force_backup=True)
-        return True, found
-    return False, None
-
-def delete_record_in_chat(chat_id: int, rid: int, user=None):
-    store = get_chat_store(chat_id)
-    removed = None
-    for r in list(store.get("records", [])):
-        if r["id"] == rid:
-            removed = r
-            store["records"].remove(r)
-            break
-    if removed:
-        for dk, recs in store.get("daily_records", {}).items():
-            store["daily_records"][dk] = [x for x in recs if x["id"] != rid]
-        store["balance"] = sum(x["amount"] for x in store.get("records", []))
-        data["records"] = [x for x in data.get("records", []) if x["id"] != rid]
-        data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
-        save_data(data, force_backup=True)
-        return True, removed
-    return False, None
-
-# -----------------------------
-# 🔢 Парсер сумм
-# -----------------------------
-num_re = re.compile(r'(\^[+-]\^[0-9]+|\^[+-]?[0-9]+\^|[+-]?\s*\d+)')
-def parse_amount_token(token: str) -> int:
-    t = token.strip()
-    for ch in ["^", " ", ".", ",", "-", "_", "'", '"']:
-        t = t.replace(ch, "")
-    if not t: return 0
-    if t[0] == "+": return int(t[1:])
-    if t[0] == "-": return -int(t[1:])
-    return -int(t)
-
-# -----------------------------
-# 🧰 Команды
-# -----------------------------
-@bot.message_handler(commands=["start", "info"])
-def cmd_start(msg):
-    """Команда /start — открывает окно текущего дня и запускает первую синхронизацию файлов"""
-    chat_id = msg.chat.id
-    update_or_send_day_window(
-        chat_id,
-        today_key(),
-        create_if_missing=True,
-        force_new=True,
-        delete_target_old=True,
-        delete_source_old=False
-    )
-    # 📦 Только владелец получает файлы при первом запуске
-    if str(chat_id) == str(OWNER_ID):
-        try:
-            safe_csv_backup_to_telegram(initial=True)
-            log_info("📦 Первичная отправка CSV и META выполнена после /start.")
-            bot.send_message(chat_id, "📦 Инициализация завершена — файлы сохранены и синхронизированы.")
-        except Exception as e:
-            log_error(f"send_initial_backup_on_start: {e}")
-#-----------—---------------------------------------------------------
-@bot.message_handler(commands=["help"])
-def cmd_help(msg):
-    chat_id = msg.chat.id
-    send_temp_message(
-        chat_id,
-        "📘 Добавляйте записи: +500 Зарплата / -150 Обед.\n"
-        "Команды: /start /view YYYY-MM-DD /prev /next /balance /report /csv /reset /ping /help",
-        delay=15
-    )
-#-----------—---------------------------------------------------------
-@bot.message_handler(commands=["ping"])
-def cmd_ping(msg):
-    send_temp_message(msg.chat.id, "PONG — бот работает ✅")
-
-@bot.message_handler(commands=["view"])
-def cmd_view(msg):
-    chat_id = msg.chat.id
-    parts = (msg.text or "").split()
-    if len(parts) < 2:
-        send_temp_message(chat_id, "Укажите дату: /view YYYY-MM-DD"); return
-    d = parse_date_key(parts[1])
-    if not d:
-        send_temp_message(chat_id, "Неверный формат. Пример: /view 2025-11-02"); return
-    dk = d.strftime("%Y-%m-%d")
-    prev_day = get_current_view_day(chat_id)
-    update_or_send_day_window(
-        chat_id, dk,
-        create_if_missing=True, force_new=True,
-        delete_target_old=True, delete_source_old=DELETE_SOURCE_WINDOW_ON_NAV,
-        source_day_key=prev_day
-    )
-#-----------—---------------------------------------------------------
-@bot.message_handler(commands=["prev"])
-def cmd_prev(msg):
-    chat_id = msg.chat.id
-    current = get_current_view_day(chat_id)
-    prev_key = shift_date_key(current, -1)
-    update_or_send_day_window(
-        chat_id, prev_key,
-        create_if_missing=True, force_new=True,
-        delete_target_old=True, delete_source_old=DELETE_SOURCE_WINDOW_ON_NAV,
-        source_day_key=current
-    )
-#-----------—---------------------------------------------------------
-@bot.message_handler(commands=["next"])
-def cmd_next(msg):
-    chat_id = msg.chat.id
-    current = get_current_view_day(chat_id)
-    next_key = shift_date_key(current, +1)
-    update_or_send_day_window(
-        chat_id, next_key,
-        create_if_missing=True, force_new=True,
-        delete_target_old=True, delete_source_old=DELETE_SOURCE_WINDOW_ON_NAV,
-        source_day_key=current
-    )
-
-@bot.message_handler(commands=["balance"])
-def cmd_balance(msg):
-    chat_id = msg.chat.id
-    store = get_chat_store(chat_id)
-    dk = today_key()
-    day_records = store.get("daily_records", {}).get(dk, [])
-    inc = sum(r["amount"] for r in day_records if r["amount"] > 0)
-    exp = sum(r["amount"] for r in day_records if r["amount"] < 0)
-    bal = store.get("balance", 0)
-    text = (
-        f"📅 {dk}\n\n"
-        f"💰 Общий остаток: {fmt_num(bal)} ARS\n"
-        f"💵 Приход за день: {fmt_num(inc)} ARS\n"
-        f"💸 Расход за день: {fmt_num(abs(exp))} ARS"
-    )
-    bot.send_message(chat_id, text)
-
-@bot.message_handler(commands=["report"])
-def cmd_report(msg):
-    chat_id = msg.chat.id
-    store = get_chat_store(chat_id)
-    dk = today_key()
-    day_records = store.get("daily_records", {}).get(dk, [])
-    expenses = [r for r in day_records if r["amount"] < 0]
-    if not expenses:
-        bot.send_message(chat_id, f"📅 {dk}\nНет расходов за сегодня.\n💸 Расход: 0 ARS"); return
-    lines = [f"📅 {dk}", "📋 Расходы за день:"]
-    for r in expenses[-30:]:
-        lines.append(f"{r['short_id']}: -{fmt_num(abs(r['amount']))} — {r.get('note','')}")
-    lines.append(f"\n💸 Расход за день: {fmt_num(sum(abs(r['amount']) for r in expenses))} ARS")
-    bot.send_message(chat_id, "\n".join(lines))
-
-@bot.message_handler(commands=["csv"])
-def cmd_csv(msg):
-    """Отправляет или обновляет CSV в том же сообщении."""
-    chat_id = msg.chat.id
-    meta = _load_csv_meta()
-    msg_id = meta.get("message_id_csv")
-
-    try:
-        export_to_csv(data)
-        with open(CSV_FILE, "rb") as f:
-            if msg_id:
-                # ✳️ Обновляем старое сообщение (в том же месте)
-                bot.edit_message_media(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    media=telebot.types.InputMediaDocument(f, caption="📊 Обновлённый общий CSV-бэкап")
-                )
-                bot.answer_callback_query(msg.id, "✅ CSV обновлён в этом же сообщении.")
-                log_info("♻️ CSV обновлён в существующем сообщении.")
-            else:
-                # 🆕 Если ещё нет старого сообщения — отправляем впервые
-                sent = bot.send_document(chat_id, f, caption="📊 Текущий CSV-бэкап данных")
-                meta["message_id_csv"] = sent.message_id
-                if hasattr(sent, "document"):
-                    meta["file_id_csv"] = sent.document.file_id
-                _save_csv_meta(meta)
-                log_info("✅ CSV впервые отправлен в чат.")
-    except Exception as e:
-        log_error(f"cmd_csv: {e}")
-        bot.send_message(chat_id, f"⚠️ Ошибка при обновлении CSV: {e}")
-
-@bot.message_handler(commands=["reset"])
-def cmd_reset(msg):
-    chat_id = msg.chat.id
-    dk = today_key()
-    active_id = get_active_window_id(chat_id, dk)
-    if active_id:
-        try:
-            bot.edit_message_text(
-                "⚠️ Вы уверены, что хотите обнулить все данные этого чата?",
-                chat_id,
-                active_id,
-                reply_markup=build_reset_confirm_keyboard(dk)
-            )
-        except Exception as e:
-            log_error(f"/reset edit_message_text: {e}")
-    else:
-        bot.send_message(
-            chat_id,
-            "⚠️ Вы уверены, что хотите обнулить все данные этого чата?",
-            reply_markup=build_reset_confirm_keyboard(dk)
-        )
-@bot.message_handler(commands=["sync"])
-def cmd_sync(msg):
-    """Принудительно синхронизирует CSV, csv_meta.json и сообщение с file_id"""
-    chat_id = msg.chat.id
-    if str(chat_id) != str(OWNER_ID):
-        send_temp_message(chat_id, "⚠️ Эта команда доступна только владельцу бота.")
-        return
-    try:
-        safe_csv_backup_to_telegram()
-        send_temp_message(chat_id, "🔄 Синхронизация файлов и сообщения с file_id выполнена успешно.")
-        log_info("✅ Ручная синхронизация CSV/META по команде /sync")
-    except Exception as e:
-        send_temp_message(chat_id, f"❌ Ошибка при синхронизации: {e}")
-        log_error(f"cmd_sync: {e}")
-
-@bot.message_handler(commands=["file_id"])
-def cmd_file_id(msg):
-    chat_id = msg.chat.id
-    meta = _load_csv_meta()
-    fid = meta.get("meta_file_id")
-    if fid:
-        bot.send_message(chat_id, fid)
-    else:
-        bot.send_message(chat_id, "file_id не найден")
-
-# -----------------------------
+# --------------------------------------------
 # 📥 Тексты: добавление/редактирование
-# -----------------------------
+# --------------------------------------------
 @bot.message_handler(func=lambda m: True)
 def handle_message(msg):
     chat_id = msg.chat.id
@@ -1046,9 +754,10 @@ def handle_message(msg):
         update_or_send_day_window(chat_id, dk)
 
     send_temp_message(chat_id, "✅ Записи добавлены")
-# -----------------------------
+
+# --------------------------------------------
 # 🧲 Callback-обработчик
-# -----------------------------
+# --------------------------------------------
 @bot.callback_query_handler(func=lambda c: True)
 def handle_callback(call):
     try:
@@ -1114,7 +823,7 @@ def handle_callback(call):
         text = (
             "✏️ Меню редактирования\n\n"
             "📝 Редактировать запись — изменить/удалить\n"
-            "📂 Общий CSV — полный экспорт\n"
+            "📂 Общий CSV — полный экспорт (обновит CSV/META/file_id в тех же сообщениях)\n"
             "📅 CSV за день — экспорт выбранной даты\n"
             "📨 Форвард — включить/выключить\n"
             "👤 Получатель — задать ID для пересылки\n"
@@ -1149,7 +858,7 @@ def handle_callback(call):
         info_text = (
             f"ℹ️ Финансовый бот — версия {VERSION}\n\n"
             "Команды:\n"
-            "/start /view YYYY-MM-DD /prev /next /balance /report /csv /reset /ping /file_id /sync\n\n"
+            "/start /view YYYY-MM-DD /prev /next /balance /report /csv /reset /ping /help\n\n"
             "Добавление: +500 Зарплата  или  -150 Обед.\n"
             "Системно: CSV, форвард, webhook, keep-alive."
         )
@@ -1233,30 +942,17 @@ def handle_callback(call):
     # --- CSV: общий и дневной ---
     if action == "csv_all":
         try:
-            export_to_csv(data)
-            auto_update_csv_meta()  # вот это добавляем
-            with open(CSV_FILE, "rb") as f:
-                sent = bot.send_document(chat_id, f, caption="📂 Полный экспорт: data.csv")
-            # если это владелец — обновим мету и тут же отправим csv_meta.json
-            if OWNER_ID and chat_id == int(OWNER_ID):
-                meta = _load_csv_meta()
-                if hasattr(sent, "document") and sent.document:
-                    meta["file_id_csv"] = sent.document.file_id
-                meta["updated"] = datetime.now().isoformat()
-                _save_csv_meta(meta)
-                send_csv_meta_to_owner()
-                log_info("✅ CSV и csv_meta.json синхронизированы через кнопку 'Общий CSV'.")
-            bot.answer_callback_query(call.id, "CSV отправлен 📁")
+            # Обновляем ВСЁ в тех же сообщениях владельца
+            sync_all_backups(force=True)
+            bot.answer_callback_query(call.id, "CSV/META/file_id обновлены в исходных сообщениях.")
         except Exception as e:
-            send_temp_message(chat_id, f"❌ Ошибка при отправке CSV: {e}")
+            send_temp_message(chat_id, f"❌ Ошибка при обновлении CSV/META/file_id: {e}")
             bot.answer_callback_query(call.id)
         return
 
     if action == "csv_day":
-        # в 9.8.6 у тебя был экспорт дня через общий CSV — оставим упрощённо:
         try:
             filename = f"data_{day_key}.csv"
-            # соберём срез за день из store
             day_records = store.get("daily_records", {}).get(day_key, [])
             with open(filename, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
@@ -1421,7 +1117,7 @@ def handle_callback(call):
                 data["chats"].pop(cid, None)
             data["records"] = [r for r in data.get("records", []) if str(r.get("owner")) != cid]
             data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
-            save_data(data)
+            save_data(data, force_backup=True)
             text = "⚙️ Все данные этого чата успешно обнулены."
             active_id = get_active_window_id(chat_id, day_key)
             if active_id:
@@ -1437,9 +1133,9 @@ def handle_callback(call):
 
     bot.answer_callback_query(call.id)
 
-# -----------------------------
-# 👤 Ручной ввод ID получателя
-# -----------------------------
+# --------------------------------------------
+# 👤 Ручной ввод ID получателя (форвард)
+# --------------------------------------------
 def process_forward_target(message, day_key_for_refresh=None):
     try:
         chat_id = message.chat.id
@@ -1469,9 +1165,9 @@ def process_forward_target(message, day_key_for_refresh=None):
         except:
             pass
 
-# -----------------------------
+# --------------------------------------------
 # 🌐 Flask webhook
-# -----------------------------
+# --------------------------------------------
 @app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     try:
@@ -1485,9 +1181,9 @@ def webhook():
 def index():
     return f"Финансовый бот — версия {VERSION} работает", 200
 
-# -----------------------------
-# 🟢 Keep-alive
-# -----------------------------
+# --------------------------------------------
+# 🟢 Keep-alive + планировщики
+# --------------------------------------------
 def keep_alive_task():
     while True:
         try:
@@ -1496,7 +1192,7 @@ def keep_alive_task():
                     resp = requests.get(APP_URL, timeout=10)
                     log_info(f"Keep-alive self-ping {APP_URL} -> {getattr(resp, 'status_code', '?')}")
                 except Exception as e:
-                    log_error(f"Keep-alive self-ping error: {e}")
+                    log_error(f"Keep-alive self-pинг error: {e}")
             if KEEP_ALIVE_SEND_TO_OWNER and OWNER_ID:
                 try:
                     tgt = int(OWNER_ID)
@@ -1510,9 +1206,6 @@ def keep_alive_task():
 def start_keep_alive_thread():
     threading.Thread(target=keep_alive_task, daemon=True).start()
 
-# -----------------------------
-# 🗓 Автосоздание окна при смене дня
-# -----------------------------
 def schedule_daily_window_creation():
     def task():
         last_day = today_key()
@@ -1540,9 +1233,9 @@ def schedule_daily_window_creation():
                 time.sleep(5)
     threading.Thread(target=task, daemon=True).start()
 
-# -----------------------------
+# --------------------------------------------
 # 🪝 Webhook и запуск
-# -----------------------------
+# --------------------------------------------
 def set_webhook():
     url = f"{APP_URL}/{TOKEN}"
     try:
@@ -1553,6 +1246,86 @@ def set_webhook():
     except Exception as e:
         log_error(f"set_webhook: {e}")
 
+# --------------------------------------------
+# ➕ Навигационные команды (/view, /prev, /next, /balance, /report)
+# --------------------------------------------
+@bot.message_handler(commands=["view"])
+def cmd_view(msg):
+    chat_id = msg.chat.id
+    parts = (msg.text or "").split()
+    if len(parts) < 2:
+        send_temp_message(chat_id, "Укажите дату: /view YYYY-MM-DD"); return
+    d = parse_date_key(parts[1])
+    if not d:
+        send_temp_message(chat_id, "Неверный формат. Пример: /view 2025-11-02"); return
+    dk = d.strftime("%Y-%m-%d")
+    prev_day = get_current_view_day(chat_id)
+    update_or_send_day_window(
+        chat_id, dk,
+        create_if_missing=True, force_new=True,
+        delete_target_old=True, delete_source_old=DELETE_SOURCE_WINDOW_ON_NAV,
+        source_day_key=prev_day
+    )
+
+@bot.message_handler(commands=["prev"])
+def cmd_prev(msg):
+    chat_id = msg.chat.id
+    current = get_current_view_day(chat_id)
+    prev_key = shift_date_key(current, -1)
+    update_or_send_day_window(
+        chat_id, prev_key,
+        create_if_missing=True, force_new=True,
+        delete_target_old=True, delete_source_old=DELETE_SOURCE_WINDOW_ON_NAV,
+        source_day_key=current
+    )
+
+@bot.message_handler(commands=["next"])
+def cmd_next(msg):
+    chat_id = msg.chat.id
+    current = get_current_view_day(chat_id)
+    next_key = shift_date_key(current, +1)
+    update_or_send_day_window(
+        chat_id, next_key,
+        create_if_missing=True, force_new=True,
+        delete_target_old=True, delete_source_old=DELETE_SOURCE_WINDOW_ON_NAV,
+        source_day_key=current
+    )
+
+@bot.message_handler(commands=["balance"])
+def cmd_balance(msg):
+    chat_id = msg.chat.id
+    store = get_chat_store(chat_id)
+    dk = today_key()
+    day_records = store.get("daily_records", {}).get(dk, [])
+    inc = sum(r["amount"] for r in day_records if r["amount"] > 0)
+    exp = sum(r["amount"] for r in day_records if r["amount"] < 0)
+    bal = store.get("balance", 0)
+    text = (
+        f"📅 {dk}\n\n"
+        f"💰 Общий остаток: {fmt_num(bal)} ARS\n"
+        f"💵 Приход за день: {fmt_num(inc)} ARS\n"
+        f"💸 Расход за день: {fmt_num(abs(exp))} ARS"
+    )
+    bot.send_message(chat_id, text)
+
+@bot.message_handler(commands=["report"])
+def cmd_report(msg):
+    chat_id = msg.chat.id
+    store = get_chat_store(chat_id)
+    dk = today_key()
+    day_records = store.get("daily_records", {}).get(dk, [])
+    expenses = [r for r in day_records if r["amount"] < 0]
+    if not expenses:
+        bot.send_message(chat_id, f"📅 {dk}\nНет расходов за сегодня.\n💸 Расход: 0 ARS"); return
+    lines = [f"📅 {dk}", "📋 Расходы за день:"]
+    for r in expenses[-30:]:
+        lines.append(f"{r['short_id']}: -{fmt_num(abs(r['amount']))} — {r.get('note','')}")
+    lines.append(f"\n💸 Расход за день: {fmt_num(sum(abs(r['amount']) for r in expenses))} ARS")
+    bot.send_message(chat_id, "\n".join(lines))
+
+# --------------------------------------------
+# 🚀 Точка входа
+# --------------------------------------------
 if __name__ == "__main__":
     # 1) Попытка восстановить из локального CSV или Telegram по мета
     restored_data = restore_from_csv_if_needed()
@@ -1560,15 +1333,13 @@ if __name__ == "__main__":
         data = restored_data
         log_info("💾 Данные успешно восстановлены (CSV/TG).")
 
-    # ⚠️ Больше нет автоматической отправки CSV/META при запуске
-
-    # 3) Вебхук
+    # 2) Вебхук
     set_webhook()
 
-    # 4) Плановое создание окна нового дня
+    # 3) Плановое создание окна нового дня
     schedule_daily_window_creation()
 
-    # 5) Фоновое автосохранение каждые 3 часа
+    # 4) Фоновое автосохранение каждые 3 часа
     def auto_update_task():
         while True:
             try:
@@ -1580,10 +1351,10 @@ if __name__ == "__main__":
                 time.sleep(60)
     threading.Thread(target=auto_update_task, daemon=True).start()
 
-    # 6) Keep-alive
+    # 5) Keep-alive
     start_keep_alive_thread()
 
-    # 7) Сообщение владельцу
+    # 6) Сообщение владельцу
     log_info(f"Бот версии {VERSION} запущен")
     try:
         if OWNER_ID:
