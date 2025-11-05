@@ -108,14 +108,14 @@ def _load_csv_meta():
     return safe_json_load(CSV_META_FILE, {})
 
 def _save_csv_meta(meta):
-    safe_json_write(CSV_META_FILE, meta) 
+    safe_json_write(CSV_META_FILE, meta)
 
-        try:
-            fid = meta.get("meta_file_id")
-            if fid and OWNER_ID:
-               bot.send_message(int(OWNER_ID), f"🪄 file_id для CSV_META_FILE_ID:\n{fid}")
-        except Exception as e:
-            log_error(f"send file_id to owner: {e}")
+    try:
+        fid = meta.get("meta_file_id")
+        if fid and OWNER_ID:
+            bot.send_message(int(OWNER_ID), f"🪄 file_id для CSV_META_FILE_ID:\n{fid}")
+    except Exception as e:
+        log_error(f"send file_id to owner: {e}")
 
 def ensure_local_meta_or_fetch():
     """Гарантирует наличие csv_meta.json; если нет — пытается скачать по CSV_META_FILE_ID."""
@@ -720,9 +720,14 @@ def cmd_sync(msg):
 
 @bot.message_handler(commands=["file_id"])
 def cmd_file_id(msg):
+    if str(msg.chat.id) != str(OWNER_ID):
+        return
     meta = _load_csv_meta()
     fid = meta.get("meta_file_id")
-    bot.send_message(msg.chat.id, fid or "file_id не найден")
+    if fid:
+        bot.send_message(msg.chat.id, fid)
+    else:
+        bot.send_message(msg.chat.id, "⚠️ file_id не найден в csv_meta.json")
 
 @bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
