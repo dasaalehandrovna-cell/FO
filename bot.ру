@@ -1455,6 +1455,21 @@ def handle_message(msg):
     # 3) Иные сообщения — подсказка
     send_temp_message(chat_id, "📘 Чтобы добавить запись, отправьте сумму в формате +500 Заметка. /help", delay=10)
 
+# -----------------------------
+# 🧩 Отладка: показать «всё, что под капотом»
+# -----------------------------
+@bot.message_handler(commands=["debug_raw"])
+def cmd_debug_raw(msg):
+    """Команда /debug_raw — покажет весь JSON объекта message"""
+    import json
+    try:
+        raw = msg.json if hasattr(msg, "json") else msg.__dict__
+        raw_str = json.dumps(raw, ensure_ascii=False, indent=2)
+        # разбиваем на части, чтобы Telegram не ругался на длину
+        for chunk in [raw_str[i:i+3500] for i in range(0, len(raw_str), 3500)]:
+            bot.send_message(msg.chat.id, f"```json\n{chunk}\n```", parse_mode="Markdown")
+    except Exception as e:
+        bot.send_message(msg.chat.id, f"❌ Ошибка показа raw: {e}")
 
 # -----------------------------
 # 🌐 Flask webhook
