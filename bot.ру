@@ -426,7 +426,7 @@ def save_data(d, force_backup: bool = False):
     try:
         _save_json(DATA_FILE, d)
         export_to_csv(d)
-        auto_update_csv_meta(send_to_owner=False)  # только локально
+        auto_update_csv_meta(send_to_owner=False)
 
         if force_backup:
             log_info("⚡ Немедленный Telegram-бэкап CSV и META.")
@@ -898,24 +898,34 @@ def cmd_report(msg):
 
 @bot.message_handler(commands=["csv"])
 def cmd_csv(msg):
+    """Отправляет или обновляет CSV в том же сообщении."""
     chat_id = msg.chat.id
+    meta = _load_csv_meta()
+    msg_id = meta.get("message_id_csv")
+
     try:
         export_to_csv(data)
-        auto_update_csv_meta()  # вот это добавляем
         with open(CSV_FILE, "rb") as f:
-            sent = bot.send_document(chat_id, f, caption="📂 Полный экспорт: data.csv")
-        # если отправили владельцу — обновим мету (как бэкап)
-        if OWNER_ID and chat_id == int(OWNER_ID):
-            meta = _load_csv_meta()
-            if hasattr(sent, "document") and sent.document:
-                meta["file_id_csv"] = sent.document.file_id
-            meta["updated"] = datetime.now().isoformat()
-            _save_csv_meta(meta)
-            send_csv_meta_to_owner()
-            log_info("✅ CSV и csv_meta.json синхронизированы при /csv")
+            if msg_id:
+                # ✳️ Обновляем старое сообщение (в том же месте)
+                bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    media=telebot.types.InputMediaDocument(f, caption="📊 Обновлённый общий CSV-бэкап")
+                )
+                bot.answer_callback_query(msg.id, "✅ CSV обновлён в этом же сообщении.")
+                log_info("♻️ CSV обновлён в существующем сообщении.")
+            else:
+                # 🆕 Если ещё нет старого сообщения — отправляем впервые
+                sent = bot.send_document(chat_id, f, caption="📊 Текущий CSV-бэкап данных")
+                meta["message_id_csv"] = sent.message_id
+                if hasattr(sent, "document"):
+                    meta["file_id_csv"] = sent.document.file_id
+                _save_csv_meta(meta)
+                log_info("✅ CSV впервые отправлен в чат.")
     except Exception as e:
-        send_temp_message(chat_id, f"❌ Ошибка при экспорте CSV: {e}")
-
+        log_error(f"cmd_csv: {e}")
+        bot.send_message(chat_id, f"⚠️ Ошибка при обновлении CSV: {e}")
 
 @bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
