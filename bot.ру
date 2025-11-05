@@ -310,32 +310,38 @@ def safe_csv_backup_to_telegram(initial=False):
                 except Exception as e:
                     log_error(f"Ошибка обновления META: {e}")
 
-        # --- FILE_ID сообщение ---
-        fileid_text = (
-    f"🪄 file_id для CSV_META_FILE_ID:\n`{meta.get('meta_file_id')}`\n"
-    f"⏱ Обновлено: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-)
+                # --- FILE_ID сообщение ---
+        try:
+            fileid_text = (
+                f"🪄 file_id для CSV_META_FILE_ID:\n`{meta.get('meta_file_id')}`\n"
+                f"⏱ Обновлено: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            )
 
-if initial or not msg_id_fileid:
-    msg = bot.send_message(owner_id, fileid_text, parse_mode="Markdown")
-    meta["message_id_fileid"] = msg.message_id
-    log_info("✅ Отправлено первое сообщение с file_id.")
-else:
-    try:
-        bot.edit_message_text(fileid_text, owner_id, msg_id_fileid, parse_mode="Markdown")
-        log_info("♻️ Сообщение с file_id обновлено.")
-    except telebot.apihelper.ApiException as e:
-        if "message is not modified" in str(e):
-            log_info("ℹ️ file_id сообщение не изменилось — Telegram пропустил обновление.")
-        else:
-            log_error(f"Ошибка обновления сообщения file_id: {e}")
+            if initial or not msg_id_fileid:
+                msg = bot.send_message(owner_id, fileid_text, parse_mode="Markdown")
+                meta["message_id_fileid"] = msg.message_id
+                log_info("✅ Отправлено первое сообщение с file_id.")
+            else:
+                try:
+                    bot.edit_message_text(fileid_text, owner_id, msg_id_fileid, parse_mode="Markdown")
+                    log_info("♻️ Сообщение с file_id обновлено.")
+                except telebot.apihelper.ApiException as e:
+                    if "message is not modified" in str(e):
+                        log_info("ℹ️ file_id сообщение не изменилось — Telegram пропустил обновление.")
+                    else:
+                        log_error(f"Ошибка обновления сообщения file_id: {e}")
 
-        _save_csv_meta(meta)
-        log_info("♻️ CSV, csv_meta.json и сообщение с file_id синхронизированы.")
+            # сохраняем обновлённую мету в любом случае
+            _save_csv_meta(meta)
+            log_info("♻️ CSV, csv_meta.json и сообщение с file_id синхронизированы.")
+
+        except Exception as e:
+            log_error(f"Ошибка при обновлении/отправке сообщения с file_id: {e}")
 
     except Exception as e:
         log_error(f"safe_csv_backup_to_telegram: {e}")
 
+#- 🎸конец-Функция для отправки/обновления CSV и META (новая логика)
 #- 🎸конец-Функция для отправки/обновления CSV и META (новая логика)
 
 # --------------------------------------------
