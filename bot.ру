@@ -161,6 +161,14 @@ def restore_from_telegram_backup():
         owner_id = int(OWNER_ID)
         log_info("🔍 Поиск последнего CSV в чате владельца...")
 
+        # 🧹 Перед getUpdates удаляем активный webhook (иначе ошибка 409)
+        try:
+            bot.delete_webhook()
+            log_info("🔧 Webhook временно отключён для восстановления CSV.")
+            time.sleep(1.0)
+        except Exception as e:
+            log_error(f"delete_webhook перед восстановлением: {e}")
+
         updates = bot.get_updates(limit=50)
         file_id = None
         for u in reversed(updates):
