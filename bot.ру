@@ -432,21 +432,49 @@ def save_data(d, force_backup: bool = False):
 # --------------------------------------------
 # 🧩 Автообновление csv_meta.json при изменениях
 # --------------------------------------------
-def auto_update_csv_meta():
-    """Обновляет csv_meta.json после изменений данных (без отправки владельцу)"""
+# --------------------------------------------
+# 🧩 Автообновление csv_meta.json при изменениях (с отправкой в Telegram)
+# --------------------------------------------
+def auto_update_csv_meta(send_to_owner: bool = True):
+    """Обновляет csv_meta.json после изменений данных и, при необходимости, отправляет его владельцу."""
     try:
         meta = _load_csv_meta()
         if not isinstance(meta, dict):
             meta = {}
 
+        # обновляем время и размер CSV
         meta["updated"] = datetime.now().isoformat()
         if os.path.exists(CSV_FILE):
             meta["csv_size"] = os.path.getsize(CSV_FILE)
         _save_csv_meta(meta)
 
-        log_info("💾 csv_meta.json обновлён после изменения данных")
+        log_info("💾 csv_meta.json обновлён после изменения данных (локально)")
+
+        # 🔁 Дополнительно — обновляем файл в Telegram
+        if send_to_owner and OWNER_ID:
+            try:
+                with open(CSV_META_FILE, "rb") as f:
+                    if meta.get("message_id_meta"):
+                        # Пытаемся обновить старое сообщение
+                        bot.edit_message_media(
+                            chat_id=int(OWNER_ID),
+                            message_id=meta["message_id_meta"],
+                            media=telebot.types.InputMediaDocument(f, caption="📄 Обновлённый csv_meta.json"),
+                        )
+                        log_info("♻️ csv_meta.json обновлён в чате владельца (edit_message_media).")
+                    else:
+                        # Если сообщение ещё не было, отправляем впервые
+                        msg = bot.send_document(int(OWNER_ID), f, caption="📄 Текущий csv_meta.json")
+                        meta["message_id_meta"] = msg.message_id
+                        if hasattr(msg, "document"):
+                            meta["meta_file_id"] = msg.document.file_id
+                        log_info("✅ csv_meta.json впервые отправлен владельцу.")
+                    _save_csv_meta(meta)
+            except Exception as tg_err:
+                log_error(f"auto_update_csv_meta -> Telegram error: {tg_err}")
     except Exception as e:
         log_error(f"auto_update_csv_meta: {e}")
+
 # -----------------------------
 # 🗃 Хранилище чатов и окон
 # -----------------------------
