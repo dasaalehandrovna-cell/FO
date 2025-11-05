@@ -311,17 +311,24 @@ def safe_csv_backup_to_telegram(initial=False):
                     log_error(f"Ошибка обновления META: {e}")
 
         # --- FILE_ID сообщение ---
-        fileid_text = f"🪄 file_id для CSV_META_FILE_ID:\n`{meta.get('meta_file_id')}`"
-        if initial or not msg_id_fileid:
-            msg = bot.send_message(owner_id, fileid_text, parse_mode="Markdown")
-            meta["message_id_fileid"] = msg.message_id
-            log_info("✅ Отправлено первое сообщение с file_id.")
+        fileid_text = (
+    f"🪄 file_id для CSV_META_FILE_ID:\n`{meta.get('meta_file_id')}`\n"
+    f"⏱ Обновлено: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+)
+
+if initial or not msg_id_fileid:
+    msg = bot.send_message(owner_id, fileid_text, parse_mode="Markdown")
+    meta["message_id_fileid"] = msg.message_id
+    log_info("✅ Отправлено первое сообщение с file_id.")
+else:
+    try:
+        bot.edit_message_text(fileid_text, owner_id, msg_id_fileid, parse_mode="Markdown")
+        log_info("♻️ Сообщение с file_id обновлено.")
+    except telebot.apihelper.ApiException as e:
+        if "message is not modified" in str(e):
+            log_info("ℹ️ file_id сообщение не изменилось — Telegram пропустил обновление.")
         else:
-            try:
-                bot.edit_message_text(fileid_text, owner_id, msg_id_fileid, parse_mode="Markdown")
-                log_info("♻️ Сообщение с file_id обновлено.")
-            except Exception as e:
-                log_error(f"Ошибка обновления сообщения file_id: {e}")
+            log_error(f"Ошибка обновления сообщения file_id: {e}")
 
         _save_csv_meta(meta)
         log_info("♻️ CSV, csv_meta.json и сообщение с file_id синхронизированы.")
@@ -393,11 +400,19 @@ def restore_from_csv_if_needed():
         return None
 
 def save_data(d):
-    """Сохраняет JSON, обновляет CSV и планирует Telegram-бэкап."""
+    """Сохраняет JSON, обновляет CSV, csv_meta.json и планирует Telegram-бэкап."""
     try:
+        # 1. Сохранить основные данные
         _save_json(DATA_FILE, d)
         export_to_csv(d)
+
+        # 2. Автоматически обновить csv_meta.json (время, размер, актуальность)
+        auto_update_csv_meta()
+
+        # 3. Запланировать Telegram-бэкап (через дебаунс — без спама)
         _schedule_csv_backup_debounced()
+
+        log_info("💾 save_data: данные, CSV и META обновлены.")
     except Exception as e:
         log_error(f"save_data: {e}")
 
