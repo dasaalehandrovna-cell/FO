@@ -861,6 +861,21 @@ def cmd_csv(msg):
     except Exception as e:
         send_temp_message(chat_id, f"❌ Ошибка при экспорте CSV: {e}")
 
+@bot.message_handler(commands=["sync"])
+def cmd_sync(msg):
+    """Принудительно синхронизирует CSV, csv_meta.json и сообщение с file_id"""
+    chat_id = msg.chat.id
+    if str(chat_id) != str(OWNER_ID):
+        send_temp_message(chat_id, "⚠️ Эта команда доступна только владельцу бота.")
+        return
+    try:
+        safe_csv_backup_to_telegram()
+        send_temp_message(chat_id, "🔄 Синхронизация файлов и сообщения с file_id выполнена успешно.")
+        log_info("✅ Ручная синхронизация CSV/META по команде /sync")
+    except Exception as e:
+        send_temp_message(chat_id, f"❌ Ошибка при синхронизации: {e}")
+        log_error(f"cmd_sync: {e}")
+
 @bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
     chat_id = msg.chat.id
