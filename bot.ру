@@ -22,8 +22,8 @@ from flask import Flask, request
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_ID")  # строкой; приводим к int при использовании
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
-CSV_META_FILE_ID = "BQACAgEAAxkDAAItM2kKjpKccXwDBQ9qMAy3DKYZSPd6AAJPCAAC9B5QRO3VcmXv6KWnNgQ"
-#os.getenv("CSV_META_FILE_ID", "").strip()  # опционально
+CSV_META_FILE_ID = os.getenv("CSV_META_FILE_ID", "").strip()  # опционально
+#"BQACAgEAAxkDAAItM2kKjpKccXwDBQ9qMAy3DKYZSPd6AAJPCAAC9B5QRO3VcmXv6KWnNgQ"#
 try:
     TZ = ZoneInfo((os.getenv("TZ") or "America/Argentina/Buenos_Aires").strip())
 except Exception:
@@ -262,6 +262,7 @@ def safe_csv_backup_to_telegram(initial=False):
         if not OWNER_ID:
             return
         export_to_csv(data)
+        auto_update_csv_meta()  # вот это добавляем
         meta = _load_csv_meta()
         owner_id = int(OWNER_ID)
 
@@ -400,6 +401,25 @@ def save_data(d):
         _schedule_csv_backup_debounced()
     except Exception as e:
         log_error(f"save_data: {e}")
+
+# --------------------------------------------
+# 🧩 Автообновление csv_meta.json при изменениях
+# --------------------------------------------
+def auto_update_csv_meta():
+    """Обновляет csv_meta.json после изменений данных (без отправки владельцу)"""
+    try:
+        meta = _load_csv_meta()
+        if not isinstance(meta, dict):
+            meta = {}
+
+        meta["updated"] = datetime.now().isoformat()
+        if os.path.exists(CSV_FILE):
+            meta["csv_size"] = os.path.getsize(CSV_FILE)
+        _save_csv_meta(meta)
+
+        log_info("💾 csv_meta.json обновлён после изменения данных")
+    except Exception as e:
+        log_error(f"auto_update_csv_meta: {e}")
 # -----------------------------
 # 🗃 Хранилище чатов и окон
 # -----------------------------
@@ -826,6 +846,7 @@ def cmd_csv(msg):
     chat_id = msg.chat.id
     try:
         export_to_csv(data)
+        auto_update_csv_meta()  # вот это добавляем
         with open(CSV_FILE, "rb") as f:
             sent = bot.send_document(chat_id, f, caption="📂 Полный экспорт: data.csv")
         # если отправили владельцу — обновим мету (как бэкап)
@@ -1123,6 +1144,7 @@ def handle_callback(call):
     if action == "csv_all":
         try:
             export_to_csv(data)
+            auto_update_csv_meta()  # вот это добавляем
             with open(CSV_FILE, "rb") as f:
                 sent = bot.send_document(chat_id, f, caption="📂 Полный экспорт: data.csv")
             # если это владелец — обновим мету и тут же отправим csv_meta.json
