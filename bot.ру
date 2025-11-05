@@ -537,7 +537,7 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
         data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
 
         save_data(data)  # 💾 JSON + CSV
-        log_chat(f"⚠️ Не найдена запись ID {rid} для изменения — чат {chat_id}")
+        
         return True, found
     return False, None
 
