@@ -377,6 +377,9 @@ _CSV_BACKUP_META = "csv_meta.json"
 _CSV_DEBOUNCE_SECONDS = 3
 _csv_backup_timer = None
 _csv_backup_lock = threading.Lock()
+_datajson_lock = threading.Lock()
+_datajson_timer = None
+_DATAJSON_DEBOUNCE_SECONDS = 5
 
 
 def _load_csv_meta():
@@ -468,29 +471,28 @@ def safe_csv_backup_to_telegram():
 # 💾 Отправка локального data.json в Telegram
 # --------------------------------------------
 def send_data_json_to_telegram():
-    """Отправляет текущий data.json владельцу"""
+    """Отправляет текущий data.json владельцу (с задержкой, чтобы избежать спама)"""
+    global _datajson_timer
+    with _datajson_lock:
+        if _datajson_timer and _datajson_timer.is_alive():
+            _datajson_timer.cancel()
+        _datajson_timer = threading.Timer(_DATAJSON_DEBOUNCE_SECONDS, _send_data_json_actual)
+        _datajson_timer.daemon = True
+        _datajson_timer.start()
+
+def _send_data_json_actual():
     try:
         if not OWNER_ID:
-           # log_chat("⚠️ Пропущена отправка data.json — OWNER_ID не задан.")
+            log_chat("⚠️ Пропущена отправка data.json — OWNER_ID не задан.")
             return
         if not os.path.exists(DATA_FILE):
-            #log_chat("⚠️ Файл data.json не найден для отправки.")
+            log_chat("⚠️ Файл data.json не найден для отправки.")
             return
-
         with open(DATA_FILE, "rb") as f:
-            sent = bot.send_document(
-                int(OWNER_ID),
-                f,
-                caption="🧾 Текущий файл data.json (локальные данные)"
-            )
-            #log_chat("📤 Файл data.json отправлен владельцу.")
-            # можно сохранить message_id для синхронизации, если хочешь:
-            meta = _load_csv_meta()
-            meta["message_id_datajson"] = sent.message_id
-            _save_csv_meta(meta)
+            bot.send_document(int(OWNER_ID), f, caption="🧾 Текущий файл data.json")
+            log_info("📤 data.json отправлен владельцу.")
     except Exception as e:
-        #log_chat(f"❌ Ошибка при отправке data.json: {e}", error=True)
-        log_error(f"send_data_json_to_telegram: {e}")
+        log_error(f"Ошибка при отправке data.json: {e}")
 
 def export_day_csv(chat_id: int, day_key: str):
     """Экспортирует записи конкретного дня в отдельный CSV data_YYYY-MM-DD.csv"""
