@@ -238,6 +238,9 @@ def _load_csv_meta():
 def _save_csv_meta(meta):
     safe_json_write(CSV_META_FILE, meta)
 
+# --------------------------------------------
+# 🔁 Отложенное или немедленное обновление CSV и META
+# --------------------------------------------
 _CSV_DEBOUNCE_SECONDS = 3
 _csv_backup_timer = None
 _csv_backup_lock = threading.Lock()
@@ -246,17 +249,14 @@ def _schedule_csv_backup_debounced(force=False):
     """Запускает безопасное обновление CSV и META с задержкой (по умолчанию 3 сек)."""
     global _csv_backup_timer
     with _csv_backup_lock:
-        # если уже есть активный таймер — сбрасываем
         if _csv_backup_timer and _csv_backup_timer.is_alive():
             _csv_backup_timer.cancel()
 
-        # если указан флаг force=True — выполняем немедленно
         if force:
             log_info("⚡ Немедленное обновление csv_meta.json и Telegram-бэкапа.")
             safe_csv_backup_to_telegram()
             return
 
-        # иначе планируем с небольшой задержкой
         _csv_backup_timer = threading.Timer(_CSV_DEBOUNCE_SECONDS, safe_csv_backup_to_telegram)
         _csv_backup_timer.daemon = True
         _csv_backup_timer.start()
@@ -415,23 +415,29 @@ def restore_from_csv_if_needed():
         log_error(f"restore_from_csv_if_needed: {e}")
         return None
 
+# --------------------------------------------
+# 💾 Сохранение и автоматическая синхронизация
+# --------------------------------------------
 def save_data(d, force_backup: bool = False):
     """
-    Сохраняет JSON, обновляет CSV, csv_meta.json и запускает Telegram-бэкап.
-    Если force_backup=True, выполняет обновление мгновенно.
+    Сохраняет JSON, обновляет CSV и csv_meta.json, а также синхронизирует их в Telegram.
+    Если force_backup=True — выполняет немедленную отправку без ожидания.
     """
     try:
         _save_json(DATA_FILE, d)
         export_to_csv(d)
-        auto_update_csv_meta()
-        _schedule_csv_backup_debounced(force=force_backup)
-        log_info("💾 save_data: данные, CSV и META обновлены и синхронизируются.")
+        auto_update_csv_meta(send_to_owner=False)  # только локально
+
+        if force_backup:
+            log_info("⚡ Немедленный Telegram-бэкап CSV и META.")
+            safe_csv_backup_to_telegram()
+        else:
+            _schedule_csv_backup_debounced(force=False)
+
+        log_info("💾 save_data: данные, CSV и META сохранены и запланирована отправка.")
     except Exception as e:
         log_error(f"save_data: {e}")
 
-# --------------------------------------------
-# 🧩 Автообновление csv_meta.json при изменениях
-# --------------------------------------------
 # --------------------------------------------
 # 🧩 Автообновление csv_meta.json при изменениях (с отправкой в Telegram)
 # --------------------------------------------
@@ -442,7 +448,6 @@ def auto_update_csv_meta(send_to_owner: bool = True):
         if not isinstance(meta, dict):
             meta = {}
 
-        # обновляем время и размер CSV
         meta["updated"] = datetime.now().isoformat()
         if os.path.exists(CSV_FILE):
             meta["csv_size"] = os.path.getsize(CSV_FILE)
@@ -450,12 +455,10 @@ def auto_update_csv_meta(send_to_owner: bool = True):
 
         log_info("💾 csv_meta.json обновлён после изменения данных (локально)")
 
-        # 🔁 Дополнительно — обновляем файл в Telegram
         if send_to_owner and OWNER_ID:
             try:
                 with open(CSV_META_FILE, "rb") as f:
                     if meta.get("message_id_meta"):
-                        # Пытаемся обновить старое сообщение
                         bot.edit_message_media(
                             chat_id=int(OWNER_ID),
                             message_id=meta["message_id_meta"],
@@ -463,7 +466,6 @@ def auto_update_csv_meta(send_to_owner: bool = True):
                         )
                         log_info("♻️ csv_meta.json обновлён в чате владельца (edit_message_media).")
                     else:
-                        # Если сообщение ещё не было, отправляем впервые
                         msg = bot.send_document(int(OWNER_ID), f, caption="📄 Текущий csv_meta.json")
                         meta["message_id_meta"] = msg.message_id
                         if hasattr(msg, "document"):
@@ -727,7 +729,7 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     data["overall_balance"] = data.get("overall_balance", 0) + amount
     data["next_id"] = rid + 1
 
-    save_data(data)
+    save_data(data, force_backup=True)
     return rec
 
 def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str, user=None):
@@ -747,7 +749,7 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
         store["balance"] = sum(x["amount"] for x in store.get("records", []))
         data["records"] = [x if x["id"] != rid else found for x in data.get("records", [])]
         data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
-        save_data(data)
+        save_data(data, force_backup=True)
         return True, found
     return False, None
 
@@ -765,7 +767,7 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
         store["balance"] = sum(x["amount"] for x in store.get("records", []))
         data["records"] = [x for x in data.get("records", []) if x["id"] != rid]
         data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
-        save_data(data)
+        save_data(data, force_backup=True)
         return True, removed
     return False, None
 
