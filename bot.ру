@@ -742,7 +742,6 @@ def cmd_start(msg):
         delete_target_old=True,
         delete_source_old=False
     )
-
     # 📦 Только владелец получает файлы при первом запуске
     if str(chat_id) == str(OWNER_ID):
         try:
@@ -751,7 +750,6 @@ def cmd_start(msg):
             bot.send_message(chat_id, "📦 Инициализация завершена — файлы сохранены и синхронизированы.")
         except Exception as e:
             log_error(f"send_initial_backup_on_start: {e}")
-         
 #-----------—---------------------------------------------------------
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
@@ -875,6 +873,16 @@ def cmd_sync(msg):
     except Exception as e:
         send_temp_message(chat_id, f"❌ Ошибка при синхронизации: {e}")
         log_error(f"cmd_sync: {e}")
+
+@bot.message_handler(commands=["file_id"])
+def cmd_file_id(msg):
+    chat_id = msg.chat.id
+    meta = _load_csv_meta()
+    fid = meta.get("meta_file_id")
+    if fid:
+        bot.send_message(chat_id, f"🪄 file_id для CSV_META_FILE_ID:\n`{fid}`", parse_mode="Markdown")
+    else:
+        bot.send_message(chat_id, "⚠️ file_id не найден в csv_meta.json")
 
 @bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
@@ -1074,7 +1082,7 @@ def handle_callback(call):
         info_text = (
             f"ℹ️ Финансовый бот — версия {VERSION}\n\n"
             "Команды:\n"
-            "/start /view YYYY-MM-DD /prev /next /balance /report /csv /reset /ping\n\n"
+            "/start /view YYYY-MM-DD /prev /next /balance /report /csv /reset /ping /file_id\n\n"
             "Добавление: +500 Зарплата  или  -150 Обед.\n"
             "Системно: CSV, форвард, webhook, keep-alive."
         )
