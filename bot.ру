@@ -104,24 +104,25 @@ def _save_json(path, payload):
         log_error(f"_save_json: {path}: {e}")
 
 # ---------- META helpers ----------
+# ---------- META helpers ----------
 def _load_csv_meta():
     return safe_json_load(CSV_META_FILE, {})
 
-def _save_csv_meta(meta)
-log_info("💾 csv_meta.json обновлён")
+def _save_csv_meta(meta):
+    log_info("💾 csv_meta.json обновлён")
 
-try:
-    old_fid = meta.get("last_file_id_csv")
-    new_fid = meta.get("file_id_csv")
+    try:
+        old_fid = meta.get("last_file_id_csv")
+        new_fid = meta.get("file_id_csv")
 
-    if new_fid and new_fid != old_fid:
-        log_info(f"🆕 file_id CSV обновлён: {new_fid}")
-        meta["last_file_id_csv"] = new_fid
-        _save_csv_meta(meta)
-    else:
-        log_info("ℹ️ file_id CSV не изменился — CSV обновлён без новой загрузки")
-except Exception as e:
-    log_error(f"file_id CSV log check: {e}")
+        if new_fid and new_fid != old_fid:
+            log_info(f"🆕 file_id CSV обновлён: {new_fid}")
+            meta["last_file_id_csv"] = new_fid
+            safe_json_write(CSV_META_FILE, meta)
+        else:
+            log_info("ℹ️ file_id CSV не изменился — CSV обновлён без новой загрузки")
+    except Exception as e:
+        log_error(f"file_id CSV log check: {e}")
 
 def ensure_local_meta_or_fetch():
     """Гарантирует наличие csv_meta.json; если нет — пытается скачать по CSV_META_FILE_ID."""
