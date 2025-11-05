@@ -880,9 +880,9 @@ def cmd_file_id(msg):
     meta = _load_csv_meta()
     fid = meta.get("meta_file_id")
     if fid:
-        bot.send_message(chat_id, f"🪄 file_id для CSV_META_FILE_ID:\n`{fid}`", parse_mode="Markdown")
+        bot.send_message(chat_id, fid)
     else:
-        bot.send_message(chat_id, "⚠️ file_id не найден в csv_meta.json")
+        bot.send_message(chat_id, "file_id не найден")
 
 @bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
