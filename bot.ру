@@ -398,7 +398,7 @@ def save_data(d):
     try:
         _save_json(DATA_FILE, d)
         export_to_csv(d)
-        _schedule_csv_backup_debounced()
+        safe_csv_backup_to_telegram()
     except Exception as e:
         log_error(f"save_data: {e}")
 
