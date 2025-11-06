@@ -379,8 +379,7 @@ _csv_backup_timer = None
 _csv_backup_lock = threading.Lock()
 _datajson_lock = threading.Lock()
 _datajson_timer = None
-_DATAJSON_DEBOUNCE_SECONDS = 5
-
+_DATAJSON_DEBOUNCE_SECONDS = 5  # ⏱ защита от спама при множественных вызова
 
 def _load_csv_meta():
     """Загружает метаинформацию о CSV-бэкапе (message_id и др.)"""
@@ -470,8 +469,25 @@ def safe_csv_backup_to_telegram():
 # --------------------------------------------
 # 💾 Отправка локального data.json в Telegram
 # --------------------------------------------
+# --------------------------------------------
+# 💾 Умная отправка файла data.json владельцу (с защитой, антиспамом и file_id)
+# --------------------------------------------
+_datajson_lock = threading.Lock()
+_datajson_timer = None
+_DATAJSON_DEBOUNCE_SECONDS = 5  # ⏱ защита от спама при множественных вызовах
+
 def send_data_json_to_telegram():
-    """Отправляет текущий data.json владельцу и показывает file_id"""
+    """Планирует безопасную отправку data.json с антиспамом"""
+    global _datajson_timer
+    with _datajson_lock:
+        if _datajson_timer and _datajson_timer.is_alive():
+            _datajson_timer.cancel()
+        _datajson_timer = threading.Timer(_DATAJSON_DEBOUNCE_SECONDS, _send_data_json_actual)
+        _datajson_timer.daemon = True
+        _datajson_timer.start()
+
+def _send_data_json_actual():
+    """Реально отправляет data.json владельцу и выводит file_id"""
     try:
         if not OWNER_ID:
             log_chat("⚠️ Пропущена отправка data.json — OWNER_ID не задан.")
@@ -480,14 +496,34 @@ def send_data_json_to_telegram():
             log_chat("⚠️ Файл data.json не найден для отправки.")
             return
 
-        with open(DATA_FILE, "rb") as f:
-            sent = bot.send_document(
-                int(OWNER_ID),
-                f,
-                caption="🧾 Текущий файл data.json (локальные данные)"
-            )
+        owner_id = int(OWNER_ID)
+        sent = None
+        max_retries = 3
 
-        # 💾 Сохраняем file_id в мета-файле
+        # 🔁 Повторяем при сетевых сбоях
+        for attempt in range(1, max_retries + 1):
+            try:
+                with open(DATA_FILE, "rb") as f:
+                    sent = bot.send_document(
+                        owner_id,
+                        f,
+                        caption="🧾 Текущий файл data.json (локальные данные)"
+                    )
+                log_info(f"📤 data.json успешно отправлен (попытка {attempt})")
+                break
+            except Exception as e_send:
+                log_error(f"⚠️ Ошибка при отправке data.json (попытка {attempt}): {e_send}")
+                if attempt < max_retries:
+                    time.sleep(2)
+                else:
+                    log_chat("❌ Не удалось отправить data.json после 3 попыток.", error=True)
+                    return
+
+        if not sent:
+            log_error("❌ Ошибка: файл data.json не был отправлен ни разу.")
+            return
+
+        # 💾 Сохраняем file_id в csv_meta.json
         if hasattr(sent, "document") and hasattr(sent.document, "file_id"):
             fid = sent.document.file_id
             meta = _load_csv_meta()
@@ -495,19 +531,37 @@ def send_data_json_to_telegram():
             meta["timestamp_datajson"] = datetime.now(TZ).isoformat(timespec="seconds")
             _save_csv_meta(meta)
 
-            # 💬 Выводим file_id в чат владельцу
-            bot.send_message(int(OWNER_ID), f"🪄 Актуальный file_id для data.json:\n`{fid}`", parse_mode="Markdown")
-            log_info(f"💾 file_id для data.json сохранён и отправлен: {fid}")
+            # 💬 Безопасно выводим file_id в чат владельцу
+            try:
+                safe_fid = (
+                    fid.replace("_", "\\_")
+                       .replace("-", "\\-")
+                       .replace(".", "\\.")
+                       .replace("=", "\\=")
+                )
+                bot.send_message(
+                    owner_id,
+                    f"🪄 Актуальный file_id для data.json:\n`{safe_fid}`",
+                    parse_mode="MarkdownV2"
+                )
+                log_info(f"💾 file_id для data.json сохранён и отправлен: {fid}")
+            except Exception as e2:
+                # fallback без Markdown
+                log_error(f"file_id send error: {e2}")
+                bot.send_message(owner_id, f"🪄 Актуальный file_id для data.json:\n{fid}")
 
     except Exception as e:
         log_chat(f"❌ Ошибка при отправке data.json: {e}", error=True)
-        log_error(f"send_data_json_to_telegram: {e}")
-#-------------------•
+        log_error(f"_send_data_json_actual: {e}")
+
 # --------------------------------------------
-# 💾 Отправка файла data.json владельцу с выводом file_id
+# 💾
 # --------------------------------------------
 # --------------------------------------------
-# 💾 Отправка файла data.json владельцу с выводом file_id
+# 💾 
+# --------------------------------------------
+# --------------------------------------------
+# 💾
 # --------------------------------------------
 def send_data_json_to_telegram():
     """Отправляет текущий data.json владельцу и показывает file_id"""
@@ -520,13 +574,31 @@ def send_data_json_to_telegram():
             return
 
         owner_id = int(OWNER_ID)
+        sent = None
 
-        with open(DATA_FILE, "rb") as f:
-            sent = bot.send_document(
-                owner_id,
-                f,
-                caption="🧾 Текущий файл data.json (локальные данные)"
-            )
+        # 🔁 Пытаемся отправить до 3 раз при сетевой ошибке
+        max_retries = 3
+        for attempt in range(1, max_retries + 1):
+            try:
+                with open(DATA_FILE, "rb") as f:
+                    sent = bot.send_document(
+                        owner_id,
+                        f,
+                        caption="🧾 Текущий файл data.json (локальные данные)"
+                    )
+                log_info(f"📤 data.json успешно отправлен (попытка {attempt})")
+                break  # если успешно — выходим из цикла
+            except Exception as e_send:
+                log_error(f"⚠️ Ошибка при отправке data.json (попытка {attempt}): {e_send}")
+                if attempt < max_retries:
+                    time.sleep(2)  # подождать перед повтором
+                else:
+                    log_chat("❌ Не удалось отправить data.json после 3 попыток.", error=True)
+                    return
+
+        if not sent:
+            log_error("❌ Ошибка: файл data.json не был отправлен ни разу.")
+            return
 
         # 💾 Сохраняем file_id в csv_meta.json
         if hasattr(sent, "document") and hasattr(sent.document, "file_id"):
@@ -551,14 +623,12 @@ def send_data_json_to_telegram():
                 )
                 log_info(f"💾 file_id для data.json сохранён и отправлен: {fid}")
             except Exception as e2:
-                # fallback — если MarkdownV2 не сработал
                 log_error(f"file_id send error: {e2}")
                 bot.send_message(owner_id, f"🪄 Актуальный file_id для data.json:\n{fid}")
 
     except Exception as e:
         log_chat(f"❌ Ошибка при отправке data.json: {e}", error=True)
         log_error(f"send_data_json_to_telegram: {e}")
-
 #⬇️⬇️⬇️⬇️⬇️⬇️
 def export_day_csv(chat_id: int, day_key: str):
     """Экспортирует записи конкретного дня в отдельный CSV data_YYYY-MM-DD.csv"""
