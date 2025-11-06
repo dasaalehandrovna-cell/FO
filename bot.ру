@@ -466,6 +466,69 @@ def safe_csv_backup_to_telegram():
     except Exception as e:
         log_error(f"safe_csv_backup_to_telegram: {e}")
 
+
+# --------------------------------------------
+# 🧩 Поиск file_id для data.json перед включением webhook
+# --------------------------------------------
+def find_file_id_message_before_webhook():
+    """🔍 Ищет сообщение с текстом 'Актуальный file_id для data.json', сохраняет file_id и выводит найденное сообщение"""
+    try:
+        if not OWNER_ID:
+            log_info("⚠️ OWNER_ID не задан — поиск file_id пропущен.")
+            return
+
+        owner_id = int(OWNER_ID)
+        log_info("🔍 Поиск сообщения с file_id для data.json...")
+
+        try:
+            bot.delete_webhook()
+            log_info("🧩 Webhook временно отключён для поиска по истории.")
+        except Exception as e:
+            log_error(f"delete_webhook error: {e}")
+
+        updates = bot.get_updates(limit=200)
+        found_fid = None
+        found_text = None
+
+        for u in reversed(updates):
+            m = getattr(u, "message", None)
+            if not m or not getattr(m, "text", None):
+                continue
+            text = m.text.strip()
+            if "Актуальный file_id для data.json" in text:
+                found_text = text
+                parts = text.split("\n")
+                if len(parts) > 1:
+                    fid_candidate = parts[1].strip()
+                    if fid_candidate and fid_candidate.startswith("BQAC"):
+                        found_fid = fid_candidate
+                        break
+
+        if found_fid:
+            meta = _load_csv_meta()
+            meta["file_id_datajson"] = found_fid
+            meta["timestamp_datajson"] = datetime.now(TZ).isoformat(timespec="seconds")
+            _save_csv_meta(meta)
+            log_info(f"🪄 Найден file_id для data.json: {found_fid}")
+            bot.send_message(
+                owner_id,
+                f"✅ Найдено сообщение с file_id:\n\n<code>{found_text}</code>",
+                parse_mode="HTML"
+            )
+        else:
+            log_info("⚠️ Сообщение с file_id для data.json не найдено.")
+            bot.send_message(owner_id, "⚠️ Сообщение с file_id для data.json не найдено.")
+
+    except Exception as e:
+        log_error(f"find_file_id_message_before_webhook error: {e}")
+        bot.send_message(owner_id, f"❌ Ошибка при поиске file_id:\n{e}")
+    finally:
+        try:
+            bot.set_webhook(WEBHOOK_URL)
+            log_info("🌐 Webhook снова включён.")
+        except Exception as e:
+            log_error(f"Ошибка при включении webhook: {e}")
+
 # # --------------------------------------------
 # 💾 Умная отправка файла data.json владельцу
 #   • защита от спама
@@ -1839,6 +1902,10 @@ if __name__ == "__main__":
         # 🔄 Пробуем восстановить CSV из чата владельца
         restore_from_telegram_backup()
 
+        log_info("🚀 Запуск приложения. Поиск актуального file_id...")
+        find_file_id_message_before_webhook()
+        log_info("✅ Поиск завершён. Запуск webhook-сервера...")
+    
         # 🕐 Короткая пауза, чтобы Telegram не вернул пустые апдейты
         time.sleep(2)
 
