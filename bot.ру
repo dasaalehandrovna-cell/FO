@@ -33,6 +33,7 @@ from flask import Flask, request
 TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_ID")  # ID владельца для уведомлений
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
+BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")  # 💾 приватный канал для автосохранения файлов (например: -1003244596041)
 # -----------------------------
 # 🔧 Настройки логики
 # -----------------------------
@@ -403,17 +404,44 @@ def _save_csv_meta(meta: dict):
         log_error(f"_save_csv_meta: {e}")
         #log_chat(f"❌ Ошибка записи csv_meta.json: {e}", error=True)
 
-def _schedule_csv_backup_debounced():
-    """Планирует авто-бэкап CSV в Telegram с задержкой (антиспам)"""
-    global _csv_backup_timer
-    with _csv_backup_lock:
-        if _csv_backup_timer and _csv_backup_timer.is_alive():
-            _csv_backup_timer.cancel()
-        _csv_backup_timer = threading.Timer(_CSV_DEBOUNCE_SECONDS, safe_csv_backup_to_telegram)
-        _csv_backup_timer.daemon = True
-        _csv_backup_timer.start()
-        send_data_json_to_telegram()
+# --------------------------------------------
+# 💾 Автобэкап в приватный канал (как «Избранное»)
+# --------------------------------------------
+def send_backup_to_channel():
+    """📦 Отправляет все актуальные файлы (data.json, data.csv, csv_meta.json) в канал BACKUP_CHAT_ID"""
+    if not BACKUP_CHAT_ID:
+        log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск отправки бэкапа.")
+        return
+    try:
+        success_count = 0
+        for fname in [DATA_FILE, CSV_FILE, _CSV_BACKUP_META]:
+            if os.path.exists(fname):
+                with open(fname, "rb") as f:
+                    sent = bot.send_document(
+                        int(BACKUP_CHAT_ID),
+                        f,
+                        caption=f"🧾 {fname} — авто-бэкап ({datetime.now(TZ).strftime('%Y-%m-%d %H:%M')})"
+                    )
+                    success_count += 1
+                    log_info(f"✅ {fname} успешно отправлен в канал (message_id={sent.message_id})")
+            else:
+                log_warning(f"⚠️ Файл не найден для бэкапа: {fname}")
 
+        if success_count == 0:
+            log_warning("⚠️ Ни один файл не был отправлен — возможно, пути неверны или нет данных.")
+        else:
+            log_info(f"📤 Автобэкап завершён: {success_count} файлов отправлено.")
+
+    except Exception as e:
+        log_error(f"❌ Ошибка при отправке файлов в канал бэкапов: {e}")
+        try:
+            bot.send_message(
+                int(OWNER_ID),
+                f"⚠️ Ошибка при отправке файлов в канал бэкапов:\n<code>{e}</code>",
+                parse_mode="HTML"
+            )
+        except Exception as e2:
+            log_error(f"Ошибка при уведомлении владельца об ошибке бэкапа: {e2}")
 
 def safe_csv_backup_to_telegram():
     """Отправляет или обновляет CSV-файл в чате владельца, пересоздаёт при удалении"""
@@ -728,6 +756,7 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     save_data(data)
     safe_csv_backup_to_telegram()
     send_data_json_to_telegram()
+    send_backup_to_channel()
     ALLOW_FILE_WRITE = False
 
     #log_chat(f"➕ Добавлена запись: {amount} ({note}) — чат {chat_id}")
@@ -764,6 +793,7 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
         save_data(data)
         safe_csv_backup_to_telegram()
         send_data_json_to_telegram()
+        send_backup_to_channel()
         ALLOW_FILE_WRITE = False
         
         return True, found
@@ -1637,6 +1667,7 @@ def cmd_json(msg):
         return
     bot.send_message(msg.chat.id, "🧾 Отправляю актуальный data.json...")
     send_data_json_to_telegram()
+    send_backup_to_channel()
 
 
 @bot.message_handler(commands=["file_id"])
