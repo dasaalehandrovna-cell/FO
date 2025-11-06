@@ -471,16 +471,7 @@ def safe_csv_backup_to_telegram():
 # 💾 Отправка локального data.json в Telegram
 # --------------------------------------------
 def send_data_json_to_telegram():
-    """Отправляет текущий data.json владельцу (с задержкой, чтобы избежать спама)"""
-    global _datajson_timer
-    with _datajson_lock:
-        if _datajson_timer and _datajson_timer.is_alive():
-            _datajson_timer.cancel()
-        _datajson_timer = threading.Timer(_DATAJSON_DEBOUNCE_SECONDS, _send_data_json_actual)
-        _datajson_timer.daemon = True
-        _datajson_timer.start()
-
-def _send_data_json_actual():
+    """Отправляет текущий data.json владельцу и показывает file_id"""
     try:
         if not OWNER_ID:
             log_chat("⚠️ Пропущена отправка data.json — OWNER_ID не задан.")
@@ -488,12 +479,55 @@ def _send_data_json_actual():
         if not os.path.exists(DATA_FILE):
             log_chat("⚠️ Файл data.json не найден для отправки.")
             return
+
         with open(DATA_FILE, "rb") as f:
-            bot.send_document(int(OWNER_ID), f, caption="🧾 Текущий файл data.json")
+            sent = bot.send_document(
+                int(OWNER_ID),
+                f,
+                caption="🧾 Текущий файл data.json (локальные данные)"
+            )
+
+        # 💾 Сохраняем file_id в мета-файле
+        if hasattr(sent, "document") and hasattr(sent.document, "file_id"):
+            fid = sent.document.file_id
+            meta = _load_csv_meta()
+            meta["file_id_datajson"] = fid
+            meta["timestamp_datajson"] = datetime.now(TZ).isoformat(timespec="seconds")
+            _save_csv_meta(meta)
+
+            # 💬 Выводим file_id в чат владельцу
+            bot.send_message(int(OWNER_ID), f"🪄 Актуальный file_id для data.json:\n`{fid}`", parse_mode="Markdown")
+            log_info(f"💾 file_id для data.json сохранён и отправлен: {fid}")
+
+    except Exception as e:
+        log_chat(f"❌ Ошибка при отправке data.json: {e}", error=True)
+        log_error(f"send_data_json_to_telegram: {e}")
+#-------------------•
+def _send_data_json_actual():
+    """Отправляет актуальный data.json владельцу и сохраняет его file_id в csv_meta.json"""
+    try:
+        if not OWNER_ID:
+            log_chat("⚠️ Пропущена отправка data.json — OWNER_ID не задан.")
+            return
+        if not os.path.exists(DATA_FILE):
+            log_chat("⚠️ Файл data.json не найден для отправки.")
+            return
+
+        with open(DATA_FILE, "rb") as f:
+            sent = bot.send_document(int(OWNER_ID), f, caption="🧾 Текущий файл data.json")
             log_info("📤 data.json отправлен владельцу.")
+
+        # 💾 Сохраняем file_id в csv_meta.json
+        meta = _load_csv_meta()
+        if hasattr(sent, "document") and hasattr(sent.document, "file_id"):
+            meta["file_id_datajson"] = sent.document.file_id
+            meta["timestamp_datajson"] = datetime.now(TZ).isoformat(timespec="seconds")
+            _save_csv_meta(meta)
+            log_info(f"💾 file_id для data.json сохранён: {meta['file_id_datajson']}")
+
     except Exception as e:
         log_error(f"Ошибка при отправке data.json: {e}")
-
+#-------------------•
 def export_day_csv(chat_id: int, day_key: str):
     """Экспортирует записи конкретного дня в отдельный CSV data_YYYY-MM-DD.csv"""
     store = get_chat_store(chat_id)
@@ -898,7 +932,11 @@ def handle_callback(call):
             "/report — список расходов\n"
             "/csv — общий CSV\n"
             "/reset — обнуление чата\n"
-            "/ping — проверка активности\n\n"
+            "/ping — проверка активности\n"
+            "/json \n"
+            "/file_id \n"
+             "/file_id_all \n\n"
+            
             "📝 Добавление записей: +500 Зарплата или -150 Обед\n"
             "⚙️ Системно: CSV, форвард, webhook, keep-alive."
         )
@@ -1436,6 +1474,50 @@ def cmd_json(msg):
         bot.send_message(msg.chat.id, "⚠️ Эта команда доступна только владельцу.")
         return
     send_data_json_to_telegram()
+
+@bot.message_handler(commands=["file_id"])
+def cmd_file_id(msg):
+    """Показывает актуальный file_id последнего отправленного data.json"""
+    meta = _load_csv_meta()
+    fid = meta.get("file_id_datajson")
+    if fid:
+        bot.send_message(msg.chat.id, f"🪄 Актуальный file_id для data.json:\n`{fid}`", parse_mode="Markdown")
+    else:
+        bot.send_message(msg.chat.id, "⚠️ file_id для data.json ещё не найден (файл не отправлялся).")
+
+@bot.message_handler(commands=["file_id_all"])
+def cmd_file_id_all(msg):
+    """Показывает file_id всех последних бэкап-файлов (CSV, data.json, csv_meta.json)"""
+    try:
+        meta = _load_csv_meta()
+
+        fid_csv = meta.get("message_id") or meta.get("file_id_csv")
+        fid_json = meta.get("file_id_datajson")
+        fid_meta = meta.get("file_id_csvmeta") or meta.get("file_id_meta")
+
+        text_lines = ["📦 *Актуальные file_id бэкапов:*"]
+
+        if fid_csv:
+            text_lines.append(f"📊 CSV: `{fid_csv}`")
+        else:
+            text_lines.append("📊 CSV: _не найден_")
+
+        if fid_json:
+            text_lines.append(f"🧾 data.json: `{fid_json}`")
+        else:
+            text_lines.append("🧾 data.json: _не найден_")
+
+        if fid_meta:
+            text_lines.append(f"🧠 csv_meta.json: `{fid_meta}`")
+        else:
+            text_lines.append("🧠 csv_meta.json: _не найден_")
+
+        text = "\n".join(text_lines)
+        bot.send_message(msg.chat.id, text, parse_mode="Markdown")
+
+    except Exception as e:
+        log_error(f"/file_id_all error: {e}")
+        bot.send_message(msg.chat.id, f"❌ Ошибка при получении file_id: {e}")
 
 # -----------------------------
 # 📨 Основной обработчик текстовых сообщений
