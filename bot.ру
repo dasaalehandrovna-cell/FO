@@ -466,18 +466,18 @@ def safe_csv_backup_to_telegram():
     except Exception as e:
         log_error(f"safe_csv_backup_to_telegram: {e}")
 
-# --------------------------------------------
-# 💾 Отправка локального data.json в Telegram
-# --------------------------------------------
-# --------------------------------------------
-# 💾 Умная отправка файла data.json владельцу (с защитой, антиспамом и file_id)
+# # --------------------------------------------
+# 💾 Умная отправка файла data.json владельцу
+#   • защита от спама
+#   • автоповтор при сбоях
+#   • удаление старых сообщений и файлов
 # --------------------------------------------
 _datajson_lock = threading.Lock()
 _datajson_timer = None
-_DATAJSON_DEBOUNCE_SECONDS = 5  # ⏱ защита от спама при множественных вызовах
+_DATAJSON_DEBOUNCE_SECONDS = 5
 
 def send_data_json_to_telegram():
-    """Планирует безопасную отправку data.json с антиспамом"""
+    """Планирует безопасную отправку data.json (антиспам)"""
     global _datajson_timer
     with _datajson_lock:
         if _datajson_timer and _datajson_timer.is_alive():
@@ -487,7 +487,7 @@ def send_data_json_to_telegram():
         _datajson_timer.start()
 
 def _send_data_json_actual():
-    """Реально отправляет data.json владельцу и выводит file_id"""
+    """Отправляет data.json, удаляя старое сообщение"""
     try:
         if not OWNER_ID:
             log_chat("⚠️ Пропущена отправка data.json — OWNER_ID не задан.")
@@ -500,7 +500,21 @@ def _send_data_json_actual():
         sent = None
         max_retries = 3
 
-        # 🔁 Повторяем при сетевых сбоях
+        # Загружаем мета-файл, чтобы удалить старое сообщение
+        meta = _load_csv_meta()
+        old_msg_id = meta.get("message_id_datajson")
+        old_msg_id_fid = meta.get("message_id_datajson_fid")
+
+        # 🗑 Удаляем старые сообщения, если есть
+        try:
+            if old_msg_id:
+                bot.delete_message(owner_id, old_msg_id)
+            if old_msg_id_fid:
+                bot.delete_message(owner_id, old_msg_id_fid)
+        except Exception as e_del:
+            log_error(f"Удаление старых сообщений data.json: {e_del}")
+
+        # 🔁 Отправляем файл с 3 попытками
         for attempt in range(1, max_retries + 1):
             try:
                 with open(DATA_FILE, "rb") as f:
@@ -523,15 +537,15 @@ def _send_data_json_actual():
             log_error("❌ Ошибка: файл data.json не был отправлен ни разу.")
             return
 
-        # 💾 Сохраняем file_id в csv_meta.json
+        # 💾 Сохраняем file_id и message_id в csv_meta.json
         if hasattr(sent, "document") and hasattr(sent.document, "file_id"):
             fid = sent.document.file_id
-            meta = _load_csv_meta()
             meta["file_id_datajson"] = fid
+            meta["message_id_datajson"] = sent.message_id
             meta["timestamp_datajson"] = datetime.now(TZ).isoformat(timespec="seconds")
             _save_csv_meta(meta)
 
-            # 💬 Безопасно выводим file_id в чат владельцу
+            # 💬 Безопасно выводим file_id в чат и тоже сохраняем его message_id
             try:
                 safe_fid = (
                     fid.replace("_", "\\_")
@@ -539,28 +553,23 @@ def _send_data_json_actual():
                        .replace(".", "\\.")
                        .replace("=", "\\=")
                 )
-                bot.send_message(
+                fid_msg = bot.send_message(
                     owner_id,
                     f"🪄 Актуальный file_id для data.json:\n`{safe_fid}`",
                     parse_mode="MarkdownV2"
                 )
+                meta["message_id_datajson_fid"] = fid_msg.message_id
+                _save_csv_meta(meta)
                 log_info(f"💾 file_id для data.json сохранён и отправлен: {fid}")
             except Exception as e2:
-                # fallback без Markdown
                 log_error(f"file_id send error: {e2}")
-                bot.send_message(owner_id, f"🪄 Актуальный file_id для data.json:\n{fid}")
+                fid_msg = bot.send_message(owner_id, f"🪄 Актуальный file_id для data.json:\n{fid}")
+                meta["message_id_datajson_fid"] = fid_msg.message_id
+                _save_csv_meta(meta)
 
     except Exception as e:
         log_chat(f"❌ Ошибка при отправке data.json: {e}", error=True)
-        log_error(f"_send_data_json_actual: {e}")
-
-# --------------------------------------------
-# 💾
-# --------------------------------------------
-# --------------------------------------------
-# 💾 
-# --------------------------------------------
-# --------------------------------------------
+        log_error(f"_send_data_json_actual: {e}")# --------------------------------------------
 # 💾
 # --------------------------------------------
 #⬇️⬇️⬇️⬇️⬇️⬇️
