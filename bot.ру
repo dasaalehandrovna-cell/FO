@@ -1853,7 +1853,7 @@ if __name__ == "__main__":
     schedule_daily_window_creation()
 
     # 🕒 Фоновое автосохранение каждые 3 часа
-    threading.Thread(target=auto_update_task, daemon=True).start()
+  #  threading.Thread(target=auto_update_task, daemon=True).start()
 
     # 🟢 Keep-alive
     start_keep_alive_thread()
