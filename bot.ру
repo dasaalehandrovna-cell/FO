@@ -1936,16 +1936,16 @@ def schedule_daily_window_creation():
 # -----------------------------
 # 🪝 Webhook и запуск приложения
 # -----------------------------
-#•••••••••••••def set_webhook():
-    #•••••••••••••"""Устанавливает webhook для Telegram"""
-    #•••••••••••••url = f"{APP_URL}/{TOKEN}"
-    #•••••••••••••try:
-        #•••••••••••••bot.remove_webhook()
-        #•••••••••••••time.sleep(0.5)
-        #•••••••••••••bot.set_webhook(url=url)
-        #•••••••••••••log_info(f"Webhook установлен: {url}")
-    #•••••••••••••except Exception as e:
-        #•••••••••••••log_error(f"set_webhook: {e}")
+def set_webhook():
+    """Устанавливает webhook для Telegram"""
+    url = f"{APP_URL}/{TOKEN}"
+    try:
+        bot.remove_webhook()
+        time.sleep(0.5)
+        bot.set_webhook(url=url)
+        log_info(f"Webhook установлен: {url}")
+    except Exception as e:
+        log_error(f"set_webhook: {e}")
 
 
 if __name__ == "__main__":
@@ -1971,7 +1971,7 @@ if __name__ == "__main__":
         time.sleep(2)
 
         # 🪝 Ставим webhook обратно
-        #•••••••••••••set_webhook()
+        set_webhook()
         #log_chat("🪝 Webhook установлен успешно.")
 
     except Exception as e:
