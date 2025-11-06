@@ -535,8 +535,8 @@ def safe_csv_backup_to_telegram():
                     owner_id, f, caption="📊 Новый CSV-бэкап данных (создан повторно автоматически)"
                 )
                 meta["message_id"] = sent.message_id
-                 if getattr(sent, "document", None) and getattr(sent.document, "file_id", None):
-                     meta["file_id_csv"] = sent.document.file_id  # 💾 сохраняем file_id для восстановления из канала
+                if getattr(sent, "document", None) and getattr(sent.document, "file_id", None):
+                    meta["file_id_csv"] = sent.document.file_id  # 💾 сохраняем file_id для восстановления из канала
                 meta["timestamp"] = datetime.now(TZ).isoformat(timespec="seconds")
                 _save_csv_meta(meta)
                 #log_chat("♻️ Новый CSV-бэкап создан заново.")
