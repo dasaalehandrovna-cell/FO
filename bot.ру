@@ -608,13 +608,20 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     day = today_key()
     store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
 
-    # обновляем балансы
+        # обновляем балансы
     store["balance"] = store.get("balance", 0) + amount
     data["overall_balance"] = data.get("overall_balance", 0) + amount
     data["next_id"] = rid + 1
 
-    save_data(data)  # 💾 JSON + CSV
-    #log_chat(f"➕ Добавлена запись: {amount} ({note}) — чат {chat_id}")
+    # 💾 сохраняем данные и отправляем обновлённые файлы владельцу
+    global ALLOW_FILE_WRITE
+    ALLOW_FILE_WRITE = True
+    save_data(data)
+    safe_csv_backup_to_telegram()
+    send_data_json_to_telegram()
+    ALLOW_FILE_WRITE = False
+
+    log_chat(f"➕ Добавлена запись: {amount} ({note}) — чат {chat_id}")
     return rec
 
 
@@ -641,7 +648,14 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
         data["records"] = [x if x["id"] != rid else found for x in data.get("records", [])]
         data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
 
-        save_data(data)  # 💾 JSON + CSV
+        
+        # 💾 сохраняем и отправляем обновлённые файлы владельцу
+        global ALLOW_FILE_WRITE
+        ALLOW_FILE_WRITE = True
+        save_data(data)
+        safe_csv_backup_to_telegram()
+        send_data_json_to_telegram()
+        ALLOW_FILE_WRITE = False
         
         return True, found
     return False, None
@@ -667,7 +681,14 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
         data["records"] = [x for x in data.get("records", []) if x["id"] != rid]
         data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
 
-        save_data(data)  # 💾 JSON + CSV
+      
+        # 💾 сохраняем и отправляем обновлённые файлы владельцу
+        global ALLOW_FILE_WRITE
+        ALLOW_FILE_WRITE = True
+        save_data(data)
+        safe_csv_backup_to_telegram()
+        send_data_json_to_telegram()
+        ALLOW_FILE_WRITE = False
         return True, removed
     return False, None
 
@@ -1471,19 +1492,6 @@ def cmd_report(msg):
     lines.append(f"\n💸 Расход за день: {fmt_num(sum(abs(r['amount']) for r in expenses))} ARS")
     bot.send_message(chat_id, "\n".join(lines))
 
-
-@bot.message_handler(commands=["csv"])
-def cmd_csv(msg):
-    """/csv — экспорт общего CSV"""
-    chat_id = msg.chat.id
-    try:
-        export_to_csv(data)
-        with open(CSV_FILE, "rb") as f:
-            bot.send_document(chat_id, f, caption="📂 Полный экспорт: data.csv")
-    except Exception as e:
-        send_temp_message(chat_id, f"❌ Ошибка при экспорте CSV: {e}")
-
-
 @bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
     """/reset — подтверждение обнуления (inline)"""
@@ -1507,12 +1515,20 @@ def cmd_reset(msg):
             reply_markup=build_reset_confirm_keyboard(dk)
         )
 
+@bot.message_handler(commands=["csv"])
+def cmd_csv(msg):
+    if str(msg.chat.id) != str(OWNER_ID):
+        return
+    bot.send_message(msg.chat.id, "📊 Отправляю актуальный CSV...")
+    safe_csv_backup_to_telegram()
+
 @bot.message_handler(commands=["json"])
 def cmd_json(msg):
     if str(msg.chat.id) != str(OWNER_ID):
-        bot.send_message(msg.chat.id, "⚠️ Эта команда доступна только владельцу.")
         return
+    bot.send_message(msg.chat.id, "🧾 Отправляю актуальный data.json...")
     send_data_json_to_telegram()
+
 
 @bot.message_handler(commands=["file_id"])
 def cmd_file_id(msg):
