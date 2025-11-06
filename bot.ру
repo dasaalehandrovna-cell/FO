@@ -621,7 +621,7 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     send_data_json_to_telegram()
     ALLOW_FILE_WRITE = False
 
-    log_chat(f"➕ Добавлена запись: {amount} ({note}) — чат {chat_id}")
+    #log_chat(f"➕ Добавлена запись: {amount} ({note}) — чат {chat_id}")
     return rec
 
 
