@@ -27,6 +27,12 @@ import telebot
 from telebot import types
 from flask import Flask, request
 
+# --- Google Drive ---
+from googleapiclient.discovery import build
+from google.oauth2 import service_account
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
+import io
+
 # -----------------------------
 # 🤖 Telethon клиент для восстановления из канала
 # -----------------------------
@@ -406,6 +412,63 @@ async def restore_csv_via_telethon():
     except Exception as e:
         log_error(f"restore_csv_via_telethon: {e}")
 
+# ============================================
+# ☁️ Google Drive — загрузка и восстановление бэкапов
+# ============================================
+GDRIVE_CREDENTIALS_FILE = "financebot-key.json"
+GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "")
+
+def upload_to_gdrive(filename):
+    """📤 Загружает файл в Google Drive"""
+    try:
+        creds = service_account.Credentials.from_service_account_file(
+            GDRIVE_CREDENTIALS_FILE, scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        service = build("drive", "v3", credentials=creds)
+        file_metadata = {
+            "name": os.path.basename(filename),
+            "parents": [GDRIVE_FOLDER_ID] if GDRIVE_FOLDER_ID else None,
+        }
+        media = MediaFileUpload(filename, resumable=True)
+        file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+        log_info(f"✅ Файл {filename} загружен на Google Drive (id: {file.get('id')})")
+    except Exception as e:
+        log_error(f"upload_to_gdrive: {e}")
+
+
+def download_latest_from_gdrive(target_filename="restore_from_drive.csv"):
+    """📥 Скачивает последний CSV с Google Drive"""
+    try:
+        creds = service_account.Credentials.from_service_account_file(
+            GDRIVE_CREDENTIALS_FILE, scopes=["https://www.googleapis.com/auth/drive"]
+        )
+        service = build("drive", "v3", credentials=creds)
+
+        results = service.files().list(
+            q="name contains 'data' and mimeType='text/csv'",
+            orderBy="createdTime desc",
+            pageSize=1, fields="files(id, name)"
+        ).execute()
+
+        items = results.get("files", [])
+        if not items:
+            log_info("❕ Нет CSV-файлов в Google Drive.")
+            return False
+
+        file_id = items[0]["id"]
+        request = service.files().get_media(fileId=file_id)
+        with open(target_filename, "wb") as f:
+            downloader = MediaIoBaseDownload(f, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+        log_info(f"✅ Скачан последний CSV с Google Drive: {target_filename}")
+        return True
+
+    except Exception as e:
+        log_error(f"download_latest_from_gdrive: {e}")
+        return False
+
 # --------------------------------------------
 # 💾 Умное сохранение данных (без спама файлами)
 # --------------------------------------------
@@ -601,9 +664,7 @@ def send_backup_to_channel():
 def safe_csv_backup_to_telegram():
     """Отправляет или обновляет CSV-файл в чате владельца, пересоздаёт при удалении"""
     try:
-        #log_chat("☁️ Запуск авто-бэкапа CSV в Telegram...")
         if not OWNER_ID:
-            #log_chat("⚠️ CSV-бэкап пропущен — OWNER_ID не задан.")
             return
 
         owner_id = int(OWNER_ID)
@@ -618,10 +679,16 @@ def safe_csv_backup_to_telegram():
                     bot.edit_message_media(
                         chat_id=owner_id,
                         message_id=message_id,
-                        media=telebot.types.InputMediaDocument(f, caption="📊 Автообновлённый CSV-бэкап данных")
+                        media=telebot.types.InputMediaDocument(
+                            f, caption="📊 Автообновлённый CSV-бэкап данных"
+                        ),
                     )
-                    #log_chat("✅ CSV-бэкап успешно обновлён в Telegram.")
                     log_info("✅ CSV-бэкап успешно обновлён в Telegram.")
+
+                    # ☁️ Дополнительный бэкап на Google Drive
+                    upload_to_gdrive(CSV_FILE)
+                    upload_to_gdrive(DATA_FILE)
+                    upload_to_gdrive(CSV_META_FILE)
                     return
 
             except telebot.apihelper.ApiTelegramException as e:
@@ -630,28 +697,33 @@ def safe_csv_backup_to_telegram():
                 if "message to edit not found" in err or "not found" in err or "invalid message" in err:
                     log_info("♻️ Старый CSV-файл удалён или недоступен. Создаю новый...")
                 else:
-                    # Если ошибка не связана с отсутствием файла — пробрасываем дальше
-                    raise
+                    raise  # пробрасываем другие ошибки
 
             # ♻️ Создаём новый CSV, если старый отсутствует
             try:
                 f.seek(0)  # возвращаем указатель в начало файла
                 sent = bot.send_document(
-                    owner_id, f, caption="📊 Новый CSV-бэкап данных (создан повторно автоматически)"
+                    owner_id,
+                    f,
+                    caption="📊 Новый CSV-бэкап данных (создан повторно автоматически)",
                 )
                 meta["message_id"] = sent.message_id
                 if getattr(sent, "document", None) and getattr(sent.document, "file_id", None):
-                    meta["file_id_csv"] = sent.document.file_id  # 💾 сохраняем file_id для восстановления из канала
+                    meta["file_id_csv"] = sent.document.file_id  # 💾 сохраняем file_id
                 meta["timestamp"] = datetime.now(TZ).isoformat(timespec="seconds")
                 _save_csv_meta(meta)
-                #log_chat("♻️ Новый CSV-бэкап создан заново.")
                 log_info("✅ CSV-бэкап пересоздан и теперь будет обновляться автоматически.")
+
+                # ☁️ Дополнительный бэкап на Google Drive
+                upload_to_gdrive(CSV_FILE)
+                upload_to_gdrive(DATA_FILE)
+                upload_to_gdrive(CSV_META_FILE)
+
             except Exception as e2:
                 log_error(f"Ошибка при повторном создании CSV-бэкапа: {e2}")
 
     except Exception as e:
         log_error(f"safe_csv_backup_to_telegram: {e}")
-
 
 # --------------------------------------------
 # 🧩 Поиск file_id для data.json перед включением webhook
@@ -2150,6 +2222,16 @@ if __name__ == "__main__":
         restore_from_telegram_backup()
         # 🪄 Если не найдено — пробуем из канала по file_id
         restore_from_channel_backup()
+
+        # ☁️ Попытка восстановления из Google Drive, если Telegram-бэкапы недоступны
+        if not os.path.exists(DATA_FILE):
+            if download_latest_from_gdrive("restore_from_drive.csv"):
+                log_info("🔄 Преобразуем CSV из Google Drive в data.json...")
+                try:
+                    # Используем существующую функцию из кода
+                    convert_csv_to_json("restore_from_drive.csv")
+                except Exception as e:
+                    log_error(f"Ошибка при конвертации CSV из Google Drive: {e}")
 
         # 🔄 Восстановление файлов из канала через Telethon
         with tele_client:
