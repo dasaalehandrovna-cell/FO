@@ -1120,31 +1120,66 @@ def handle_document(msg):
         owner_id = int(OWNER_ID) if OWNER_ID else None
 
         # 🧾 Владелец прислал data.json — восстановление данных
-        if fname == "data.json" and owner_id and msg.chat.id == owner_id:
-            file_info = bot.get_file(doc.file_id)
-            downloaded = bot.download_file(file_info.file_path)
-            with open(DATA_FILE, "wb") as f:
-                f.write(downloaded)
+        # 🧾 Владелец прислал data.json — восстановление данных
+if fname == "data.json" and owner_id and msg.chat.id == owner_id:
+    file_info = bot.get_file(doc.file_id)
+    downloaded = bot.download_file(file_info.file_path)
+    with open(DATA_FILE, "wb") as f:
+        f.write(downloaded)
 
-            # Проверяем структуру
-            try:
-                with open(DATA_FILE, "r", encoding="utf-8") as f:
-                    restored = json.load(f)
-            except Exception as e:
-                send_info(msg.chat.id, f"⚠️ Ошибка чтения JSON: {e}")
-                return
+    # ✅ Проверяем и восстанавливаем структуру файла
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            restored = json.load(f)
+        if not isinstance(restored, dict):
+            raise ValueError("ожидается объект (dict)")
+
+        globals()["data"] = restored
+        base = default_data()
+        for k, v in base.items():
+            if k not in data:
+                data[k] = v
+
+    except Exception as e:
+        send_info(msg.chat.id, f"⚠️ Файл data.json имеет неверный формат ({e}).")
+        return
+
+    # 💾 Обновляем локальные файлы и метаданные
+    export_to_csv(data)
+    _save_csv_meta({
+        "restored_from": "manual upload",
+        "timestamp": datetime.now(TZ).isoformat(timespec="seconds")
+    })
+    send_info(msg.chat.id, "✅ Восстановление из файла data.json завершено успешно!")
+
+    # 💾 Сохраняем и синхронизируем с Drive
+    save_data(data)
+    sync_all_backups_gdrive_async(data)
+    time.sleep(1)
+
+    # 🪞 Показываем актуальное окно после восстановления
+    update_or_send_day_window(msg.chat.id, today_key(), True, True, True)
+    return
 
           # ✅ Правильное восстановление структуры
-            if isinstance(restored, dict):
-                globals()["data"] = restored
-             # гарантируем, что все обязательные ключи присутствуют
+            # --- Проверяем структуру файла ---
+        try:
+            if not isinstance(restored, dict):
+                raise ValueError("ожидается объект (dict)")
+            globals()["data"] = restored
+        # ✅ Гарантированное обновление UI после восстановления
+            save_data(data)  # чтобы обновить CSV и локальные индексы
+            sync_all_backups_gdrive_async(data)
+            time.sleep(1)
+            update_or_send_day_window(msg.chat.id, today_key(), True, True, True)
+            # гарантируем, что есть все обязательные поля
             base = default_data()
             for k, v in base.items():
                 if k not in data:
                     data[k] = v
-            else:
-                send_info(msg.chat.id, "⚠️ Файл data.json имеет неверный формат (ожидается объект).")
-                return
+        except Exception as e:
+            send_info(msg.chat.id, f"⚠️ Файл data.json имеет неверный формат ({e}).")
+            return
 
             export_to_csv(data)
             _save_csv_meta({
