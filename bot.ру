@@ -141,6 +141,40 @@ async def telethon_info():
 
 with tele_client:
     tele_client.loop.run_until_complete(telethon_info())
+#--------
+# --------------------------------------------
+# 🧾 Диагностика: показать первые 5 сообщений из приватного канала
+# --------------------------------------------
+async def debug_show_channel_messages():
+    """Выводит в лог и отправляет владельцу первые 5 сообщений из BACKUP_CHAT_ID"""
+    try:
+        chat_id = int(os.getenv("BACKUP_CHAT_ID", 0))
+        if not chat_id:
+            print("⚠️ BACKUP_CHAT_ID не задан — пропуск проверки канала.")
+            if OWNER_ID:
+                bot.send_message(int(OWNER_ID), "⚠️ BACKUP_CHAT_ID не задан — пропуск проверки канала.")
+            return
+
+        print(f"🔍 Проверяем канал {chat_id} через Telethon...")
+        messages = []
+        async for msg in tele_client.iter_messages(chat_id, limit=5):
+            sender = (await msg.get_sender()).first_name if await msg.get_sender() else "?"
+            text_part = (msg.message or "(без текста)").replace("\n", " ")[:100]
+            messages.append(f"👤 {sender}: {text_part}")
+
+        if messages:
+            log_text = "📋 Первые 5 сообщений из канала:\n\n" + "\n".join(messages)
+        else:
+            log_text = "⚠️ Канал пуст или недоступен."
+
+        print(log_text)
+        if OWNER_ID:
+            bot.send_message(int(OWNER_ID), log_text)
+    except Exception as e:
+        err = f"❌ Ошибка debug_show_channel_messages: {e}"
+        print(err)
+        if OWNER_ID:
+            bot.send_message(int(OWNER_ID), err)
 
 # --------------------------------------------
 # 🔄 Восстановление файлов через Telethon
@@ -2301,9 +2335,6 @@ if __name__ == "__main__":
         log_info("🔧 Webhook временно отключён для восстановления CSV.")
         time.sleep(10)
 
-# 🔄 Восстановление файлов при старте через Telethon
-        with tele_client:
-            tele_client.loop.run_until_complete(restore_files_via_telethon())
 
         # 🔄 Пробуем восстановить CSV из чата владельца
         restore_from_telegram_backup()
@@ -2323,6 +2354,8 @@ if __name__ == "__main__":
         # 🔄 Восстановление файлов из канала через Telethon
         with tele_client:
              tele_client.loop.run_until_complete(restore_files_via_telethon())
+        with tele_client:
+            tele_client.loop.run_until_complete(debug_show_channel_messages())
 
         log_info("🚀 Запуск приложения. Поиск актуального file_id...")
         find_file_id_message_before_webhook()
