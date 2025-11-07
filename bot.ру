@@ -28,6 +28,62 @@ from telebot import types
 from flask import Flask, request
 
 # -----------------------------
+# 🤖 Telethon клиент для восстановления из канала
+# -----------------------------
+from telethon import TelegramClient
+
+API_ID = int(os.getenv("API_ID", 12345678))
+API_HASH = os.getenv("API_HASH", "a1b2c3d4e5f6...")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+SESSION_NAME = "financebot_session"
+
+tele_client = TelegramClient(SESSION_NAME, API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+
+async def telethon_info():
+    """Проверка подключения Telethon"""
+    try:
+        me = await tele_client.get_me()
+        print(f"🤖 Telethon активен: @{me.username} (ID: {me.id})")
+    except Exception as e:
+        print(f"❌ Telethon не подключился: {e}")
+
+with tele_client:
+    tele_client.loop.run_until_complete(telethon_info())
+
+# --------------------------------------------
+# 🔄 Восстановление файлов через Telethon
+# --------------------------------------------
+async def restore_files_via_telethon():
+    """
+    Ищет и скачивает последние версии файлов (data.csv, data.json, csv_meta.json)
+    из канала BACKUP_CHAT_ID. Работает без отключения webhook.
+    """
+    if not os.getenv("BACKUP_CHAT_ID"):
+        print("⚠️ BACKUP_CHAT_ID не задан — пропуск восстановления через Telethon.")
+        return
+    chat_id = int(os.getenv("BACKUP_CHAT_ID"))
+    target_files = {"data.csv", "data.json", "csv_meta.json"}
+    found = 0
+    try:
+        async for msg in tele_client.iter_messages(chat_id, limit=100):
+            if not msg.file or not msg.file.name:
+                continue
+            fname = msg.file.name
+            if fname in target_files:
+                await msg.download_media(file=fname)
+                print(f"✅ Загружен {fname} через Telethon.")
+                found += 1
+                target_files.remove(fname)
+            if not target_files:
+                break
+        if found == 0:
+            print("⚠️ В канале нет актуальных файлов для восстановления.")
+        else:
+            print(f"📦 Всего восстановлено файлов: {found}")
+    except Exception as e:
+        print(f"❌ Ошибка restore_files_via_telethon: {e}")
+
+# -----------------------------
 # ⚙️ Конфигурация бота
 # -----------------------------
 TOKEN = os.getenv("BOT_TOKEN")
@@ -332,6 +388,23 @@ def restore_from_channel_backup():
     except Exception as e:
         log_error(f"restore_from_channel_backup (improved) error: {e}")
 
+# --------------------------------------------
+# 🔁 Восстановление CSV через Telethon (альтернатива webhook)
+# --------------------------------------------
+async def restore_csv_via_telethon():
+    """Ищет последний data.csv в канале BACKUP_CHAT_ID через Telethon и скачивает"""
+    if not BACKUP_CHAT_ID:
+        log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск восстановления через Telethon.")
+        return
+    try:
+        async for msg in tele_client.iter_messages(int(BACKUP_CHAT_ID), limit=50):
+            if msg.document and msg.file and msg.file.name.endswith(".csv"):
+                log_info(f"📦 Найден CSV: {msg.file.name}")
+                await msg.download_media(file="restore_from_telethon.csv")
+                log_info("✅ Файл скачан через Telethon.")
+                break
+    except Exception as e:
+        log_error(f"restore_csv_via_telethon: {e}")
 
 # --------------------------------------------
 # 💾 Умное сохранение данных (без спама файлами)
@@ -2077,6 +2150,10 @@ if __name__ == "__main__":
         restore_from_telegram_backup()
         # 🪄 Если не найдено — пробуем из канала по file_id
         restore_from_channel_backup()
+
+        # 🔄 Восстановление файлов из канала через Telethon
+        with tele_client:
+             tele_client.loop.run_until_complete(restore_files_via_telethon())
 
         log_info("🚀 Запуск приложения. Поиск актуального file_id...")
         find_file_id_message_before_webhook()
