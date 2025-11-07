@@ -2428,6 +2428,9 @@ if __name__ == "__main__":
              tele_client.loop.run_until_complete(restore_files_via_telethon())
         with tele_client:
             tele_client.loop.run_until_complete(debug_show_channel_messages())
+        # 🔄 Восстановление конкретного data.json из канала
+        with tele_client:
+            tele_client.loop.run_until_complete(restore_data_json_via_telethon())
 
         log_info("🚀 Запуск приложения. Поиск актуального file_id...")
         find_file_id_message_before_webhook()
