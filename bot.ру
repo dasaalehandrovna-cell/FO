@@ -33,25 +33,37 @@ from google.oauth2 import service_account
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 import io
 
+
 # -----------------------------
-# 🤖 Telethon клиент для восстановления из канала
+# 🤖 Telethon клиент через личную сессию + лог в чат
 # -----------------------------
 from telethon import TelegramClient
+import os
 
-API_ID = int(os.getenv("API_ID", 12345678))
-API_HASH = os.getenv("API_HASH", "a1b2c3d4e5f6...")
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-SESSION_NAME = "financebot_session"
+API_ID = int(os.getenv("API_ID", 38779045))
+API_HASH = os.getenv("API_HASH", "8d351ca6eb4b233fa86d898c6bdd9173")
+SESSION_NAME = "my_account"  # совпадает с файлом my_account.session
 
-tele_client = TelegramClient(SESSION_NAME, API_ID, API_HASH).start(bot_token=BOT_TOKEN)
+tele_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
 
 async def telethon_info():
-    """Проверка подключения Telethon"""
     try:
         me = await tele_client.get_me()
-        print(f"🤖 Telethon активен: @{me.username} (ID: {me.id})")
+        log_text = f"✅ Telethon подключён как <b>{me.first_name}</b> (ID: <code>{me.id}</code>)"
+        print(log_text)
+        try:
+            if OWNER_ID:
+                bot.send_message(int(OWNER_ID), log_text, parse_mode="HTML")
+        except Exception as e2:
+            print(f"⚠️ Не удалось отправить лог в чат: {e2}")
     except Exception as e:
-        print(f"❌ Telethon не подключился: {e}")
+        err_text = f"❌ Ошибка подключения Telethon: {e}"
+        print(err_text)
+        try:
+            if OWNER_ID:
+                bot.send_message(int(OWNER_ID), err_text)
+        except Exception:
+            pass
 
 with tele_client:
     tele_client.loop.run_until_complete(telethon_info())
@@ -738,6 +750,29 @@ def safe_csv_backup_to_telegram():
 
     except Exception as e:
         log_error(f"safe_csv_backup_to_telegram: {e}")
+
+# ============================================
+# ⏳ Отложенное автосохранение CSV (debounce)
+# ============================================
+import threading
+
+_debounce_timer = None
+
+def _schedule_csv_backup_debounced(delay: float = 3.0):
+    """Запускает отложенное автосохранение CSV с защитой от повторов."""
+    global _debounce_timer
+    if _debounce_timer and _debounce_timer.is_alive():
+        return  # уже запущено, ждём завершения
+
+    def _run_backup():
+        try:
+            log_info("⏳ Отложенный CSV-бэкап запущен...")
+            safe_csv_backup_to_telegram()
+        except Exception as e:
+            log_error(f"Ошибка при отложенном CSV-бэкапе: {e}")
+
+    _debounce_timer = threading.Timer(delay, _run_backup)
+    _debounce_timer.start()
 
 # --------------------------------------------
 # 🧩 Поиск file_id для data.json перед включением webhook
@@ -2283,7 +2318,7 @@ if __name__ == "__main__":
         if OWNER_ID:
             bot.send_message(int(OWNER_ID), f"✅ Бот запущен и работает! (версия {VERSION})")
     except Exception as e:
-        log_error(f"send startup msg: {e}")
+        log_error(f"send startup msg: {e}") 
 
     # 🌐 Запуск Flask-приложения
     app.run(host="0.0.0.0", port=PORT)
