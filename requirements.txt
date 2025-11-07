@@ -4,3 +4,4 @@ pytz==2024.1
 python-dotenv==1.0.1
 requests==2.32.3
 tzdata
+telethon
