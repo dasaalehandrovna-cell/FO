@@ -1134,14 +1134,16 @@ def handle_document(msg):
                 send_info(msg.chat.id, f"⚠️ Ошибка чтения JSON: {e}")
                 return
 
-            # Поддержка старой и новой структур
-            if isinstance(restored, list):
+          # ✅ Правильное восстановление структуры
+            if isinstance(restored, dict):
                 globals()["data"] = restored
-            elif isinstance(restored, dict):
-                # если старый формат (с ключом "records")
-                globals()["data"] = restored.get("records", [])
+             # гарантируем, что все обязательные ключи присутствуют
+            base = default_data()
+            for k, v in base.items():
+                if k not in data:
+                    data[k] = v
             else:
-                send_info(msg.chat.id, "⚠️ Файл data.json имеет неизвестный формат.")
+                send_info(msg.chat.id, "⚠️ Файл data.json имеет неверный формат (ожидается объект).")
                 return
 
             export_to_csv(data)
