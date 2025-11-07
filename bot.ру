@@ -109,6 +109,7 @@ except Exception:
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 LOG_FILE = "log.txt"
+CSV_META_FILE = "csv_meta.json"
 PORT = int(os.environ.get("PORT", 5000))
 VERSION = "9.8.6-fo_6+autoCSV"
 
@@ -415,26 +416,39 @@ async def restore_csv_via_telethon():
 # ============================================
 # ☁️ Google Drive — загрузка и восстановление бэкапов
 # ============================================
-GDRIVE_CREDENTIALS_FILE = "financebot-key.json"
+GDRIVE_CREDENTIALS_FILE = "service_account.json"
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "")
 
 def upload_to_gdrive(filename):
-    """📤 Загружает файл в Google Drive"""
+    """📤 Загружает указанный файл в Google Drive в твою папку (с квотой твоего аккаунта)."""
     try:
         creds = service_account.Credentials.from_service_account_file(
-            GDRIVE_CREDENTIALS_FILE, scopes=["https://www.googleapis.com/auth/drive"]
+            "service_account.json",
+            scopes=["https://www.googleapis.com/auth/drive"]
         )
         service = build("drive", "v3", credentials=creds)
+
+        folder_id = os.getenv("GDRIVE_FOLDER_ID")
+        if not folder_id:
+            log_error("upload_to_gdrive: GDRIVE_FOLDER_ID не задан")
+            return
+
         file_metadata = {
             "name": os.path.basename(filename),
-            "parents": [GDRIVE_FOLDER_ID] if GDRIVE_FOLDER_ID else None,
+            "parents": [folder_id]
         }
         media = MediaFileUpload(filename, resumable=True)
-        file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-        log_info(f"✅ Файл {filename} загружен на Google Drive (id: {file.get('id')})")
+        created = service.files().create(
+            body=file_metadata,
+            media_body=media,
+            fields="id"
+        ).execute()
+
+        log_info(f"✅ {filename} загружен в Google Drive (id: {created.get('id')})")
+
     except Exception as e:
         log_error(f"upload_to_gdrive: {e}")
-
+# ============================================
 
 def download_latest_from_gdrive(target_filename="restore_from_drive.csv"):
     """📥 Скачивает последний CSV с Google Drive"""
