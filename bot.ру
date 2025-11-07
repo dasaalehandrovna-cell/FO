@@ -1107,6 +1107,7 @@ def set_webhook():
     except Exception as e:
         log_error(f"set_webhook: {e}")
 
+
 # ====== 📄 Восстановление по присланному файлу data.json ======
 @bot.message_handler(content_types=["document"])
 def handle_document(msg):
@@ -1125,23 +1126,41 @@ def handle_document(msg):
             with open(DATA_FILE, "wb") as f:
                 f.write(downloaded)
 
-            restored = safe_json_load(DATA_FILE, [])
+            # Проверяем структуру
+            try:
+                with open(DATA_FILE, "r", encoding="utf-8") as f:
+                    restored = json.load(f)
+            except Exception as e:
+                send_info(msg.chat.id, f"⚠️ Ошибка чтения JSON: {e}")
+                return
+
+            # Поддержка старой и новой структур
             if isinstance(restored, list):
                 globals()["data"] = restored
-                export_to_csv(data)
-                _save_csv_meta({"restored_from": "manual upload", "timestamp": datetime.now(TZ).isoformat(timespec="seconds")})
-                send_info(msg.chat.id, "✅ Восстановление из файла data.json завершено успешно!")
-                # ☁️ обновим бэкап на Google Drive
-                sync_all_backups_gdrive_async(data)
+            elif isinstance(restored, dict):
+                # если старый формат (с ключом "records")
+                globals()["data"] = restored.get("records", [])
             else:
-                send_info(msg.chat.id, "⚠️ Файл data.json не содержит корректных данных.")
+                send_info(msg.chat.id, "⚠️ Файл data.json имеет неизвестный формат.")
+                return
+
+            export_to_csv(data)
+            _save_csv_meta({
+                "restored_from": "manual upload",
+                "timestamp": datetime.now(TZ).isoformat(timespec="seconds")
+            })
+            send_info(msg.chat.id, "✅ Восстановление из файла data.json завершено успешно!")
+            # ☁️ обновим бэкап на Google Drive
+            sync_all_backups_gdrive_async(data)
             return
 
         # Любой другой документ просто подтверждаем
         send_info(msg.chat.id, f"📄 Получен файл: {fname}")
+
     except Exception as e:
         log_error(f"handle_document: {e}")
         send_info(msg.chat.id, f"❌ Ошибка при обработке файла: {e}")
+
 
 # -----------------------------
 # 🚀 Точка входа
