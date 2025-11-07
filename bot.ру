@@ -158,8 +158,25 @@ async def debug_show_channel_messages():
         print(f"🔍 Проверяем канал {chat_id} через Telethon...")
         messages = []
         async for msg in tele_client.iter_messages(chat_id, limit=5):
-            sender = (await msg.get_sender()).first_name if await msg.get_sender() else "?"
+            # определяем имя отправителя или название канала
+            sender = None
+            try:
+                s = await msg.get_sender()
+                if hasattr(s, "first_name") and s.first_name:
+                    sender = s.first_name
+                elif hasattr(s, "title") and s.title:
+                    sender = s.title
+                else:
+                    sender = "?"
+            except Exception:
+                sender = "?"
+
+            # текст сообщения (первые 100 символов)
             text_part = (msg.message or "(без текста)").replace("\n", " ")[:100]
+            # если сообщение — файл, добавим имя
+            if msg.file and msg.file.name:
+                text_part += f" [📎 {msg.file.name}]"
+
             messages.append(f"👤 {sender}: {text_part}")
 
         if messages:
