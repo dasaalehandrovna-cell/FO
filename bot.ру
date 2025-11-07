@@ -34,40 +34,6 @@ from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 import io
 
 
-# -----------------------------
-# 🤖 Telethon клиент через личную сессию + лог в чат
-# -----------------------------
-from telethon import TelegramClient
-import os
-
-API_ID = int(os.getenv("API_ID", 38779045))
-API_HASH = os.getenv("API_HASH", "8d351ca6eb4b233fa86d898c6bdd9173")
-SESSION_NAME = "my_account"  # совпадает с файлом my_account.session
-
-tele_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
-
-async def telethon_info():
-    try:
-        me = await tele_client.get_me()
-        log_text = f"✅ Telethon подключён как <b>{me.first_name}</b> (ID: <code>{me.id}</code>)"
-        print(log_text)
-        try:
-            if OWNER_ID:
-                bot.send_message(int(OWNER_ID), log_text, parse_mode="HTML")
-        except Exception as e2:
-            print(f"⚠️ Не удалось отправить лог в чат: {e2}")
-    except Exception as e:
-        err_text = f"❌ Ошибка подключения Telethon: {e}"
-        print(err_text)
-        try:
-            if OWNER_ID:
-                bot.send_message(int(OWNER_ID), err_text)
-        except Exception:
-            pass
-
-with tele_client:
-    tele_client.loop.run_until_complete(telethon_info())
-
 # --------------------------------------------
 # 🔄 Восстановление файлов через Telethon
 # --------------------------------------------
@@ -108,6 +74,73 @@ TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_ID")  # ID владельца для уведомлений
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
 BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")  # 💾 приватный канал для автосохранения файлов (например: -1003244596041)
+
+# -----------------------------
+# 🤖 Telethon клиент через личную сессию + лог в чат
+# -----------------------------
+from telethon import TelegramClient
+import os
+
+API_ID = int(os.getenv("API_ID", 38779045))
+API_HASH = os.getenv("API_HASH", "8d351ca6eb4b233fa86d898c6bdd9173")
+SESSION_NAME = "my_account"  # совпадает с файлом my_account.session
+
+tele_client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+
+async def telethon_info():
+    try:
+        me = await tele_client.get_me()
+        log_text = f"✅ Telethon подключён как <b>{me.first_name}</b> (ID: <code>{me.id}</code>)"
+        print(log_text)
+        try:
+            if OWNER_ID:
+                bot.send_message(int(OWNER_ID), log_text, parse_mode="HTML")
+        except Exception as e2:
+            print(f"⚠️ Не удалось отправить лог в чат: {e2}")
+    except Exception as e:
+        err_text = f"❌ Ошибка подключения Telethon: {e}"
+        print(err_text)
+        try:
+            if OWNER_ID:
+                bot.send_message(int(OWNER_ID), err_text)
+        except Exception:
+            pass
+
+with tele_client:
+    tele_client.loop.run_until_complete(telethon_info())
+
+# --------------------------------------------
+# 🔄 Восстановление файлов через Telethon
+# --------------------------------------------
+async def restore_files_via_telethon():
+    """
+    Ищет и скачивает последние версии файлов
+    (data.csv, data.json, csv_meta.json) из канала BACKUP_CHAT_ID.
+    """
+    chat_id = int(os.getenv("BACKUP_CHAT_ID", 0))
+    if not chat_id:
+        print("⚠️ BACKUP_CHAT_ID не задан — пропуск восстановления.")
+        return
+
+    target_files = {"data.csv", "data.json", "csv_meta.json"}
+    found = 0
+    try:
+        async for msg in tele_client.iter_messages(chat_id, limit=100):
+            if not msg.file or not msg.file.name:
+                continue
+            fname = msg.file.name
+            if fname in target_files:
+                await msg.download_media(file=fname)
+                print(f"✅ Загружен {fname} через Telethon.")
+                found += 1
+                target_files.remove(fname)
+            if not target_files:
+                break
+        if found == 0:
+            print("⚠️ Файлы не найдены в канале.")
+    except Exception as e:
+        print(f"❌ Ошибка restore_files_via_telethon: {e}")
+
 # -----------------------------
 # 🔧 Настройки логики
 # -----------------------------
@@ -2266,6 +2299,10 @@ if __name__ == "__main__":
         bot.delete_webhook()
         log_info("🔧 Webhook временно отключён для восстановления CSV.")
         time.sleep(10)
+
+# 🔄 Восстановление файлов при старте через Telethon
+        with tele_client:
+            tele_client.loop.run_until_complete(restore_files_via_telethon())
 
         # 🔄 Пробуем восстановить CSV из чата владельца
         restore_from_telegram_backup()
