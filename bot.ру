@@ -628,9 +628,11 @@ def update_or_send_day_window(
 # -----------------------------
 # ➕/✏️/🗑 Операции с записями
 # -----------------------------
+# обнов. изм окна потом бекап
 def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     store = get_chat_store(chat_id)
     rid = data.get("next_id", 1)
+
     rec = {
         "id": rid,
         "short_id": f"R{rid}",
@@ -639,19 +641,35 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
         "note": note,
         "owner": owner
     }
+
     data.setdefault("records", []).append(rec)
     store.setdefault("records", []).append(rec)
     day = today_key()
     store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
+
     store["balance"] = store.get("balance", 0) + amount
     data["overall_balance"] = data.get("overall_balance", 0) + amount
     data["next_id"] = rid + 1
 
+    # 💾 Сохраняем данные
     save_data(data)
-    safe_csv_backup_to_telegram()
-    send_data_json_to_telegram()
-    send_backup_to_channel()
+
+    # 🪞 Сначала обновляем интерфейс
+    try:
+        update_or_send_day_window(chat_id, day_key=day)
+    except Exception as e:
+        log_error(f"Ошибка при обновлении окна после добавления записи: {e}")
+
+    # ☁️ Потом выполняем резервное копирование
+    try:
+        safe_csv_backup_to_telegram()
+        send_data_json_to_telegram()
+        send_backup_to_channel()
+    except Exception as e:
+        log_error(f"Ошибка при выполнении резервного копирования: {e}")
+
     return rec
+#----------------------
 
 def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str, user=None):
     store = get_chat_store(chat_id)
