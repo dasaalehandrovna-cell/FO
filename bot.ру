@@ -75,6 +75,39 @@ OWNER_ID = os.getenv("OWNER_ID")  # ID владельца для уведомл�
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
 BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")  # 💾 приватный канал для автосохранения файлов (например: -1003244596041)
 
+
+# -----------------------------
+# 🔧 Настройки логики
+# -----------------------------
+ALLOW_FILE_WRITE = True  # если False — кнопки не создают новые файлы
+# ✅ Часовой пояс с защитой от отсутствия tzdata
+try:
+    TZ = ZoneInfo((os.getenv("TZ") or "America/Argentina/Buenos_Aires").strip())
+except Exception:
+    TZ = timezone(timedelta(hours=-3))  # fallback UTC−3
+
+DATA_FILE = "data.json"
+CSV_FILE = "data.csv"
+LOG_FILE = "log.txt"
+CSV_META_FILE = "csv_meta.json"
+PORT = int(os.environ.get("PORT", 5000))
+VERSION = "9.8.6-fo_6+autoCSV"
+
+# 🔄 Настройки авто-пинга
+KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 11 * 60))
+KEEP_ALIVE_SEND_TO_OWNER = True
+
+# ✅ Поведение навигации — независимые окна по датам
+DELETE_SOURCE_WINDOW_ON_NAV = False        # исходный день не удаляем
+DELETE_TARGET_OLD_WINDOW_ON_NAV = True     # удаляем старое окно выбранной даты
+ALWAYS_CREATE_NEW_ON_NAV = True            # создаём новое сообщение
+
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не установлен!")
+
+bot = telebot.TeleBot(TOKEN, threaded=True)
+app = Flask(__name__)
+
 # -----------------------------
 # 🤖 Telethon клиент через личную сессию + лог в чат
 # -----------------------------
@@ -140,38 +173,6 @@ async def restore_files_via_telethon():
             print("⚠️ Файлы не найдены в канале.")
     except Exception as e:
         print(f"❌ Ошибка restore_files_via_telethon: {e}")
-
-# -----------------------------
-# 🔧 Настройки логики
-# -----------------------------
-ALLOW_FILE_WRITE = True  # если False — кнопки не создают новые файлы
-# ✅ Часовой пояс с защитой от отсутствия tzdata
-try:
-    TZ = ZoneInfo((os.getenv("TZ") or "America/Argentina/Buenos_Aires").strip())
-except Exception:
-    TZ = timezone(timedelta(hours=-3))  # fallback UTC−3
-
-DATA_FILE = "data.json"
-CSV_FILE = "data.csv"
-LOG_FILE = "log.txt"
-CSV_META_FILE = "csv_meta.json"
-PORT = int(os.environ.get("PORT", 5000))
-VERSION = "9.8.6-fo_6+autoCSV"
-
-# 🔄 Настройки авто-пинга
-KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 11 * 60))
-KEEP_ALIVE_SEND_TO_OWNER = True
-
-# ✅ Поведение навигации — независимые окна по датам
-DELETE_SOURCE_WINDOW_ON_NAV = False        # исходный день не удаляем
-DELETE_TARGET_OLD_WINDOW_ON_NAV = True     # удаляем старое окно выбранной даты
-ALWAYS_CREATE_NEW_ON_NAV = True            # создаём новое сообщение
-
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен!")
-
-bot = telebot.TeleBot(TOKEN, threaded=True)
-app = Flask(__name__)
 
 # -----------------------------
 # 🧾 Логирование
