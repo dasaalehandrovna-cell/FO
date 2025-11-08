@@ -32,9 +32,11 @@ from telebot import types
 from flask import Flask, request
 
 # --- Google Drive ---
+#from googleapiclient.discovery import build
+#from google.oauth2 import service_account
+from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 
 # -----------------------------
 # ⚙️ Конфигурация
@@ -59,8 +61,11 @@ KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 11 * 
 KEEP_ALIVE_SEND_TO_OWNER = True
 
 # Google Drive ENV
-SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON")  # строка JSON целиком
+#SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON")  # строка JSON целиком
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")          # имя или ID папки (опционально)
+
+SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON", "service_account.json")
+SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
@@ -258,6 +263,26 @@ def _gdrive_download(service, filename, dest_path, folder_id=None):
     while not done:
         status, done = downloader.next_chunk()
     return True
+
+#⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️
+def upload_to_gdrive(file_path):
+    try:
+        if not SERVICE_ACCOUNT_JSON or not os.path.exists(SERVICE_ACCOUNT_JSON):
+            log_error(f"upload_to_gdrive({file_path}): SERVICE_ACCOUNT_JSON не задана")
+            return
+
+        creds = service_account.Credentials.from_service_account_file(
+            SERVICE_ACCOUNT_JSON, scopes=SCOPES
+        )
+        service = build("drive", "v3", credentials=creds)
+
+        file_metadata = {"name": os.path.basename(file_path)}
+        media = MediaFileUpload(file_path, resumable=True)
+        file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
+        log_info(f"✅ Файл {file_path} загружен в Google Drive, ID: {file.get('id')}")
+    except Exception as e:
+        log_error(f"upload_to_gdrive: {e}")
+#⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️
 
 def upload_to_gdrive(path):
     try:
