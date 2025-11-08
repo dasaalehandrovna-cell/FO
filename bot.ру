@@ -1050,6 +1050,19 @@ def handle_message(msg):
     if added:
         send_info(chat_id, f"✅ Записей добавлено: {added}")
 
+def _load_csv_meta():
+    try:
+        if not os.path.exists(CSV_META_FILE):
+            return {}
+        with open(CSV_META_FILE, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if not content:
+                log_warning(f"{CSV_META_FILE} пустой, пересоздаём.")
+                return {}
+            return json.loads(content)
+    except Exception as e:
+        log_error(f"_load_json: {CSV_META_FILE}: {e}")
+        return {}
 
 # ====== ЧАСТЬ 5/5 ==========================================
 # 🌐 Webhook/Flask, планировщики, keep-alive, запуск (без каналов, только GDrive)
