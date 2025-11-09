@@ -818,13 +818,15 @@ def parse_amount_token(token: str) -> int:
     t = token.strip()
     for ch in ["^", " ", "_", "'", '"']:
         t = t.replace(ch, "")
-    t = re.sub(r"[^0-9,.\+\-]", "", t)
-    if not t:
-        return 0
+    if not t: return 0
+    if t[0] == "+": return int(t[1:])
+    if t[0] == "-": return -int(t[1:])
+    return -int(t)
+
 
     # 2️⃣ Проверяем знак
-    sign = -1 if t.startswith("-") else 1
-    t = t.lstrip("+-")
+    #sign = -1 if t.startswith("-") else 1
+    #t = t.lstrip("+-")
 
     # 3️⃣ Определяем десятичный разделитель
     if "," in t and "." in t:
