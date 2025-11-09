@@ -350,7 +350,7 @@ def sync_all_backups_gdrive_async(d):
     threading.Thread(target=_sync_all_backups_gdrive, args=(d,), daemon=True).start()
 
 # ---------- Глобальные данные ----------
-#restore_from_gdrive_if_needed()
+restore_from_gdrive_if_needed()
 data = load_data()
 
 # ---------- Хранилище по чатам ----------
