@@ -405,14 +405,16 @@ def delete_active_window_if_exists(chat_id: int, day_key: str):
         delete_message_safe(chat_id, old_id)
         clear_active_window(chat_id, day_key)
 #•••
-# ... строка ~920 вокруг send_backup_to_channel
+
+#•
+# ---------- Канальный бэкап ----------
 def send_backup_to_channel():
     """📦 Отправляет data.json, data.csv, csv_meta.json в приватный канал BACKUP_CHAT_ID."""
     if not BACKUP_CHAT_ID:
         log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск отправки в канал.")
         return
     try:
-        for fname in (DATA_FILE, CSV_FILE, CSV_META_FILE):
+        for fname in (DATA_FILE, CSV_FILE, CSV_META_FILE):  # ← теперь включает data.json
             if not os.path.exists(fname) or os.path.getsize(fname) == 0:
                 log_info(f"⚠️ Файл {fname} пустой или отсутствует — пропуск отправки")
                 continue
@@ -422,6 +424,8 @@ def send_backup_to_channel():
                     f,
                     caption=f"🧾 {fname} — авто-бэкап ({now_local().strftime('%Y-%m-%d %H:%M')})"
                 )
+
+                # Если это CSV — сохраняем file_id
                 if os.path.basename(fname) == "data.csv":
                     meta = _load_csv_meta()
                     meta["message_id"] = sent.message_id
@@ -430,10 +434,20 @@ def send_backup_to_channel():
                     meta["timestamp"] = now_local().isoformat(timespec="seconds")
                     _save_csv_meta(meta)
                     log_info("✅ CSV назначен активным канал-бэкапом.")
+
+                # Если это JSON — тоже фиксируем file_id
+                elif os.path.basename(fname) == "data.json":
+                    meta = _load_csv_meta()
+                    if getattr(sent, "document", None) and getattr(sent.document, "file_id", None):
+                        meta["file_id_datajson"] = sent.document.file_id
+                    meta["timestamp_datajson"] = now_local().isoformat(timespec="seconds")
+                    _save_csv_meta(meta)
+                    log_info("✅ data.json отправлен и зарегистрирован в мета.")
+
         log_info("📤 Бэкап в канал завершён.")
     except Exception as e:
         log_error(f"send_backup_to_channel: {e}")
-#•••
+#•
 def restore_from_telegram_owner_chat():
     """🔄 Пытается найти последний CSV в чате владельца через getUpdates (временно отключая webhook)."""
     try:
