@@ -65,7 +65,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")          # имя или ID п�
 
 SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON", "service_account.json")
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-
+BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
 
@@ -340,6 +340,9 @@ def _sync_all_backups_gdrive(d):
 
 def sync_all_backups_gdrive_async(d):
     threading.Thread(target=_sync_all_backups_gdrive, args=(d,), daemon=True).start()
+
+sync_all_backups_gdrive_async(data)
+send_backup_to_channel()   # добавь эту строку
 
 # ---------- Глобальные данные ----------
 restore_from_gdrive_if_needed()
