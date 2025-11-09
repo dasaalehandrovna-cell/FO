@@ -999,26 +999,38 @@ def handle_callback(call):
         else:
             update_or_send_day_window(chat_id, day_key)
         bot.answer_callback_query(call.id, "Баланс обновлён ✅"); return
+#••••••
+        if action == "total":
+        cid = str(chat_id)
+        chat_data = data.get("chats", {}).get(cid, {})
 
-    if action == "total":
-        all_records = data.get("records", [])
-        total = data.get("overall_balance", 0)
+        all_records = []
+        for day_records in chat_data.get("daily_records", {}).values():
+            all_records.extend(day_records)
+
         total_income = sum(r["amount"] for r in all_records if r["amount"] > 0)
         total_expense = sum(r["amount"] for r in all_records if r["amount"] < 0)
+        total_balance = sum(r["amount"] for r in all_records)
+
         text = (
-            f"📊 Общие данные за всё время:\n\n"
+            f"📊 Общие данные по этому чату:\n\n"
             f"💵 Общий приход: {fmt_num(total_income)} ARS\n"
             f"💸 Общий расход: {fmt_num(abs(total_expense))} ARS\n"
-            f"💰 Общий остаток: {fmt_num(total)} ARS"
+            f"💰 Общий остаток: {fmt_num(total_balance)} ARS"
         )
+
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
-            try: bot.edit_message_text(text, chat_id, active_id, reply_markup=build_main_keyboard(day_key, chat_id))
-            except telebot.apihelper.ApiException as e: log_error(f"total edit: {e}")
+            try:
+                bot.edit_message_text(text, chat_id, active_id,
+                                      reply_markup=build_main_keyboard(day_key, chat_id))
+            except telebot.apihelper.ApiException as e:
+                log_error(f"total edit: {e}")
         else:
             update_or_send_day_window(chat_id, day_key)
-        bot.answer_callback_query(call.id, "Общий итог 📊"); return
-
+        bot.answer_callback_query(call.id, "Общий итог 📊")
+        return
+#•••••••••••
     if action == "report":
         day_records = store.get("daily_records", {}).get(day_key, [])
         expenses = [r for r in day_records if r["amount"] < 0]
