@@ -341,9 +341,6 @@ def _sync_all_backups_gdrive(d):
 def sync_all_backups_gdrive_async(d):
     threading.Thread(target=_sync_all_backups_gdrive, args=(d,), daemon=True).start()
 
-sync_all_backups_gdrive_async(data)
-send_backup_to_channel()   # добавь эту строку
-
 # ---------- Глобальные данные ----------
 restore_from_gdrive_if_needed()
 data = load_data()
@@ -572,6 +569,8 @@ def restore_from_backup_channel():
         log_error(f"restore_from_backup_channel: {e}")
         return False
 
+sync_all_backups_gdrive_async(data)
+send_backup_to_channel()   # добавь эту строкуэ
 
 # ---------- UI клавиатуры ----------
 def build_main_keyboard(day_key: str, chat_id: int | None = None):
