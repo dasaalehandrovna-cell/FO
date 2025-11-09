@@ -350,7 +350,7 @@ def sync_all_backups_gdrive_async(d):
     threading.Thread(target=_sync_all_backups_gdrive, args=(d,), daemon=True).start()
 
 # ---------- Глобальные данные ----------
-restore_from_gdrive_if_needed()
+#restore_from_gdrive_if_needed()
 data = load_data()
 
 # ---------- Хранилище по чатам ----------
@@ -1432,7 +1432,13 @@ def handle_document(msg):
 # 🚀 Точка входа
 # -----------------------------
 if __name__ == "__main__":
-    # 1) временно снимаем webhook, чтобы дать getUpdates посмотреть историю
+    # 0️⃣ Восстановление с Google Drive — теперь выполняется один раз при старте
+    try:
+        restore_from_gdrive_if_needed()  # 📁 теперь выполняется один раз при старте
+    except Exception as e:
+        log_error(f"restore_from_gdrive_if_needed startup: {e}")
+
+    # 1️⃣ временно снимаем webhook, чтобы дать getUpdates посмотреть историю
     try:
         bot.delete_webhook()
         log_info("🔧 Webhook off для восстановлений...")
@@ -1440,7 +1446,7 @@ if __name__ == "__main__":
     except Exception as e:
         log_error(f"delete_webhook(startup): {e}")
 
-    # 2) попытки восстановления (сначала owner-чат, затем канал)
+    # 2️⃣ попытки восстановления (сначала owner-чат, затем канал)
     restored = False
     try:
         if not os.path.exists(DATA_FILE):
@@ -1450,29 +1456,31 @@ if __name__ == "__main__":
     except Exception as e:
         log_error(f"startup restore error: {e}")
 
-    # 2a) (опционально) Telethon-поиск файлов в канале, если хочешь — оберни:
+    # 2a️⃣ (опционально) Telethon-поиск файлов в канале
     try:
         if not os.path.exists(DATA_FILE) and API_ID and API_HASH:
             with tele_client:
-                # пример из твоего кода: восстановить data.json через Telethon
-                tele_client.loop.run_until_complete(restore_files_via_telethon())       # если добавишь
-                tele_client.loop.run_until_complete(restore_data_json_via_telethon())    # если добавишь
+                tele_client.loop.run_until_complete(restore_files_via_telethon())
+                tele_client.loop.run_until_complete(restore_data_json_via_telethon())
     except Exception as e:
         log_error(f"telethon restore: {e}")
 
-    # 3) после восстановлений — ставим webhook обратно
+    # 3️⃣ после восстановлений — ставим webhook обратно
     set_webhook()
 
-    # 4) планировщик и keep-alive
+    # 4️⃣ планировщик и keep-alive
     schedule_daily_window_creation()
     start_keep_alive_thread()
 
-    # 5) сообщение владельцу
+    # 5️⃣ сообщение владельцу
     try:
         if OWNER_ID:
-            bot.send_message(int(OWNER_ID),
-                f"✅ Бот запущен (версия {VERSION}). Восстановление: {'OK' if restored else 'пропущено/не требовалось'}")
+            bot.send_message(
+                int(OWNER_ID),
+                f"✅ Бот запущен (версия {VERSION}). Восстановление: {'OK' if restored else 'пропущено/не требовалось'}"
+            )
     except Exception as e:
         log_error(f"startup notify: {e}")
 
+    # 6️⃣ запуск Flask
     app.run(host="0.0.0.0", port=PORT)
