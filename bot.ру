@@ -448,6 +448,30 @@ def send_backup_to_channel():
     except Exception as e:
         log_error(f"send_backup_to_channel: {e}")
 #•
+def send_datajson_to_channel():
+    """📄 Отправляет только data.json в BACKUP_CHAT_ID (моментальный бэкап)."""
+    if not BACKUP_CHAT_ID:
+        log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск отправки data.json.")
+        return
+    try:
+        if not os.path.exists(DATA_FILE) or os.path.getsize(DATA_FILE) == 0:
+            log_info("⚠️ data.json пустой или отсутствует — пропуск отправки.")
+            return
+        with open(DATA_FILE, "rb") as f:
+            sent = bot.send_document(
+                int(BACKUP_CHAT_ID),
+                f,
+                caption=f"🧾 data.json — авто-бэкап ({now_local().strftime('%Y-%m-%d %H:%M')})"
+            )
+        meta = _load_csv_meta()
+        meta["file_id_datajson"] = getattr(sent.document, "file_id", None)
+        meta["timestamp_datajson"] = now_local().isoformat(timespec="seconds")
+        _save_csv_meta(meta)
+        log_info("✅ data.json отправлен в канал-бэкап.")
+    except Exception as e:
+        log_error(f"send_datajson_to_channel: {e}")
+#*
+
 def restore_from_telegram_owner_chat():
     """🔄 Пытается найти последний CSV в чате владельца через getUpdates (временно отключая webhook)."""
     try:
@@ -788,6 +812,7 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
         sync_all_backups_gdrive_async(data)
         send_backup_to_channel()                 # 3) потом бэкап в канал
 # (если нужно, Drive тоже остаётся, у тебя это sync_all_backups_gdrive_async(data))
+        send_backup_to_channel()
         return True, found
     return False, None
 
