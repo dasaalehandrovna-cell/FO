@@ -408,46 +408,50 @@ def delete_active_window_if_exists(chat_id: int, day_key: str):
 
 #•
 # ---------- Канальный бэкап ----------
-def send_backup_to_channel():
-    """📦 Отправляет data.json, data.csv, csv_meta.json в приватный канал BACKUP_CHAT_ID."""
+# ---------- Канальный бэкап ----------
+def send_backup_to_channel(force: bool = True):
+    """📦 Отправляет data.json, data.csv, csv_meta.json в приватный канал BACKUP_CHAT_ID.
+       Всегда пересылает data.json, даже если файл уже существует."""
     if not BACKUP_CHAT_ID:
         log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск отправки в канал.")
         return
+
     try:
-        for fname in (DATA_FILE, CSV_FILE, CSV_META_FILE):  # ← теперь включает data.json
-            if not os.path.exists(fname) or os.path.getsize(fname) == 0:
-                log_info(f"⚠️ Файл {fname} пустой или отсутствует — пропуск отправки")
+        # ✅ Добавим задержку — чтобы успело сохраниться на диск
+        time.sleep(0.8)
+
+        for fname in (DATA_FILE, CSV_FILE, CSV_META_FILE):
+            if not os.path.exists(fname):
+                log_info(f"⚠️ Файл {fname} отсутствует — пропуск.")
                 continue
-            with open(fname, "rb") as f:
-                sent = bot.send_document(
-                    int(BACKUP_CHAT_ID),
-                    f,
-                    caption=f"🧾 {fname} — авто-бэкап ({now_local().strftime('%Y-%m-%d %H:%M')})"
-                )
 
-                # Если это CSV — сохраняем file_id
-                if os.path.basename(fname) == "data.csv":
-                    meta = _load_csv_meta()
-                    meta["message_id"] = sent.message_id
-                    if getattr(sent, "document", None) and getattr(sent.document, "file_id", None):
-                        meta["file_id_csv"] = sent.document.file_id
-                    meta["timestamp"] = now_local().isoformat(timespec="seconds")
-                    _save_csv_meta(meta)
-                    log_info("✅ CSV назначен активным канал-бэкапом.")
+            # 🟢 data.json теперь отправляется ВСЕГДА
+            if fname == DATA_FILE or force or os.path.getsize(fname) > 0:
+                with open(fname, "rb") as f:
+                    sent = bot.send_document(
+                        int(BACKUP_CHAT_ID),
+                        f,
+                        caption=f"🧾 {fname} — авто-бэкап ({now_local().strftime('%Y-%m-%d %H:%M')})"
+                    )
 
-                # Если это JSON — тоже фиксируем file_id
-                elif os.path.basename(fname) == "data.json":
                     meta = _load_csv_meta()
+                    # фиксируем file_id
                     if getattr(sent, "document", None) and getattr(sent.document, "file_id", None):
-                        meta["file_id_datajson"] = sent.document.file_id
-                    meta["timestamp_datajson"] = now_local().isoformat(timespec="seconds")
+                        if fname.endswith("csv"):
+                            meta["file_id_csv"] = sent.document.file_id
+                        elif fname.endswith("json"):
+                            meta[f"file_id_{fname}"] = sent.document.file_id
+
+                    # фиксируем timestamp
+                    meta[f"timestamp_{fname}"] = now_local().isoformat(timespec="seconds")
                     _save_csv_meta(meta)
-                    log_info("✅ data.json отправлен и зарегистрирован в мета.")
+
+                    log_info(f"✅ {fname} отправлен и зарегистрирован в мета.")
 
         log_info("📤 Бэкап в канал завершён.")
     except Exception as e:
         log_error(f"send_backup_to_channel: {e}")
-#•
+#•••••••••••••••
 def send_datajson_to_channel():
     """📄 Отправляет только data.json в BACKUP_CHAT_ID (моментальный бэкап)."""
     if not BACKUP_CHAT_ID:
