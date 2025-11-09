@@ -1000,7 +1000,8 @@ def handle_callback(call):
             update_or_send_day_window(chat_id, day_key)
         bot.answer_callback_query(call.id, "Баланс обновлён ✅"); return
 #••••••
-        if action == "total":
+#23456789
+    if action == "total":
         cid = str(chat_id)
         chat_data = data.get("chats", {}).get(cid, {})
 
