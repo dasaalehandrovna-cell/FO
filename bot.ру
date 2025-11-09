@@ -350,7 +350,7 @@ def sync_all_backups_gdrive_async(d):
     threading.Thread(target=_sync_all_backups_gdrive, args=(d,), daemon=True).start()
 
 # ---------- Глобальные данные ----------
-restore_from_gdrive_if_needed()
+#restore_from_gdrive_if_needed()
 data = load_data()
 
 # ---------- Хранилище по чатам ----------
@@ -799,18 +799,47 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
 # (если нужно, Drive тоже остаётся, у тебя это sync_all_backups_gdrive_async(data))
         return True, removed
     return False, None
-
+#•••••
 # ---------- Парсер сумм ----------
 num_re = re.compile(r'(\^[+-]\^[0-9]+|\^[+-]?[0-9]+\^|[+-]?\s*\d+)')
+# ---------- Парсер сумм ----------
 def parse_amount_token(token: str) -> int:
-    t = token.strip()
-    for ch in ["^", " ", ".", ",", "-", "_", "'", '"']:
-        t = t.replace(ch, "")
-    if not t: return 0
-    if t[0] == "+": return int(t[1:])
-    if t[0] == "-": return -int(t[1:])
-    return -int(t)
+    """
+    Преобразует строку вроде "1.200", "1 200", "1,200", "1.200,50", "+1 000", "-2.500,75"
+    в целое число (округлённое значение в ARS).
+    """
+    if not token:
+        return 0
 
+    # 1. Убираем лишние пробелы и нецифровые символы, кроме , . и знака
+    t = token.strip().replace(" ", "").replace("'", "")
+    t = re.sub(r"[^0-9,.\+\-]", "", t)
+
+    # 2. Проверяем знак
+    sign = -1 if t.startswith("-") else 1
+    t = t.lstrip("+-")
+
+    # 3. Определяем, какой символ — десятичный разделитель
+    if "," in t and "." in t:
+        # если оба есть — десятичный разделитель считается тем, что идёт ПРАВЕЕ
+        if t.rfind(",") > t.rfind("."):
+            t = t.replace(".", "").replace(",", ".")
+        else:
+            t = t.replace(",", "")
+    elif "," in t:
+        # если только запятая, считаем её десятичным
+        t = t.replace(".", "").replace(",", ".")
+    else:
+        # только точки или ничего
+        t = t.replace(",", "")
+
+    # 4. Преобразуем в число (дробное → округляем)
+    try:
+        value = float(t)
+        return int(round(sign * value))
+    except Exception:
+        return 0
+#••••
 # ---------- Callback ----------
 @bot.callback_query_handler(func=lambda c: True)
 def handle_callback(call):
