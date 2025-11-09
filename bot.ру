@@ -286,12 +286,12 @@ def upload_to_gdrive(file_path):
 def upload_to_gdrive(path):
     try:
         #•••
-        if not os.path.exists(path) or os.path.getsize(path) == 0:
-            log_info(f"⚠️ upload_to_gdrive({path}): файл пустой или отсутствует — пропуск.")
-            return None
-        if not SERVICE_ACCOUNT_JSON:
-            log_error("upload_to_gdrive: SERVICE_ACCOUNT_JSON не задана")
-            return None
+     #   if not os.path.exists(path) or os.path.getsize(path) == 0:
+            #log_info(f"⚠️ upload_to_gdrive({path}): файл пустой или отсутствует — пропуск.")
+            #return None
+        #if not SERVICE_ACCOUNT_JSON:
+            #log_error("upload_to_gdrive: SERVICE_ACCOUNT_JSON не задана")
+            #return None
         #•••
         service = _drive_service()
         folder_id = _gdrive_find_folder(service, GDRIVE_FOLDER_ID) if GDRIVE_FOLDER_ID else None
