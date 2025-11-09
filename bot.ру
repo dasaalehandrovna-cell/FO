@@ -633,10 +633,12 @@ def build_main_keyboard(day_key: str, chat_id: int | None = None):
         types.InlineKeyboardButton("🔄 Обновить", callback_data=f"d:{day_key}:refresh"),
         types.InlineKeyboardButton("✏️ Редактировать", callback_data=f"d:{day_key}:edit_menu"),
     )
-    total = fmt_num(data.get("overall_balance", 0))
-    kb.add(types.InlineKeyboardButton(f"💰 Общий остаток: {total} ARS", callback_data=f"d:{day_key}:total"))
-    return kb
-
+#••••
+        # 💰 Теперь считаем остаток только по текущему чату
+    chat_data = data.get("chats", {}).get(str(chat_id), {})
+    total = chat_data.get("balance", 0)
+    kb.add(types.InlineKeyboardButton(f"💰 Общий остаток: {fmt_num(total)} ARS", callback_data=f"d:{day_key}:total"))
+#••••
 def build_edit_menu_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
@@ -1011,7 +1013,7 @@ def handle_callback(call):
 
         total_income = sum(r["amount"] for r in all_records if r["amount"] > 0)
         total_expense = sum(r["amount"] for r in all_records if r["amount"] < 0)
-        total_balance = sum(r["amount"] for r in all_records)
+        total_balance = chat_data.get("balance", 0)
 
         text = (
             f"📊 Общие данные по этому чату:\n\n"
