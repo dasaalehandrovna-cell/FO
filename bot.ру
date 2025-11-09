@@ -397,6 +397,179 @@ def delete_active_window_if_exists(chat_id: int, day_key: str):
         delete_message_safe(chat_id, old_id)
         clear_active_window(chat_id, day_key)
 
+def send_backup_to_channel():
+    """📦 Отправляет data.json, data.csv, csv_meta.json в приватный канал BACKUP_CHAT_ID."""
+    if not BACKUP_CHAT_ID:
+        log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск отправки в канал.")
+        return
+    try:
+        for fname in (DATA_FILE, CSV_FILE, CSV_META_FILE):
+            if os.path.exists(fname):
+                with open(fname, "rb") as f:
+                    sent = bot.send_document(
+                        int(BACKUP_CHAT_ID),
+                        f,
+                        caption=f"🧾 {fname} — авто-бэкап ({now_local().strftime('%Y-%m-%d %H:%M')})"
+                    )
+                    # запомним message_id CSV, чтобы потом иметь file_id
+                    if os.path.basename(fname) == "data.csv":
+                        meta = _load_csv_meta()
+                        meta["message_id"] = sent.message_id
+                        if getattr(sent, "document", None) and getattr(sent.document, "file_id", None):
+                            meta["file_id_csv"] = sent.document.file_id
+                        meta["timestamp"] = now_local().isoformat(timespec="seconds")
+                        _save_csv_meta(meta)
+                        log_info("✅ CSV назначен активным канал-бэкапом.")
+            else:
+                log_warning(f"Файл не найден и не отправлен: {fname}")
+        log_info("📤 Бэкап в канал завершён.")
+    except Exception as e:
+        log_error(f"send_backup_to_channel: {e}")
+
+def restore_from_telegram_owner_chat():
+    """🔄 Пытается найти последний CSV в чате владельца через getUpdates (временно отключая webhook)."""
+    try:
+        if not OWNER_ID:
+            log_info("⚠️ OWNER_ID не задан — пропуск owner-восстановления.")
+            return False
+
+        # временно выключаем webhook → разрешить getUpdates
+        try:
+            bot.delete_webhook()
+            log_info("🧩 Webhook отключён для восстановления из owner-чата.")
+            time.sleep(4)
+        except Exception as e:
+            log_error(f"delete_webhook(owner): {e}")
+
+        updates = bot.get_updates(limit=150)
+        file_id = None
+        for u in reversed(updates):
+            m = getattr(u, "message", None)
+            if not m or not getattr(m, "document", None):
+                continue
+            if m.chat and str(m.chat.id) == str(OWNER_ID) and m.document.file_name.lower().endswith(".csv"):
+                file_id = m.document.file_id
+                log_info(f"📦 Найден CSV в owner-чате: {m.document.file_name}")
+                break
+
+        if not file_id:
+            log_info("❕ В owner-чате CSV не найден.")
+            return False
+
+        # скачиваем и конвертируем CSV → data.json
+        file = bot.get_file(file_id)
+        content = bot.download_file(file.file_path)
+        tmp = "owner_restore.csv"
+        with open(tmp, "wb") as f:
+            f.write(content)
+
+        restored = default_data()
+        with open(tmp, "r", encoding="utf-8") as f:
+            rd = csv.DictReader(f)
+            for row in rd:
+                cid = str(row["chat_id"])
+                rec = {
+                    "id": int(row["ID"]),
+                    "short_id": row["short_id"],
+                    "timestamp": row["timestamp"],
+                    "amount": int(row["amount"]),
+                    "note": row["note"],
+                    "owner": row["owner"]
+                }
+                restored["records"].append(rec)
+                ch = restored["chats"].setdefault(cid, {"records": [], "daily_records": {}, "balance": 0})
+                ch["records"].append(rec)
+                dk = row["day_key"]
+                ch["daily_records"].setdefault(dk, []).append(rec)
+                ch["balance"] += rec["amount"]
+                restored["overall_balance"] += rec["amount"]
+                restored["next_id"] = max(restored["next_id"], rec["id"] + 1)
+
+        _save_json(DATA_FILE, restored)
+        log_info("✅ Восстановление из owner-чата завершено.")
+        return True
+
+    except Exception as e:
+        log_error(f"restore_from_telegram_owner_chat: {e}")
+        return False
+    finally:
+        # webhook вернём позже в старте (после всех восстановлений)
+        pass
+
+
+def restore_from_backup_channel():
+    """🔄 Ищет CSV в приватном канале BACKUP_CHAT_ID (через getUpdates, без Telethon)."""
+    try:
+        if not BACKUP_CHAT_ID:
+            log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск канал-восстановления.")
+            return False
+
+        meta = _load_csv_meta()
+        fid = meta.get("file_id_csv")
+
+        if not fid:
+            # временно off webhook → getUpdates из канала
+            try:
+                bot.delete_webhook()
+                log_info("🧩 Webhook отключён для восстановления из канала.")
+                time.sleep(4)
+            except Exception as e:
+                log_error(f"delete_webhook(channel): {e}")
+
+            updates = bot.get_updates(limit=200)
+            for u in reversed(updates):
+                m = getattr(u, "message", None)
+                if not m or not getattr(m, "document", None):
+                    continue
+                if m.chat and str(m.chat.id) == str(BACKUP_CHAT_ID) and m.document.file_name.lower().endswith(".csv"):
+                    fid = m.document.file_id
+                    meta["file_id_csv"] = fid
+                    _save_csv_meta(meta)
+                    log_info(f"✅ CSV найден в канале: {m.document.file_name}")
+                    break
+
+        if not fid:
+            log_info("❕ CSV в канале не найден.")
+            return False
+
+        file = bot.get_file(fid)
+        content = bot.download_file(file.file_path)
+        tmp = "channel_restore.csv"
+        with open(tmp, "wb") as f:
+            f.write(content)
+
+        # CSV → JSON
+        restored = default_data()
+        with open(tmp, "r", encoding="utf-8") as f:
+            rd = csv.DictReader(f)
+            for row in rd:
+                cid = str(row["chat_id"])
+                rec = {
+                    "id": int(row["ID"]),
+                    "short_id": row["short_id"],
+                    "timestamp": row["timestamp"],
+                    "amount": int(row["amount"]),
+                    "note": row["note"],
+                    "owner": row["owner"]
+                }
+                restored["records"].append(rec)
+                ch = restored["chats"].setdefault(cid, {"records": [], "daily_records": {}, "balance": 0})
+                ch["records"].append(rec)
+                dk = row["day_key"]
+                ch["daily_records"].setdefault(dk, []).append(rec)
+                ch["balance"] += rec["amount"]
+                restored["overall_balance"] += rec["amount"]
+                restored["next_id"] = max(restored["next_id"], rec["id"] + 1)
+
+        _save_json(DATA_FILE, restored)
+        log_info("✅ Восстановление из канала завершено.")
+        return True
+
+    except Exception as e:
+        log_error(f"restore_from_backup_channel: {e}")
+        return False
+
+
 # ---------- UI клавиатуры ----------
 def build_main_keyboard(day_key: str, chat_id: int | None = None):
     kb = types.InlineKeyboardMarkup(row_width=2)
@@ -564,6 +737,8 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     save_data(data)                          # локально
     update_or_send_day_window(chat_id, day)  # сначала UI
     sync_all_backups_gdrive_async(data)      # затем GDrive
+    send_backup_to_channel()                 # 3) потом бэкап в канал
+    # (если нужно, Drive тоже остаётся, у тебя это sync_all_backups_gdrive_async(data))
 
     return rec
 
@@ -587,6 +762,8 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
 
         save_data(data)
         sync_all_backups_gdrive_async(data)
+        send_backup_to_channel()                 # 3) потом бэкап в канал
+# (если нужно, Drive тоже остаётся, у тебя это sync_all_backups_gdrive_async(data))
         return True, found
     return False, None
 
@@ -608,6 +785,8 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
         save_data(data)
         update_or_send_day_window(chat_id, today_key())
         sync_all_backups_gdrive_async(data)
+        send_backup_to_channel()                 # 3) потом бэкап в канал
+# (если нужно, Drive тоже остаётся, у тебя это sync_all_backups_gdrive_async(data))
         return True, removed
     return False, None
 
@@ -985,6 +1164,38 @@ def cmd_csv(msg):
     sync_all_backups_gdrive_async(data)
     send_info(msg.chat.id, "📂 CSV пересобран и выгружен в Google Drive.")
 
+@bot.message_handler(commands=["csv"])
+def cmd_csv(msg):
+    export_to_csv(data)
+    # отправим CSV в текущий чат (как и раньше)
+    try:
+        with open(CSV_FILE, "rb") as f:
+            sent = bot.send_document(msg.chat.id, f, caption="📂 Полный экспорт: data.csv")
+        if OWNER_ID and msg.chat.id == int(OWNER_ID):
+            meta = _load_csv_meta()
+            meta["message_id"] = sent.message_id
+            if getattr(sent, "document", None) and getattr(sent.document, "file_id", None):
+                meta["file_id_csv"] = sent.document.file_id
+            meta["timestamp"] = now_local().isoformat(timespec="seconds")
+            _save_csv_meta(meta)
+    except Exception as e:
+        send_info(msg.chat.id, f"❌ Ошибка при отправке CSV: {e}")
+
+@bot.message_handler(commands=["json"])
+def cmd_json(msg):
+    try:
+        with open(DATA_FILE, "rb") as f:
+            sent = bot.send_document(msg.chat.id, f, caption="🧾 Текущий data.json")
+        if OWNER_ID and msg.chat.id == int(OWNER_ID):
+            meta = _load_csv_meta()
+            if getattr(sent, "document", None) and getattr(sent.document, "file_id", None):
+                meta["file_id_datajson"] = sent.document.file_id
+            meta["message_id_datajson"] = sent.message_id
+            meta["timestamp_datajson"] = now_local().isoformat(timespec="seconds")
+            _save_csv_meta(meta)
+    except Exception as e:
+        send_info(msg.chat.id, f"❌ Ошибка при отправке data.json: {e}")
+
 # ---------- Приём текстов (массовое добавление) ----------
 @bot.message_handler(func=lambda m: True)
 def handle_message(msg):
@@ -1211,16 +1422,47 @@ def handle_document(msg):
 # 🚀 Точка входа
 # -----------------------------
 if __name__ == "__main__":
-    # Webhook + фоновые задачи
+    # 1) временно снимаем webhook, чтобы дать getUpdates посмотреть историю
+    try:
+        bot.delete_webhook()
+        log_info("🔧 Webhook off для восстановлений...")
+        time.sleep(6)
+    except Exception as e:
+        log_error(f"delete_webhook(startup): {e}")
+
+    # 2) попытки восстановления (сначала owner-чат, затем канал)
+    restored = False
+    try:
+        if not os.path.exists(DATA_FILE):
+            restored = restore_from_telegram_owner_chat() or restored
+        if not os.path.exists(DATA_FILE):
+            restored = restore_from_backup_channel() or restored
+    except Exception as e:
+        log_error(f"startup restore error: {e}")
+
+    # 2a) (опционально) Telethon-поиск файлов в канале, если хочешь — оберни:
+    try:
+        if not os.path.exists(DATA_FILE) and API_ID and API_HASH:
+            with tele_client:
+                # пример из твоего кода: восстановить data.json через Telethon
+                tele_client.loop.run_until_complete(restore_files_via_telethon())       # если добавишь
+                tele_client.loop.run_until_complete(restore_data_json_via_telethon())    # если добавишь
+    except Exception as e:
+        log_error(f"telethon restore: {e}")
+
+    # 3) после восстановлений — ставим webhook обратно
     set_webhook()
+
+    # 4) планировщик и keep-alive
     schedule_daily_window_creation()
     start_keep_alive_thread()
 
+    # 5) сообщение владельцу
     try:
         if OWNER_ID:
-            bot.send_message(int(OWNER_ID), f"✅ Бот запущен и работает! (версия {VERSION})")
+            bot.send_message(int(OWNER_ID),
+                f"✅ Бот запущен (версия {VERSION}). Восстановление: {'OK' if restored else 'пропущено/не требовалось'}")
     except Exception as e:
-        log_error(f"send startup msg: {e}")
+        log_error(f"startup notify: {e}")
 
-    # Flask
     app.run(host="0.0.0.0", port=PORT)
