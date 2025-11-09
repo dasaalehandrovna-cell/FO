@@ -623,6 +623,7 @@ sync_all_backups_gdrive_async(data)
 send_backup_to_channel()   # добавь эту строкуэ
 
 # ---------- UI клавиатуры ----------
+# ---------- UI клавиатуры ----------
 def build_main_keyboard(day_key: str, chat_id: int | None = None):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
@@ -633,12 +634,20 @@ def build_main_keyboard(day_key: str, chat_id: int | None = None):
         types.InlineKeyboardButton("🔄 Обновить", callback_data=f"d:{day_key}:refresh"),
         types.InlineKeyboardButton("✏️ Редактировать", callback_data=f"d:{day_key}:edit_menu"),
     )
-#••••
-        # 💰 Теперь считаем остаток только по текущему чату
+
+    # 💰 Остаток теперь строго по текущему чату
     chat_data = data.get("chats", {}).get(str(chat_id), {})
     total = chat_data.get("balance", 0)
-    kb.add(types.InlineKeyboardButton(f"💰 Общий остаток: {fmt_num(total)} ARS", callback_data=f"d:{day_key}:total"))
+    kb.add(
+        types.InlineKeyboardButton(
+            f"💰 Общий остаток: {fmt_num(total)} ARS",
+            callback_data=f"d:{day_key}:total"
+        )
+    )
+    return kb
 #••••
+
+
 def build_edit_menu_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
