@@ -817,7 +817,7 @@ if __name__ == "__main__":
     except Exception as e:
         log_error(f"set_webhook: {e}")
 
-        try:
+    try:
         app.run(host="0.0.0.0", port=PORT)
     except Exception as e:
         log_error(f"Flask run: {e}")
