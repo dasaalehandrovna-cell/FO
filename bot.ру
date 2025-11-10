@@ -811,7 +811,7 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
         sync_all_backups_gdrive_async(data)
         send_backup_to_channel()                 # 3) потом бэкап в канал
 # (если нужно, Drive тоже остаётся, у тебя это sync_all_backups_gdrive_async(data))
-        send_backup_to_channel()
+      
         return True, found
     return False, None
 
@@ -1571,6 +1571,8 @@ def handle_document(msg):
 if __name__ == "__main__":
     try:
         restore_from_gdrive_if_needed()  # 📁 теперь выполняется один раз при старте
+        if OWNER_ID:
+            send_info(int(OWNER_ID), "✅ Данные успешно восстановлены с Google Drive.")
     except Exception as e:
         log_error(f"restore_from_gdrive_if_needed startup: {e}")
 
@@ -1592,16 +1594,7 @@ if __name__ == "__main__":
     except Exception as e:
         log_error(f"startup restore error: {e}")
 
-    # 2a) (опционально) Telethon-поиск файлов в канале, если хочешь — оберни:
-    try:
-        if not os.path.exists(DATA_FILE) and API_ID and API_HASH:
-            with tele_client:
-                # пример из твоего кода: восстановить data.json через Telethon
-                tele_client.loop.run_until_complete(restore_files_via_telethon())       # если добавишь
-                tele_client.loop.run_until_complete(restore_data_json_via_telethon())    # если добавишь
-    except Exception as e:
-        log_error(f"telethon restore: {e}")
-
+    
     # 3) после восстановлений — ставим webhook обратно
     set_webhook()
 
