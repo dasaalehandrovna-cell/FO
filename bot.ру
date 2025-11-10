@@ -96,9 +96,20 @@ def parse_date_key(s: str):
 def shift_date_key(day_key: str, days: int) -> str:
     d = parse_date_key(day_key) or now_local().date()
     return (d + timedelta(days=days)).strftime("%Y-%m-%d")
+
+#🔁 Новая функция форматирования чисел
 def fmt_num(value):
-    try: return f"{value:,.0f}".replace(",", ".")
-    except: return str(value)
+    """
+    Форматирует число с двумя десятичными и точкой как разделителем тысяч.
+    Пример:
+      1234.5  → "1.234,50"
+      -12.01  → "-12,01"
+    """
+    try:
+        s = f"{float(value):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return s
+    except Exception:
+        return str(value)
 
 # -----------------------------
 # 🔁 Авто-удвоение инфо-сообщений
@@ -796,18 +807,19 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
 # Нахождение числовых токенов в строке (если нужно вычленять из текста)
 num_re = re.compile(r'[+\-]?\s*\d(?:[\d\s\._\'",]*\d)?')
 
-def parse_amount_token(token: str) -> int:
+#🔢 Новая версия parse_amount_token()
+def parse_amount_token(token: str) -> float:
     """
     Преобразует строку вида:
       "1.200", "1 200", "1,200", "1.200,50", "+1 000", "-2.500,75", "1_000", "1'234"
-    в целое (ARS, округление по обычным правилам).
+    в число с двумя десятичными (float, округлённое значение в ARS).
     Правила знаков:
       • без знака → ОТРИЦАТЕЛЬНО (расход)
       • '-' → отрицательно
       • '+' → положительно
     """
     if not token:
-        return 0
+        return 0.0
     t = token.strip()
     for uni_minus in ('−', '–', '—'):
         t = t.replace(uni_minus, '-')
@@ -818,10 +830,11 @@ def parse_amount_token(token: str) -> int:
         t = t[m.end():]
     t = re.sub(r'[ _\'"]+', '', t)
     if not t:
-        return 0
+        return 0.0
     t = re.sub(r'[^0-9\.,]', '', t)
     if not t:
-        return 0
+        return 0.0
+
     has_dot = '.' in t
     has_comma = ',' in t
     if has_dot and has_comma:
@@ -846,17 +859,19 @@ def parse_amount_token(token: str) -> int:
                         t = left + '.' + right
             else:
                 t = left + right
+
     parts = t.split('.')
     if len(parts) > 2:
         t = ''.join(parts)
     t = re.sub(r'[^0-9\.]', '', t)
     if not t or t == '.':
-        return 0
+        return 0.0
+
     try:
         value = float(t)
-        return int(round(sign * value))
+        return round(sign * value, 2)
     except Exception:
-        return 0
+        return 0.0
 
 # ---------- Callback ----------
 @bot.callback_query_handler(func=lambda c: True)
