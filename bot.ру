@@ -38,7 +38,8 @@ TOKEN = os.getenv("BOT_TOKEN")
 OWNER_ID = os.getenv("OWNER_ID")
 APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
 PORT = int(os.getenv("PORT", 5000))
-VERSION = "9.8.6-fo_6+GDriveOnly (per-chat)"
+#VERSION = "9.8.6-fo_6+GDriveOnly (per-chat)"
+VERSION = "9.8.6-fo_6+GDriveOnly (per-chat+Forwarding)"
 
 try:
     TZ = ZoneInfo((os.getenv("TZ") or "America/Argentina/Buenos_Aires").strip())
@@ -1244,6 +1245,174 @@ def handle_callback(call):
 
     bot.answer_callback_query(call.id)
 
+# ==Добавление пересылк==========================
+# 🧩 ОТСЕК 3.5 — ПЕРЕСЫЛКА СООБЩЕНИЙ (FORWARDING SYSTEM)
+# ==========================================================
+#  • Владелец может настроить маршруты пересылки
+#  • Все пересылки анонимные (без упоминаний отправителя)
+#  • Финансовый режим включается командой /поехалиБрФо
+# ==========================================================
+
+# --- Хранилище forwarding и статусов активации ---
+def ensure_forwarding_struct():
+    data.setdefault("forward_rules", {})          # {"src_chat_id": {"dst_chat_id": "oneway"|"twoway"}}
+    data.setdefault("finance_active_chats", {})   # {"chat_id": True/False}
+    save_data(data)
+
+ensure_forwarding_struct()
+
+def is_finance_mode(chat_id: int) -> bool:
+    """Проверяет, активен ли финансовый режим в чате."""
+    return data.get("finance_active_chats", {}).get(str(chat_id), False)
+
+def set_finance_mode(chat_id: int, enabled: bool):
+    """Устанавливает или снимает финансовый режим для чата."""
+    data.setdefault("finance_active_chats", {})[str(chat_id)] = enabled
+    save_data(data)
+    save_chat_json(chat_id, data)
+    sync_all_backups_gdrive_async(data)
+
+# --- Пересылка контента между чатами ---
+def forward_message_anonymous(msg):
+    try:
+        src = str(msg.chat.id)
+        rules = data.get("forward_rules", {}).get(src, {})
+        if not rules:
+            return
+        for dst, mode in rules.items():
+            dst = int(dst)
+            # Не пересылаем обратно то же самое сообщение в цикле
+            if dst == msg.chat.id:
+                continue
+            try:
+                if msg.content_type == "text":
+                    bot.send_message(dst, msg.text)
+                elif msg.content_type == "photo":
+                    bot.send_photo(dst, msg.photo[-1].file_id, caption=(msg.caption or ""))
+                elif msg.content_type == "video":
+                    bot.send_video(dst, msg.video.file_id, caption=(msg.caption or ""))
+                elif msg.content_type == "document":
+                    bot.send_document(dst, msg.document.file_id, caption=(msg.caption or ""))
+                elif msg.content_type == "audio":
+                    bot.send_audio(dst, msg.audio.file_id, caption=(msg.caption or ""))
+                elif msg.content_type == "voice":
+                    bot.send_voice(dst, msg.voice.file_id, caption=(msg.caption or ""))
+                elif msg.content_type == "sticker":
+                    bot.send_sticker(dst, msg.sticker.file_id)
+                else:
+                    bot.copy_message(dst, msg.chat.id, msg.message_id)
+                log_info(f"🔁 Переслано {msg.content_type} {src} → {dst}")
+                # если режим двухсторонний, добавляем обратный маршрут
+                if mode == "twoway":
+                    data.setdefault("forward_rules", {}).setdefault(str(dst), {})[src] = "twoway"
+            except Exception as e:
+                log_error(f"forward_message_anonymous: {e}")
+        save_data(data)
+    except Exception as e:
+        log_error(f"forward_message_anonymous outer: {e}")
+
+# --- Обработка команды включения финансового режима ---
+@bot.message_handler(commands=["поехалиБрФо"])
+def cmd_enable_finance(msg):
+    chat_id = msg.chat.id
+    set_finance_mode(chat_id, True)
+    send_info(chat_id, "🚀 Финансовый режим активирован для этого чата.\nТеперь доступны все функции учёта.")
+
+# --- Кнопка «🔁 Пересылка» только для владельца ---
+def build_edit_menu_keyboard(day_key: str, chat_id=None):
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(
+        types.InlineKeyboardButton("📝 Редактировать запись", callback_data=f"d:{day_key}:edit_list"),
+        types.InlineKeyboardButton("📂 Общий CSV", callback_data=f"d:{day_key}:csv_all")
+    )
+    kb.row(
+        types.InlineKeyboardButton("📅 CSV за день", callback_data=f"d:{day_key}:csv_day"),
+        types.InlineKeyboardButton("⚙️ Обнулить", callback_data=f"d:{day_key}:reset")
+    )
+    # 👇 добавляем «Пересылка» только если владелец
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        kb.row(types.InlineKeyboardButton("🔁 Пересылка", callback_data=f"d:{day_key}:forward_menu"))
+    kb.row(
+        types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
+        types.InlineKeyboardButton("📆 Выбрать день", callback_data=f"d:{day_key}:pick_date")
+    )
+    kb.row(
+        types.InlineKeyboardButton("ℹ️ Инфо", callback_data=f"d:{day_key}:info"),
+        types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main")
+    )
+    return kb
+
+# --- Обработка меню пересылки ---
+@bot.callback_query_handler(func=lambda c: c.data.startswith("d:") and ":forward_menu" in c.data)
+def handle_forward_menu(call):
+    if not OWNER_ID or str(call.message.chat.id) != str(OWNER_ID):
+        bot.answer_callback_query(call.id, "⛔ Только владелец может управлять пересылкой."); return
+    try:
+        rules = data.get("forward_rules", {})
+        chats_list = list(data.get("chats", {}).keys())
+        lines = ["🔁 Настройка пересылки:\n"]
+        for src, targets in rules.items():
+            for dst, mode in targets.items():
+                lines.append(f"• {src} → {dst} ({'⇄' if mode=='twoway' else '➡️'})")
+        if not lines[1:]:
+            lines.append("Пока нет активных маршрутов.")
+        lines.append("\nВыберите чат для настройки:")
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        for cid in chats_list:
+            kb.add(types.InlineKeyboardButton(f"Чат {cid}", callback_data=f"fw_src:{cid}"))
+        kb.add(types.InlineKeyboardButton("❌ Закрыть", callback_data="fw_close"))
+        bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
+    except Exception as e:
+        log_error(f"handle_forward_menu: {e}")
+
+# --- Выбор источника и направления ---
+@bot.callback_query_handler(func=lambda c: c.data.startswith("fw_src:"))
+def handle_fw_source(call):
+    src = call.data.split(":")[1]
+    chats = [cid for cid in data.get("chats", {}).keys() if cid != src]
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for cid in chats:
+        kb.row(
+            types.InlineKeyboardButton(f"➡️ {cid}", callback_data=f"fw_set:{src}:{cid}:oneway"),
+            types.InlineKeyboardButton(f"⇄ {cid}", callback_data=f"fw_set:{src}:{cid}:twoway")
+        )
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="d::forward_menu"))
+    bot.edit_message_text(f"Источник {src}. Выберите получателя и тип пересылки:", call.message.chat.id, call.message.message_id, reply_markup=kb)
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("fw_set:"))
+def handle_fw_set(call):
+    try:
+        _, src, dst, mode = call.data.split(":")
+        data.setdefault("forward_rules", {}).setdefault(src, {})[dst] = mode
+        save_data(data)
+        sync_all_backups_gdrive_async(data)
+        bot.answer_callback_query(call.id, f"✅ Пересылка {src} → {dst} ({'⇄' if mode=='twoway' else '➡️'})")
+    except Exception as e:
+        log_error(f"handle_fw_set: {e}")
+        bot.answer_callback_query(call.id, "Ошибка при установке маршрута.")
+
+# --- Отключение пересылки ---
+@bot.message_handler(commands=["stopforward"])
+def cmd_stop_forward(msg):
+    if not OWNER_ID or str(msg.chat.id) != str(OWNER_ID):
+        send_info(msg.chat.id, "⛔ Только владелец может отключать пересылку."); return
+    parts = msg.text.strip().split()
+    if len(parts) < 2:
+        send_info(msg.chat.id, "Используйте: /stopforward <chat_id>")
+        return
+    target = parts[1]
+    removed = False
+    for src, targets in list(data.get("forward_rules", {}).items()):
+        if target in targets:
+            targets.pop(target, None); removed = True
+        if src == target:
+            data["forward_rules"].pop(src, None); removed = True
+    if removed:
+        save_data(data)
+        send_info(msg.chat.id, f"🚫 Пересылка с участием {target} отключена.")
+    else:
+        send_info(msg.chat.id, f"ℹ️ Пересылка с {target} не найдена.")
+
 #❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️
 #❇️Готов прислать ЧАСТЬ 4 / 4 — команды 
 #❇️(/start, /help, /view, /prev, /next, /balance, /report, /csv, /json), 
@@ -1256,11 +1425,16 @@ def handle_callback(call):
 @bot.message_handler(commands=["start","info"])
 def cmd_start(msg):
     chat_id = msg.chat.id
+    if not require_finance(chat_id):
+        return
     bot.send_message(chat_id, f"🚀 Бот запущен (GDriveOnly per-chat, версия {VERSION})")
     update_or_send_day_window(chat_id, today_key(), True, True, True)
 
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
+    if not is_finance_mode(msg.chat.id):
+        send_info(msg.chat.id, "ℹ️ Финансовый режим выключен. Запустите: /поехалиБрФо")
+        return
     send_info(msg.chat.id,
         "📘 Добавляйте записи так: +500 Зарплата или -150 Обед.\n\n"
         "Команды: /start /view YYYY-MM-DD /prev /next /balance /report /csv /json /reset /ping /help\n"
@@ -1275,10 +1449,16 @@ def cmd_ping(msg):
 @bot.message_handler(commands=["view"])
 def cmd_view(msg):
     chat_id = msg.chat.id
+    if not require_finance(chat_id):
+        return
     parts = (msg.text or "").split()
-    if len(parts) < 2: send_info(chat_id, "Укажите дату: /view YYYY-MM-DD"); return
+    if len(parts) < 2:
+        send_info(chat_id, "Укажите дату: /view YYYY-MM-DD")
+        return
     d = parse_date_key(parts[1])
-    if not d: send_info(chat_id, "Неверный формат даты. Пример: /view 2025-11-02"); return
+    if not d:
+        send_info(chat_id, "Неверный формат даты. Пример: /view 2025-11-02")
+        return
     dk = d.strftime("%Y-%m-%d")
     prev_day = get_current_view_day(chat_id)
     update_or_send_day_window(chat_id, dk, True, True, True, False, prev_day)
@@ -1286,6 +1466,8 @@ def cmd_view(msg):
 @bot.message_handler(commands=["prev"])
 def cmd_prev(msg):
     chat_id = msg.chat.id
+    if not require_finance(chat_id):
+        return
     current = get_current_view_day(chat_id)
     prev_key = shift_date_key(current, -1)
     update_or_send_day_window(chat_id, prev_key, True, True, True, False, current)
@@ -1293,6 +1475,8 @@ def cmd_prev(msg):
 @bot.message_handler(commands=["next"])
 def cmd_next(msg):
     chat_id = msg.chat.id
+    if not require_finance(chat_id):
+        return
     current = get_current_view_day(chat_id)
     next_key = shift_date_key(current, +1)
     update_or_send_day_window(chat_id, next_key, True, True, True, False, current)
@@ -1300,21 +1484,30 @@ def cmd_next(msg):
 @bot.message_handler(commands=["balance"])
 def cmd_balance_cmd(msg):
     chat_id = msg.chat.id
-    store = get_chat_store(chat_id); dk = today_key()
+    if not require_finance(chat_id):
+        return
+    store = get_chat_store(chat_id)
+    dk = today_key()
     day_records = store.get("daily_records", {}).get(dk, [])
     inc = sum(r["amount"] for r in day_records if r["amount"] > 0)
     exp = sum(r["amount"] for r in day_records if r["amount"] < 0)
     bal = store.get("balance", 0)
-    send_info(chat_id, f"📅 {dk}\n\n💰 Остаток: {fmt_num(bal)} ARS\n💵 Приход: {fmt_num(inc)} ARS\n💸 Расход: {fmt_num(abs(exp))} ARS")
+    send_info(chat_id,
+        f"📅 {dk}\n\n💰 Остаток: {fmt_num(bal)} ARS\n💵 Приход: {fmt_num(inc)} ARS\n💸 Расход: {fmt_num(abs(exp))} ARS"
+    )
 
 @bot.message_handler(commands=["report"])
 def cmd_report(msg):
     chat_id = msg.chat.id
-    store = get_chat_store(chat_id); dk = today_key()
+    if not require_finance(chat_id):
+        return
+    store = get_chat_store(chat_id)
+    dk = today_key()
     day_records = store.get("daily_records", {}).get(dk, [])
     expenses = [r for r in day_records if r["amount"] < 0]
     if not expenses:
-        send_info(chat_id, f"📅 {dk}\nНет расходов за сегодня.\n💸 Расход: 0 ARS"); return
+        send_info(chat_id, f"📅 {dk}\nНет расходов за сегодня.\n💸 Расход: 0 ARS")
+        return
     lines = [f"📅 {dk}", "📋 Расходы за день:"]
     for r in expenses[-30:]:
         lines.append(f"{r['short_id']}: -{fmt_num(abs(r['amount']))} — {r.get('note','')}")
@@ -1332,25 +1525,21 @@ def cmd_csv(msg):
       4) дублирует в канал BACKUP_CHAT_ID (если задан)
     """
     chat_id = msg.chat.id
+    if not require_finance(chat_id):
+        return
     try:
-        # Обновляем общий CSV (как в оригинале) + per-chat файлы
         export_to_csv(data)
         save_chat_json(chat_id, data)
         log_info("📂 CSV сформированы (общий и per-chat).")
 
-        # Отправка per-chat CSV в Drive
         per_csv = chat_csv_file(chat_id)
         if os.path.exists(per_csv):
             upload_to_gdrive(per_csv)
             log_info("☁️ per-chat CSV отправлен в Google Drive.")
-
-        # Отправка per-chat CSV пользователю
-        if os.path.exists(per_csv):
             with open(per_csv, "rb") as f:
                 sent = bot.send_document(chat_id, f, caption=f"📂 Экспорт чата: {os.path.basename(per_csv)}")
-            log_info(f"📤 per-chat CSV отправлен пользователю: {chat_id}")
+                log_info(f"📤 per-chat CSV отправлен пользователю: {chat_id}")
 
-        # Запомним file_id у владельца (как в оригинале)
         if OWNER_ID and chat_id == int(OWNER_ID):
             meta = _load_csv_meta()
             if os.path.exists(per_csv) and sent and getattr(sent, "document", None):
@@ -1360,19 +1549,14 @@ def cmd_csv(msg):
             _save_csv_meta(meta)
             log_info("💾 file_id CSV обновлён в мета.")
 
-        # Дублирование в канал (пер-чат)
         if BACKUP_CHAT_ID and os.path.exists(per_csv):
-            try:
-                with open(per_csv, "rb") as f2:
-                    bot.send_document(
-                        int(BACKUP_CHAT_ID),
-                        f2,
-                        caption=f"📂 Резервный CSV чата {chat_id} ({now_local().strftime('%Y-%m-%d %H:%M')})"
-                    )
-                log_info("📤 per-chat CSV отправлен в канал BACKUP_CHAT_ID.")
-            except Exception as e:
-                log_error(f"cmd_csv backup_channel: {e}")
-
+            with open(per_csv, "rb") as f2:
+                bot.send_document(
+                    int(BACKUP_CHAT_ID),
+                    f2,
+                    caption=f"📂 Резервный CSV чата {chat_id} ({now_local().strftime('%Y-%m-%d %H:%M')})"
+                )
+            log_info("📤 per-chat CSV отправлен в канал BACKUP_CHAT_ID.")
         send_info(chat_id, "✅ CSV выгружен на Google Drive, отправлен в чат и в канал.")
     except Exception as e:
         log_error(f"cmd_csv: {e}")
@@ -1382,6 +1566,8 @@ def cmd_csv(msg):
 def cmd_json(msg):
     """Отправляет текущий per-chat data_<chat_id>.json в чат + обновляет глобальную мету для владельца."""
     chat_id = msg.chat.id
+    if not require_finance(chat_id):
+        return
     try:
         save_chat_json(chat_id, data)
         per_json = chat_data_file(chat_id)
@@ -1403,7 +1589,8 @@ def cmd_json(msg):
 @bot.message_handler(commands=["reset"])
 def cmd_reset(msg):
     chat_id = msg.chat.id
-    # стандартный UX: просим подтвердить через кнопки
+    if not require_finance(chat_id):
+        return
     active_id = get_active_window_id(chat_id, today_key())
     if active_id:
         try:
@@ -1416,18 +1603,31 @@ def cmd_reset(msg):
             pass
     bot.send_message(chat_id, "❗ Подтвердите обнуление всех данных чата:", reply_markup=build_reset_confirm_keyboard(today_key()))
 
+#🔻изменено
 # ---------- Приём текстов (массовое добавление + ручное редактирование) ----------
 @bot.message_handler(func=lambda m: True)
 def handle_message(msg):
+    # 1) ВСЕГДА сначала пробуем анонимный форвард
+    try:
+        forward_message_anonymous(msg)
+    except Exception as e:
+        log_error(f"forward in text handler: {e}")
+
+    # 2) Если это не текст — выходим (не мешаем нетекстовым хэндлерам)
     if not msg.text:
         return
+
     chat_id = msg.chat.id
+
+    # 3) Если фин-режим не включён — не обрабатываем как фин.бот
+    if not is_finance_mode(chat_id):
+        return
+
     store = get_chat_store(chat_id)
     wait_action = store.get("edit_wait")
-
+#🔺измннено
     # режим редактирования записи
-    if wait_action and wait_action.startswith("change_value"):
-        day_key = today_key()
+    if wait_action and wait_action.startswith("change_value"):        day_key = today_key()
         if ":" in wait_action: _, day_key = wait_action.split(":", 1)
         rid = store.get("edit_target")
         if not rid:
