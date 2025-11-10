@@ -263,24 +263,8 @@ def _gdrive_download(service, filename, dest_path, folder_id=None):
         status, done = downloader.next_chunk()
     return True
 
-#⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️
-def upload_to_gdrive(file_path):
-    try:
-        if not SERVICE_ACCOUNT_JSON or not os.path.exists(SERVICE_ACCOUNT_JSON):
-            log_error(f"upload_to_gdrive({file_path}): SERVICE_ACCOUNT_JSON не задана")
-            return
+#-1-⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️⏬️
 
-        creds = service_account.Credentials.from_service_account_file(
-            SERVICE_ACCOUNT_JSON, scopes=SCOPES
-        )
-        service = build("drive", "v3", credentials=creds)
-
-        file_metadata = {"name": os.path.basename(file_path)}
-        media = MediaFileUpload(file_path, resumable=True)
-        file = service.files().create(body=file_metadata, media_body=media, fields="id").execute()
-        log_info(f"✅ Файл {file_path} загружен в Google Drive, ID: {file.get('id')}")
-    except Exception as e:
-        log_error(f"upload_to_gdrive: {e}")
 #⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️
 
 def upload_to_gdrive(path):
@@ -854,9 +838,9 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
         return True, removed
     return False, None
 #•••••
-# ---------- Парсер сумм ----------
-num_re = re.compile(r'(\^[+-]\^[0-9]+|\^[+-]?[0-9]+\^|[+-]?\s*\d+)')
-# ---------- Парсер сумм ----------
+#-2-⏬️⏬️⏬️⏬️⏬️⏬️
+import re
+
 # ---------- Универсальный парсер сумм ----------
 def parse_amount_token(token: str) -> int:
     """
@@ -865,26 +849,25 @@ def parse_amount_token(token: str) -> int:
     в целое число (округлённое значение в ARS).
     Поддерживает пробелы, точки, запятые, апострофы, дефисы и кавычки.
     """
+
     if not token:
         return 0
 
-    # 1️⃣ Базовая очистка — убираем лишние символы
+    # 1️⃣ Убираем пробелы и лишние символы
     t = token.strip()
-    for ch in ["^", " ", "_", "'", '"']:
+    for ch in ["^", " ", "_", "'", '"', "\u202f", "\u00a0"]:
         t = t.replace(ch, "")
-    if not t: return 0
-    if t[0] == "+": return int(t[1:])
-    if t[0] == "-": return -int(t[1:])
-    return -int(t)
 
+    if not t:
+        return 0
 
-    # 2️⃣ Проверяем знак
-    #sign = -1 if t.startswith("-") else 1
-    #t = t.lstrip("+-")
+    # 2️⃣ Определяем знак
+    sign = -1 if t.startswith("-") else 1
+    t = t.lstrip("+-")
 
-    # 3️⃣ Определяем десятичный разделитель
+    # 3️⃣ Преобразуем десятичные и тысячные разделители
     if "," in t and "." in t:
-        # оба разделителя: берём тот, что правее
+        # оба присутствуют — определяем, какой из них десятичный
         if t.rfind(",") > t.rfind("."):
             t = t.replace(".", "").replace(",", ".")
         else:
@@ -897,9 +880,13 @@ def parse_amount_token(token: str) -> int:
     # 4️⃣ Преобразуем в число
     try:
         value = float(t)
+        # ❗ числа без знака — считаем отрицательными
+        if token.strip()[0] not in ["+", "-"]:
+            sign = -1
         return int(round(sign * value))
     except Exception:
         return 0
+#⏫️⏫️⏫️⏫️⏫️
 #••••
 # ---------- Callback ----------
 @bot.callback_query_handler(func=lambda c: True)
