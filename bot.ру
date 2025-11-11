@@ -728,14 +728,52 @@ def build_edit_menu_keyboard(day_key: str, chat_id=None):
         types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main")
     )
     return kb
-
+#*️⃣*️⃣*️⃣*️⃣*️⃣*️⃣*️⃣
 def build_edit_keyboard_for_record(day_key: str, rid: int):
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("✏ Ввести вручную", callback_data=f"d:{day_key}:edit_manual:{rid}"))
     kb.add(types.InlineKeyboardButton("🗑 Удалить", callback_data=f"d:{day_key}:edit_delete:{rid}"))
+    # ✅ добавлено по ТЗ 8 — новая кнопка «➕ Добавить»
+    kb.add(types.InlineKeyboardButton("➕ Добавить", callback_data=f"d:{day_key}:add_new"))
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_back"))
     return kb
 
+
+# ✅ добавлено по ТЗ 8 — логика для обработки кнопки «Добавить» и автоотмена через 30 с
+@bot.callback_query_handler(func=lambda c: c.data.endswith(":add_new"))
+def handle_add_new_record(call):
+    chat_id = call.message.chat.id
+    day_key = call.data.split(":")[1]
+    bot.answer_callback_query(call.id, "Введите новую запись для этого дня:")
+    msg = bot.send_message(chat_id, f"✏ Введите сумму и комментарий для {day_key}…")
+    bot.register_next_step_handler(msg, lambda m: handle_add_entry(m, day_key))
+    # автоотмена через 30 с — возврат в основное меню
+    threading.Timer(30, lambda: safe_back_to_main(chat_id)).start()
+
+
+def handle_add_entry(msg, date_key):
+    chat_id = msg.chat.id
+    text = msg.text.strip()
+    if not text:
+        bot.send_message(chat_id, "❌ Пустая запись не добавлена.")
+        update_or_send_day_window(chat_id, date_key, True, True, True)
+        return
+    store = get_chat_store(chat_id)
+    amount_token = text.split()[0]
+    note = " ".join(text.split()[1:])
+    amount = parse_amount_token(amount_token)
+    add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+    bot.send_message(chat_id, f"✅ Запись добавлена в {date_key}.")
+    update_or_send_day_window(chat_id, date_key, True, True, True)
+
+
+def safe_back_to_main(chat_id):
+    """✅ добавлено по ТЗ 8 — возврат в основное окно при бездействии"""
+    try:
+        update_or_send_day_window(chat_id, today_key(), True, True, True)
+    except Exception as e:
+        log_error(f"safe_back_to_main: {e}")
+#⏺️⏺️⏺️⏺️⏺️⏺️⏺️⏺️⏺️⏺️
 def build_confirm_delete_keyboard(day_key: str, rid: int):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
@@ -763,6 +801,8 @@ def build_last_31days_calendar():
         if idx % 7 == 0:
             kb.row(*row); row = []
     if row: kb.row(*row)
+    # ✅ добавлено по ТЗ 9 — кнопка «Назад» в календаре
+    kb.row(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"d:{today_key()}:back_main"))
     return kb
 
 # ---------- Рендер окна дня ----------
