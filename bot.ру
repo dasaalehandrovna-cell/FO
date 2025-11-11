@@ -418,9 +418,14 @@ def chat_display_name(chat) -> str:
         return f"Chat {getattr(chat, 'id', '?')}"
 #⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️
 
+#⏬️⏬️⏬️
 # ---------- Хранилище по чатам ----------
 def get_chat_store(chat_id: int) -> dict:
     cid = str(chat_id)
+    # ✅ гарантируем наличие словаря для чата
+    if "chats" not in data:
+        data["chats"] = {}
+
     if cid not in data["chats"]:
         data["chats"][cid] = {
             "balance": 0,
@@ -432,14 +437,13 @@ def get_chat_store(chat_id: int) -> dict:
             "edit_target": None,
             "current_view_day": today_key()
         }
-        # фиксируем в общем кэше и сохраняем индивидуальные файлы чата
         save_data(data)
         save_chat_json(chat_id, data)
         sync_all_backups_gdrive_async(data)
-        store = data["chats"][cid]
-    # 💎💎💎💎💎💎💎💎💎💎================================================================
-    #   ⬇️ вставляем блок обновления данных о чате
-    # ================================================================
+
+    store = data["chats"][cid]  # 🔹 теперь переменная гарантированно существует
+
+    # 💎 обновление информации о чате
     try:
         chat_obj = bot.get_chat(chat_id)
         info = {
@@ -452,9 +456,10 @@ def get_chat_store(chat_id: int) -> dict:
         save_chat_json(chat_id, data)
     except Exception as e:
         log_error(f"get_chat_store info update: {e}")
-    # 🔺🔺🔺🔺🔺🔺🚘🔺================================================================
+
     store.setdefault("current_view_day", today_key())
     return store
+#🔺🔺🔺🔺⏫️⏫️⏫️⏫️⏫️
 
 def set_current_view_day(chat_id: int, day_key: str):
     store = get_chat_store(chat_id)
