@@ -1005,7 +1005,7 @@ def handle_forward_menu(call):
             lines.append("Пока нет активных маршрутов.")
         lines.append("\nВыберите чат для настройки:")
         kb = types.InlineKeyboardMarkup(row_width=1)
-        for cid in chats_list:
+        #for cid in chats_list:
        # ================================================================
         #   ⬇️ обновлено: отображаем имя и username чата
         # ================================================================
@@ -1017,7 +1017,7 @@ def handle_forward_menu(call):
             kb.add(types.InlineKeyboardButton(label, callback_data=f"fw_src:{cid}"))
         # ================================================================
 #✅✅✅✅✅✅✅✅✅
-        kb.add(types.InlineKeyboardButton("❌ Закрыть", callback_data="fw_close"))
+        #kb.add(types.InlineKeyboardButton("❌ Закрыть", callback_data="fw_close"))
         bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
     except Exception as e:
         log_error(f"handle_forward_menu: {e}")
