@@ -1043,7 +1043,8 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("d:") and ":forward_menu" in c.data)
 def handle_forward_menu(call):
     if not OWNER_ID or str(call.message.chat.id) != str(OWNER_ID):
-        bot.answer_callback_query(call.id, "⛔ Только владелец может управлять пересылкой."); return
+        bot.answer_callback_query(call.id, "⛔ Только владелец может управлять пересылкой."); 
+        return
     try:
         rules = data.get("forward_rules", {})
         chats_list = list(data.get("chats", {}).keys())
