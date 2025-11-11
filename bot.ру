@@ -366,10 +366,17 @@ def restore_from_gdrive_if_needed():
     if not os.path.exists(CSV_META_FILE): _save_json(CSV_META_FILE, {})
 
 # ---------- Полная синхронизация в Drive ----------
+# ---------- Полная синхронизация в Drive ----------
 def _sync_all_backups_gdrive(d):
     try:
+        if not data.get("backup_flags", {}).get("drive", True):
+            log_info("☁️ Бэкап на Google Drive отключён настройкой.")
+            return
         # 1) локально — общий кэш и общий CSV (совместимость)
         save_data(d)
+
+        # 2) meta обновим отметку синка (глобальная)
+        meta = _load_csv_meta()
 
         # 2) meta обновим отметку синка (глобальная)
         meta = _load_csv_meta()
@@ -654,6 +661,9 @@ def restore_from_backup_channel():
 # ---------- Канальный бэкап ----------
 def send_backup_to_channel(force: bool = True):
     """📦 Отправляет per-chat data_*.json, data_*.csv + базовые файлы в приватный канал BACKUP_CHAT_ID."""
+    if not data.get("backup_flags", {}).get("channel", True):
+        log_info("📤 Бэкап в канал отключён настройкой.")
+        return
     if not BACKUP_CHAT_ID:
         log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск отправки в канал.")
         return
@@ -1236,6 +1246,13 @@ def handle_callback(call):
             "/reset — обнуление чата\n"
             "/ping — проверка активности\n"
             "/help — помощь\n"
+            "/backup_gdrive_on \n"
+            "/backup_gdrive_off — \n"
+            "/backup_channel_on —  )\n"
+            "/backup_channel_off \n"
+            "/stopforward \n"
+            "/ — \n"
+
         )
         active_id = get_active_window_id(chat_id, day_key)
         if active_id:
@@ -1469,6 +1486,13 @@ def ensure_forwarding_struct():
 
 ensure_forwarding_struct()
 
+# 🆕 Флаги бэкапа
+def ensure_backup_flags():
+    data.setdefault("backup_flags", {"drive": True, "channel": True})
+    save_data(data)
+
+ensure_backup_flags()
+
 def is_finance_mode(chat_id: int) -> bool:
     """Проверяет, активен ли финансовый режим в чате."""
     return data.get("finance_active_chats", {}).get(str(chat_id), False)
@@ -1576,6 +1600,37 @@ def cmd_stop_forward(msg):
         send_info(msg.chat.id, f"🚫 Пересылка с участием {target} отключена.")
     else:
         send_info(msg.chat.id, f"ℹ️ Пересылка с {target} не найдена.")
+
+# ==========================================================
+# 🧩 Команды управления бэкапами (вкл/выкл)
+# ==========================================================
+@bot.message_handler(commands=["backup_gdrive_on", "backup_gdrive_off", "backup_channel_on", "backup_channel_off"])
+def cmd_toggle_backup(msg):
+    if not OWNER_ID or str(msg.chat.id) != str(OWNER_ID):
+        send_info(msg.chat.id, "⛔ Только владелец может управлять бэкапами.")
+        return
+
+    cmd = msg.text.strip().lower()
+    flags = data.setdefault("backup_flags", {"drive": True, "channel": True})
+
+    if "gdrive_on" in cmd:
+        flags["drive"] = True
+        send_info(msg.chat.id, "☁️ Бэкап на Google Drive включён.")
+    elif "gdrive_off" in cmd:
+        flags["drive"] = False
+        send_info(msg.chat.id, "☁️ Бэкап на Google Drive выключен.")
+    elif "channel_on" in cmd:
+        flags["channel"] = True
+        send_info(msg.chat.id, "📤 Бэкап в канал включён.")
+    elif "channel_off" in cmd:
+        flags["channel"] = False
+        send_info(msg.chat.id, "📤 Бэкап в канал выключен.")
+    else:
+        send_info(msg.chat.id, "Неизвестная команда.")
+
+    save_data(data)
+    save_chat_json(msg.chat.id, data)
+    sync_all_backups_gdrive_async(data)
 
 #❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️
 #❇️Готов прислать ЧАСТЬ 4 / 4 — команды 
