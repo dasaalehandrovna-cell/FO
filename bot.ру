@@ -1109,6 +1109,55 @@ def handle_fw_source(call):
         # 🧱🧱🧱🧱🧱🧱================================================================
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="d::forward_menu"))
     bot.edit_message_text(f"Источник {src}. Выберите получателя и тип пересылки:", call.message.chat.id, call.message.message_id, reply_markup=kb)
+
+# ================================================================
+# 🔧 УСТАНОВКА МАРШРУТА ПЕРЕСЫЛКИ
+# ================================================================
+@bot.callback_query_handler(func=lambda c: c.data.startswith("fw_set:"))
+def handle_fw_set(call):
+    """Создаёт новое правило пересылки между чатами."""
+    try:
+        _, src, dst, mode = call.data.split(":")
+        rules = data.setdefault("forward_rules", {})
+        rules.setdefault(src, {})[dst] = "twoway" if mode == "twoway" else "oneway"
+        # если двусторонний — добавляем обратный маршрут
+        if mode == "twoway":
+            rules.setdefault(dst, {})[src] = "twoway"
+        save_data(data)
+        sync_all_backups_gdrive_async(data)
+        bot.answer_callback_query(call.id, f"✅ Пересылка {src} {'⇄' if mode=='twoway' else '➡️'} {dst} сохранена")
+
+        # Обновляем меню пересылки
+        rules = data.get("forward_rules", {})
+        chats_list = list(data.get("chats", {}).keys())
+        lines = ["🔁 Текущие маршруты пересылки:\n"]
+        for s, targets in rules.items():
+            for d, m in targets.items():
+                arrow = "⇄" if m == "twoway" else "➡️"
+                lines.append(f"• {s} {arrow} {d}")
+        if not lines[1:]:
+            lines.append("Пока нет активных маршрутов.")
+        lines.append("\nВыберите чат для настройки:")
+
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        for cid in chats_list:
+            chat_info = data.get("chats", {}).get(cid, {}).get("info", {})
+            title = chat_info.get("title") or chat_info.get("name") or f"Чат {cid}"
+            username = chat_info.get("username")
+            label_parts = [f"{title}", f"🆔 {cid}"]
+            if username:
+                label_parts.append(f"@{username}")
+            label = " | ".join(label_parts)
+            kb.add(types.InlineKeyboardButton(label, callback_data=f"fw_src:{cid}"))
+
+        kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{today_key()}:forward_menu"))
+        bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
+
+    except Exception as e:
+        log_error(f"handle_fw_set: {e}")
+        bot.answer_callback_query(call.id, "❌ Ошибка при установке пересылки.")
+# ================================================================
+
 # ⬇️⬇️⬇️ ДОБАВИТЬ НИЖЕ
 # ================================================================
 @bot.callback_query_handler(func=lambda c: c.data.startswith("fw_cancel:"))
