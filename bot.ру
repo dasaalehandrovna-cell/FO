@@ -659,54 +659,51 @@ def restore_from_backup_channel():
         return False
 
 # ---------- Канальный бэкап ----------
-def send_backup_to_channel(force: bool = True):
-    """📦 Отправляет per-chat data_*.json, data_*.csv + базовые файлы в приватный канал BACKUP_CHAT_ID."""
+# ---------- Канальный бэкап ----------
+def send_backup_to_channel(chat_id: int | None = None, force: bool = True):
+    """📦 Отправляет только per-chat файлы (или общий, если chat_id=None) в приватный канал BACKUP_CHAT_ID."""
     if not data.get("backup_flags", {}).get("channel", True):
-        log_info("📤 Бэкап в канал отключён настройкой.")
-        return
+        log_info("📤 Бэкап в канал отключён настройкой."); return
     if not BACKUP_CHAT_ID:
-        log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск отправки в канал.")
-        return
+        log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск отправки в канал."); return
     try:
-        time.sleep(0.8)  # дать файлам сохраниться
+        time.sleep(0.8)
+        target_files = []
+        if chat_id:
+            # 🟢 Только файлы конкретного чата
+            target_files = [
+                chat_data_file(chat_id),
+                chat_csv_file(chat_id),
+                chat_meta_file(chat_id)
+            ]
+        else:
+            # 🟡 Общие файлы (для старта или совместимости)
+            target_files = [DATA_FILE, CSV_FILE, CSV_META_FILE]
 
-        # Сначала per-chat файлы
-        for cid in data.get("chats", {}):
-            for fpath in (chat_data_file(cid), chat_csv_file(cid), chat_meta_file(cid)):
-                if not os.path.exists(fpath):
-                    continue
-                if os.path.getsize(fpath) == 0 and not force:
-                    continue
-                with open(fpath, "rb") as f:
-                    sent = bot.send_document(
-                        int(BACKUP_CHAT_ID),
-                        f,
-                        caption=f"🧾 {os.path.basename(fpath)} — авто-бэкап ({now_local().strftime('%Y-%m-%d %H:%M')})"
-                    )
-                # глобальная мета: отметим время
-                meta = _load_csv_meta()
-                meta[f"timestamp_{os.path.basename(fpath)}"] = now_local().isoformat(timespec="seconds")
-                _save_csv_meta(meta)
-
-        # Затем базовые файлы (для совместимости)
-        for fname in (DATA_FILE, CSV_FILE, CSV_META_FILE):
-            if not os.path.exists(fname):
+        for fpath in target_files:
+            if not os.path.exists(fpath):
                 continue
-            if os.path.getsize(fname) == 0 and not force:
+            if os.path.getsize(fpath) == 0 and not force:
                 continue
-            with open(fname, "rb") as f:
+            with open(fpath, "rb") as f:
                 bot.send_document(
                     int(BACKUP_CHAT_ID),
                     f,
-                    caption=f"📦 {fname} — общий бэкап ({now_local().strftime('%Y-%m-%d %H:%M')})"
+                    caption=f"📦 {os.path.basename(fpath)} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
                 )
-        log_info("📤 Бэкап в канал завершён.")
+            # 🔁 перезаписываем мету (обновляем отметку времени)
+            meta = _load_csv_meta()
+            meta[f"timestamp_{os.path.basename(fpath)}"] = now_local().isoformat(timespec="seconds")
+            _save_csv_meta(meta)
+        log_info(f"📤 Бэкап в канал завершён ({'все файлы' if not chat_id else f'чат {chat_id}'}).")
     except Exception as e:
         log_error(f"send_backup_to_channel: {e}")
 
+
 # первичная асинхронная синхронизация и стартовый бэкап в канал (опционально)
 sync_all_backups_gdrive_async(data)
-send_backup_to_channel()
+send_backup_to_channel(chat_id)
+#send_backup_to_channel()
 
 # ---------- UI клавиатуры ----------
 def build_main_keyboard(day_key: str, chat_id: int | None = None):
@@ -991,7 +988,7 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     save_chat_json(chat_id, data)            # ➕ пер-чатовые файлы
     update_or_send_day_window(chat_id, day)  # сначала UI
     sync_all_backups_gdrive_async(data)      # затем GDrive
-    send_backup_to_channel()                 # потом канал
+    send_backup_to_channel(chat_id)                 # потом канал
     return rec
 
 def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str, user=None):
@@ -1015,7 +1012,7 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
         save_data(data)
         save_chat_json(chat_id, data)        # ➕ пер-чатовые файлы
         sync_all_backups_gdrive_async(data)
-        send_backup_to_channel()
+        send_backup_to_channel(chat_id)
         return True, found
     return False, None
 
@@ -1038,7 +1035,7 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
         save_chat_json(chat_id, data)        # ➕ пер-чатовые файлы
         update_or_send_day_window(chat_id, today_key())
         sync_all_backups_gdrive_async(data)
-        send_backup_to_channel()
+        send_backup_to_channel(chat_id)
         return True, removed
     return False, None
 
@@ -1505,6 +1502,7 @@ def handle_callback(call):
             data["records"] = [r for r in data.get("records", []) if str(r.get("owner")) != cid]
             data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
             save_data(data); save_chat_json(chat_id, data); sync_all_backups_gdrive_async(data)
+            send_backup_to_channel(chat_id)
             text = "⚙️ Все данные этого чата успешно обнулены."
             active_id = get_active_window_id(chat_id, day_key)
             if active_id:
