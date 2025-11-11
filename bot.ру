@@ -395,6 +395,29 @@ def sync_all_backups_gdrive_async(d):
 restore_from_gdrive_if_needed()
 data = load_data()
 
+# ---------- Хранилище по чатам ---------
+#⏬️⏬️⏬️⏬️⏬️⏬️⏬️📃📃📃📃📃💧
+# ================================================================
+#   ⬇️  вставляем ниже новую функцию chat_display_name
+# ================================================================
+def chat_display_name(chat) -> str:
+    """Возвращает удобное имя для кнопок и логов."""
+    try:
+        if not chat:
+            return "Неизвестный чат"
+        if chat.type == "private":
+            name = chat.first_name or ""
+            if chat.last_name:
+                name += f" {chat.last_name}"
+            return name.strip() or f"Private {chat.id}"
+        title = chat.title or f"Chat {chat.id}"
+        if chat.username:
+            return f"{title} @{chat.username}"
+        return title
+    except Exception:
+        return f"Chat {getattr(chat, 'id', '?')}"
+#⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️
+
 # ---------- Хранилище по чатам ----------
 def get_chat_store(chat_id: int) -> dict:
     cid = str(chat_id)
@@ -413,7 +436,23 @@ def get_chat_store(chat_id: int) -> dict:
         save_data(data)
         save_chat_json(chat_id, data)
         sync_all_backups_gdrive_async(data)
-    store = data["chats"][cid]
+        store = data["chats"][cid]
+    # 💎💎💎💎💎💎💎💎💎💎================================================================
+    #   ⬇️ вставляем блок обновления данных о чате
+    # ================================================================
+    try:
+        chat_obj = bot.get_chat(chat_id)
+        info = {
+            "title": getattr(chat_obj, "title", None),
+            "username": getattr(chat_obj, "username", None),
+            "type": getattr(chat_obj, "type", None),
+            "name": (getattr(chat_obj, "first_name", "") + " " + getattr(chat_obj, "last_name", "")).strip(),
+        }
+        store["info"] = info
+        save_chat_json(chat_id, data)
+    except Exception as e:
+        log_error(f"get_chat_store info update: {e}")
+    # 🔺🔺🔺🔺🔺🔺🚘🔺================================================================
     store.setdefault("current_view_day", today_key())
     return store
 
@@ -967,7 +1006,17 @@ def handle_forward_menu(call):
         lines.append("\nВыберите чат для настройки:")
         kb = types.InlineKeyboardMarkup(row_width=1)
         for cid in chats_list:
-            kb.add(types.InlineKeyboardButton(f"Чат {cid}", callback_data=f"fw_src:{cid}"))
+       # ================================================================
+        #   ⬇️ обновлено: отображаем имя и username чата
+        # ================================================================
+        for cid in chats_list:
+            chat_info = data.get("chats", {}).get(cid, {}).get("info", {})
+            label = chat_info.get("title") or chat_info.get("name") or f"Чат {cid}"
+            if chat_info.get("username"):
+                label += f" @{chat_info['username']}"
+            kb.add(types.InlineKeyboardButton(label, callback_data=f"fw_src:{cid}"))
+        # ================================================================
+#✅✅✅✅✅✅✅✅✅
         kb.add(types.InlineKeyboardButton("❌ Закрыть", callback_data="fw_close"))
         bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
     except Exception as e:
@@ -979,11 +1028,19 @@ def handle_fw_source(call):
     src = call.data.split(":")[1]
     chats = [cid for cid in data.get("chats", {}).keys() if cid != src]
     kb = types.InlineKeyboardMarkup(row_width=2)
+    # 🚗🚗🚗🚗🚗🚗🚗================================================================
+    #   ⬇️ обновлено: используем имя и username вместо голого ID
+    # ================================================================
     for cid in chats:
+        chat_info = data.get("chats", {}).get(cid, {}).get("info", {})
+        label = chat_info.get("title") or chat_info.get("name") or f"{cid}"
+        if chat_info.get("username"):
+            label += f" @{chat_info['username']}"
         kb.row(
-            types.InlineKeyboardButton(f"➡️ {cid}", callback_data=f"fw_set:{src}:{cid}:oneway"),
-            types.InlineKeyboardButton(f"⇄ {cid}", callback_data=f"fw_set:{src}:{cid}:twoway")
+            types.InlineKeyboardButton(f"➡️ {label}", callback_data=f"fw_set:{src}:{cid}:oneway"),
+            types.InlineKeyboardButton(f"⇄ {label}", callback_data=f"fw_set:{src}:{cid}:twoway")
         )
+    # 🧱🧱🧱🧱🧱🧱================================================================
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="d::forward_menu"))
     bot.edit_message_text(f"Источник {src}. Выберите получателя и тип пересылки:", call.message.chat.id, call.message.message_id, reply_markup=kb)
 
