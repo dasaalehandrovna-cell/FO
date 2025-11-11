@@ -1627,12 +1627,17 @@ def handle_message(msg):
     wait_action = store.get("edit_wait")
 #🔺измннено
     # режим редактирования записи
-    if wait_action and wait_action.startswith("change_value"):        day_key = today_key()
-        if ":" in wait_action: _, day_key = wait_action.split(":", 1)
+    if wait_action and wait_action.startswith("change_value"):
+        day_key = today_key()
+        if ":" in wait_action:
+            _, day_key = wait_action.split(":", 1)
         rid = store.get("edit_target")
         if not rid:
-            store["edit_wait"] = None; store["edit_target"] = None
-            save_data(data); save_chat_json(chat_id, data); sync_all_backups_gdrive_async(data)
+            store["edit_wait"] = None
+            store["edit_target"] = None
+            save_data(data)
+            save_chat_json(chat_id, data)
+            sync_all_backups_gdrive_async(data)
             return
         parts = (msg.text or "").strip().split(" ", 1)
         try:
