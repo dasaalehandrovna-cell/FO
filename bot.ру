@@ -1775,52 +1775,6 @@ def cmd_reset(msg):
         except Exception:
             pass
     bot.send_message(chat_id, "❗ Подтвердите обнуление всех данных чата:", reply_markup=build_reset_confirm_keyboard(today_key()))
-# ==========================================================
-# 🧩 ДОПОЛНИТЕЛЬНЫЙ БЭКАП ВСЕГО КОНТЕНТА В BACKUP_CHAT_ID
-# ==========================================================
-@bot.message_handler(content_types=[
-    "text", "photo", "video", "document", "audio",
-    "voice", "sticker", "animation", "video_note", "location", "contact"
-])
-def backup_all_incoming_content(msg):
-    """📦 Дублирует все входящие сообщения в канал BACKUP_CHAT_ID (анонимно)."""
-    try:
-        if not BACKUP_CHAT_ID:
-            return
-        src = msg.chat.id
-        dst = int(BACKUP_CHAT_ID)
-
-        # ⚠️ Не пересылать обратно в сам канал
-        if src == dst:
-            return
-
-        caption = f"🧩 Лог из чата {src} ({msg.content_type})"
-        if msg.content_type == "text":
-            bot.send_message(dst, f"{caption}:\n{msg.text}")
-        elif msg.content_type == "photo":
-            bot.send_photo(dst, msg.photo[-1].file_id, caption=caption)
-        elif msg.content_type == "video":
-            bot.send_video(dst, msg.video.file_id, caption=caption)
-        elif msg.content_type == "document":
-            bot.send_document(dst, msg.document.file_id, caption=caption)
-        elif msg.content_type == "audio":
-            bot.send_audio(dst, msg.audio.file_id, caption=caption)
-        elif msg.content_type == "voice":
-            bot.send_voice(dst, msg.voice.file_id, caption=caption)
-        elif msg.content_type == "sticker":
-            bot.send_sticker(dst, msg.sticker.file_id)
-        elif msg.content_type == "animation":
-            bot.send_animation(dst, msg.animation.file_id, caption=caption)
-        elif msg.content_type == "video_note":
-            bot.send_video_note(dst, msg.video_note.file_id)
-        elif msg.content_type == "location":
-            bot.send_message(dst, f"{caption} 🌍 {msg.location.latitude}, {msg.location.longitude}")
-        elif msg.content_type == "contact":
-            c = msg.contact
-            bot.send_message(dst, f"{caption} 📞 {c.first_name} {c.last_name or ''} — {c.phone_number}")
-        log_info(f"📤 Контент {msg.content_type} из {src} → BACKUP_CHAT_ID ({dst})")
-    except Exception as e:
-        log_error(f"backup_all_incoming_content: {e}")
 
 #🔻изменено
 # ---------- Приём текстов (массовое добавление + ручное редактирование) ----------
@@ -2117,5 +2071,4 @@ if __name__ == "__main__":
 
     app.run(host="0.0.0.0", port=PORT)
 
-#ТЗ:
-#Где прописать так, что бы владелец бота в меню «🔁 Настройка пересылки» всегда видел чаты где бот состоит, в независимости от его запуска, и что б мог регулировать пересылку. Т.е что бы было достаточно находиться в чате 
+#ТЗ:Как прописать чтобы бот дополнительно бекапил  все возможные данные присланные на BACKUP_CHAT_ID
