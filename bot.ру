@@ -153,7 +153,7 @@ def _save_json(path, payload):
 def default_data():
     return {
         "overall_balance": 0,
-        "records": [],
+       # "records": [],
         "chats": {},
         "active_messages": {},
         "next_id": 1
@@ -961,7 +961,7 @@ def update_or_send_day_window(
 # ---------- Операции ----------
 def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     store = get_chat_store(chat_id)
-    rid = data.get("next_id", 1)
+    rid = store.get("next_id", 1)  # 🔹 локальный ID только для этого чата
     rec = {
         "id": rid,
         "short_id": f"R{rid}",
@@ -971,7 +971,7 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
         "owner": owner
     }
 
-    data.setdefault("records", []).append(rec)
+   #data.setdefault("records", []).append(rec)
     store.setdefault("records", []).append(rec)
     day = today_key()
     store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
@@ -1002,8 +1002,8 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
                 if r["id"] == rid:
                     r.update(found)
         store["balance"] = sum(x["amount"] for x in store.get("records", []))
-        data["records"] = [x if x["id"] != rid else found for x in data.get("records", [])]
-        data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
+        #data["records"] = [x if x["id"] != rid else found for x in data.get("records", [])]
+        #data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
 
         save_data(data)
         save_chat_json(chat_id, data)        # ➕ пер-чатовые файлы
