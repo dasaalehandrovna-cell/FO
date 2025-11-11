@@ -702,8 +702,8 @@ def send_backup_to_channel(chat_id: int | None = None, force: bool = True):
 
 # первичная асинхронная синхронизация и стартовый бэкап в канал (опционально)
 sync_all_backups_gdrive_async(data)
-send_backup_to_channel(chat_id)
-#send_backup_to_channel()
+#send_backup_to_channel(chat_id)
+send_backup_to_channel()
 
 # ---------- UI клавиатуры ----------
 def build_main_keyboard(day_key: str, chat_id: int | None = None):
