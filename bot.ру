@@ -946,6 +946,61 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
         return True, removed
     return False, None
 
+#❎❎❎❎❎обработчик пересылки✅✅✅
+# ==========================================================
+# 🧩 ПЕРЕСЫЛКА СООБЩЕНИЙ — CALLBACK ОБРАБОТЧИКИ
+# ==========================================================
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("d:") and ":forward_menu" in c.data)
+def handle_forward_menu(call):
+    if not OWNER_ID or str(call.message.chat.id) != str(OWNER_ID):
+        bot.answer_callback_query(call.id, "⛔ Только владелец может управлять пересылкой."); return
+    try:
+        rules = data.get("forward_rules", {})
+        chats_list = list(data.get("chats", {}).keys())
+        lines = ["🔁 Настройка пересылки:\n"]
+        for src, targets in rules.items():
+            for dst, mode in targets.items():
+                lines.append(f"• {src} → {dst} ({'⇄' if mode=='twoway' else '➡️'})")
+        if not lines[1:]:
+            lines.append("Пока нет активных маршрутов.")
+        lines.append("\nВыберите чат для настройки:")
+        kb = types.InlineKeyboardMarkup(row_width=1)
+        for cid in chats_list:
+            kb.add(types.InlineKeyboardButton(f"Чат {cid}", callback_data=f"fw_src:{cid}"))
+        kb.add(types.InlineKeyboardButton("❌ Закрыть", callback_data="fw_close"))
+        bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
+    except Exception as e:
+        log_error(f"handle_forward_menu: {e}")
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("fw_src:"))
+def handle_fw_source(call):
+    src = call.data.split(":")[1]
+    chats = [cid for cid in data.get("chats", {}).keys() if cid != src]
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    for cid in chats:
+        kb.row(
+            types.InlineKeyboardButton(f"➡️ {cid}", callback_data=f"fw_set:{src}:{cid}:oneway"),
+            types.InlineKeyboardButton(f"⇄ {cid}", callback_data=f"fw_set:{src}:{cid}:twoway")
+        )
+    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="d::forward_menu"))
+    bot.edit_message_text(f"Источник {src}. Выберите получателя и тип пересылки:", call.message.chat.id, call.message.message_id, reply_markup=kb)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("fw_set:"))
+def handle_fw_set(call):
+    try:
+        _, src, dst, mode = call.data.split(":")
+        data.setdefault("forward_rules", {}).setdefault(src, {})[dst] = mode
+        save_data(data)
+        sync_all_backups_gdrive_async(data)
+        bot.answer_callback_query(call.id, f"✅ Пересылка {src} → {dst} ({'⇄' if mode=='twoway' else '➡️'})")
+    except Exception as e:
+        log_error(f"handle_fw_set: {e}")
+        bot.answer_callback_query(call.id, "Ошибка при установке маршрута.")
+#❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️✅✅✅✅✅✅✅
+
 # ---------- Callback ----------
 @bot.callback_query_handler(func=lambda c: True)
 def handle_callback(call):
@@ -1343,53 +1398,9 @@ def build_edit_menu_keyboard(day_key: str, chat_id=None):
     return kb
 
 # --- Обработка меню пересылки ---
-@bot.callback_query_handler(func=lambda c: c.data.startswith("d:") and ":forward_menu" in c.data)
-def handle_forward_menu(call):
-    if not OWNER_ID or str(call.message.chat.id) != str(OWNER_ID):
-        bot.answer_callback_query(call.id, "⛔ Только владелец может управлять пересылкой."); return
-    try:
-        rules = data.get("forward_rules", {})
-        chats_list = list(data.get("chats", {}).keys())
-        lines = ["🔁 Настройка пересылки:\n"]
-        for src, targets in rules.items():
-            for dst, mode in targets.items():
-                lines.append(f"• {src} → {dst} ({'⇄' if mode=='twoway' else '➡️'})")
-        if not lines[1:]:
-            lines.append("Пока нет активных маршрутов.")
-        lines.append("\nВыберите чат для настройки:")
-        kb = types.InlineKeyboardMarkup(row_width=1)
-        for cid in chats_list:
-            kb.add(types.InlineKeyboardButton(f"Чат {cid}", callback_data=f"fw_src:{cid}"))
-        kb.add(types.InlineKeyboardButton("❌ Закрыть", callback_data="fw_close"))
-        bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
-    except Exception as e:
-        log_error(f"handle_forward_menu: {e}")
-
+#🔴перенёс ввше
 # --- Выбор источника и направления ---
-@bot.callback_query_handler(func=lambda c: c.data.startswith("fw_src:"))
-def handle_fw_source(call):
-    src = call.data.split(":")[1]
-    chats = [cid for cid in data.get("chats", {}).keys() if cid != src]
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    for cid in chats:
-        kb.row(
-            types.InlineKeyboardButton(f"➡️ {cid}", callback_data=f"fw_set:{src}:{cid}:oneway"),
-            types.InlineKeyboardButton(f"⇄ {cid}", callback_data=f"fw_set:{src}:{cid}:twoway")
-        )
-    kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="d::forward_menu"))
-    bot.edit_message_text(f"Источник {src}. Выберите получателя и тип пересылки:", call.message.chat.id, call.message.message_id, reply_markup=kb)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("fw_set:"))
-def handle_fw_set(call):
-    try:
-        _, src, dst, mode = call.data.split(":")
-        data.setdefault("forward_rules", {}).setdefault(src, {})[dst] = mode
-        save_data(data)
-        sync_all_backups_gdrive_async(data)
-        bot.answer_callback_query(call.id, f"✅ Пересылка {src} → {dst} ({'⇄' if mode=='twoway' else '➡️'})")
-    except Exception as e:
-        log_error(f"handle_fw_set: {e}")
-        bot.answer_callback_query(call.id, "Ошибка при установке маршрута.")
+#🔴перенёс ввше
 
 # --- Отключение пересылки ---
 @bot.message_handler(commands=["stopforward"])
