@@ -1043,15 +1043,17 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("d:") and ":forward_menu" in c.data)
 def handle_forward_menu(call):
     if not OWNER_ID or str(call.message.chat.id) != str(OWNER_ID):
-        bot.answer_callback_query(call.id, "⛔ Только владелец может управлять пересылкой."); 
+        bot.answer_callback_query(call.id, "⛔ Только владелец может управлять пересылкой.")
         return
     try:
         rules = data.get("forward_rules", {})
         chats_list = list(data.get("chats", {}).keys())
         lines = ["🔁 Настройка пересылки:\n"]
-                for src, targets in rules.items():
+        kb = types.InlineKeyboardMarkup(row_width=1)
+
+        # ✅ правильный отступ здесь ↓↓↓
+        for src, targets in rules.items():
             for dst, mode in targets.items():
-                # 🆕 добавлено отображение кнопок удаления для каждого маршрута
                 arrow = "⇄" if mode == "twoway" else "➡️"
                 lines.append(f"• {src} {arrow} {dst}")
                 kb.add(
@@ -1065,25 +1067,13 @@ def handle_forward_menu(call):
             lines.append("Пока нет активных маршрутов.")
 
         lines.append("\nВыберите чат для настройки:")
-        kb = types.InlineKeyboardMarkup(row_width=1)
-
-        
-       # ================================================================
-        #   ⬇️ обновлено: отображаем имя и username чата
-        # ================================================================
         for cid in chats_list:
             chat_info = data.get("chats", {}).get(cid, {}).get("info", {})
-            title = chat_info.get("title") or chat_info.get("name") or f"Безымянный чат"
-            username = chat_info.get("username")
-            label_parts = [f"💬 {title}", f"🆔 {cid}"]
-            if username:
-                label_parts.append(f"@{username}")
-                        label = " | ".join(label_parts)
+            label = chat_info.get("title") or chat_info.get("name") or f"Чат {cid}"
+            if chat_info.get("username"):
+                label += f" @{chat_info['username']}"
             kb.add(types.InlineKeyboardButton(label, callback_data=f"fw_src:{cid}"))
-        # ================================================================
-        # ⬇️ ДОБАВИТЬ НИЖЕ
-        kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{today_key()}:edit_menu"))
-        # ================================================================
+
         bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
     except Exception as e:
         log_error(f"handle_forward_menu: {e}")
