@@ -1,5 +1,5 @@
 # 1695/испр числа/ Каждый чат ведёт собственные файлы:
-# ======================================
+# ==========================================================
 # 🧭 Описание:
 #  • Полный UI как в 9.8.6-fo_6: окно дня, кнопки, меню редактирования,
 #    навигация /prev /next /view, календарь 31 день, отчёты, пересчёты
@@ -153,7 +153,7 @@ def _save_json(path, payload):
 def default_data():
     return {
         "overall_balance": 0,
-       # "records": [],
+        "records": [],
         "chats": {},
         "active_messages": {},
         "next_id": 1
@@ -202,11 +202,6 @@ def save_chat_json(chat_id: int, data):
         chat_path_json = chat_data_file(chat_id)
         chat_path_csv = chat_csv_file(chat_id)
         chat_path_meta = chat_meta_file(chat_id)
-
-        # 🆕 если файлов ещё нет — создаём пустые заглушки
-        for p in (chat_path_json, chat_path_csv, chat_path_meta):
-            if not os.path.exists(p):
-                open(p, "a", encoding="utf-8").close()
 
         # JSON
         payload = {
@@ -400,37 +395,9 @@ def sync_all_backups_gdrive_async(d):
 restore_from_gdrive_if_needed()
 data = load_data()
 
-# ---------- Хранилище по чатам ---------
-#⏬️⏬️⏬️⏬️⏬️⏬️⏬️📃📃📃📃📃💧
-# ================================================================
-#   ⬇️  вставляем ниже новую функцию chat_display_name
-# ================================================================
-def chat_display_name(chat) -> str:
-    """Возвращает удобное имя для кнопок и логов."""
-    try:
-        if not chat:
-            return "Неизвестный чат"
-        if chat.type == "private":
-            name = chat.first_name or ""
-            if chat.last_name:
-                name += f" {chat.last_name}"
-            return name.strip() or f"Private {chat.id}"
-        title = chat.title or f"Chat {chat.id}"
-        if chat.username:
-            return f"{title} @{chat.username}"
-        return title
-    except Exception:
-        return f"Chat {getattr(chat, 'id', '?')}"
-#⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️⏫️
-
-#⏬️⏬️⏬️
 # ---------- Хранилище по чатам ----------
 def get_chat_store(chat_id: int) -> dict:
     cid = str(chat_id)
-    # ✅ гарантируем наличие словаря для чата
-    if "chats" not in data:
-        data["chats"] = {}
-
     if cid not in data["chats"]:
         data["chats"][cid] = {
             "balance": 0,
@@ -442,29 +409,13 @@ def get_chat_store(chat_id: int) -> dict:
             "edit_target": None,
             "current_view_day": today_key()
         }
+        # фиксируем в общем кэше и сохраняем индивидуальные файлы чата
         save_data(data)
         save_chat_json(chat_id, data)
         sync_all_backups_gdrive_async(data)
-
-    store = data["chats"][cid]  # 🔹 теперь переменная гарантированно существует
-
-    # 💎 обновление информации о чате
-    try:
-        chat_obj = bot.get_chat(chat_id)
-        info = {
-            "title": getattr(chat_obj, "title", None),
-            "username": getattr(chat_obj, "username", None),
-            "type": getattr(chat_obj, "type", None),
-            "name": (getattr(chat_obj, "first_name", "") + " " + getattr(chat_obj, "last_name", "")).strip(),
-        }
-        store["info"] = info
-        save_chat_json(chat_id, data)
-    except Exception as e:
-        log_error(f"get_chat_store info update: {e}")
-
+    store = data["chats"][cid]
     store.setdefault("current_view_day", today_key())
     return store
-#🔺🔺🔺🔺⏫️⏫️⏫️⏫️⏫️
 
 def set_current_view_day(chat_id: int, day_key: str):
     store = get_chat_store(chat_id)
@@ -738,49 +689,14 @@ def build_edit_menu_keyboard(day_key: str, chat_id=None):
         types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main")
     )
     return kb
-#*️⃣*️⃣*️⃣*️⃣*️⃣*️⃣*️⃣
+
 def build_edit_keyboard_for_record(day_key: str, rid: int):
     kb = types.InlineKeyboardMarkup(row_width=1)
     kb.add(types.InlineKeyboardButton("✏ Ввести вручную", callback_data=f"d:{day_key}:edit_manual:{rid}"))
     kb.add(types.InlineKeyboardButton("🗑 Удалить", callback_data=f"d:{day_key}:edit_delete:{rid}"))
-    # ✅ добавлено по ТЗ 8 — новая кнопка «➕ Добавить»
-    kb.add(types.InlineKeyboardButton("➕ Добавить", callback_data=f"d:{day_key}:add_new"))
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_back"))
     return kb
 
-# ✅ добавлено по ТЗ 8 — логика для обработки кнопки «Добавить» и автоотмена через 30 с
-@bot.callback_query_handler(func=lambda c: c.data.endswith(":add_new"))
-def handle_add_new_record(call):
-    chat_id = call.message.chat.id
-    day_key = call.data.split(":")[1]
-    bot.answer_callback_query(call.id, "Введите новую запись для этого дня:")
-    msg = bot.send_message(chat_id, f"✏ Введите сумму и комментарий для {day_key}…")
-    bot.register_next_step_handler(msg, lambda m: handle_add_entry(m, day_key))
-    # автоотмена через 30 с — возврат в основное меню
-    threading.Timer(30, lambda: safe_back_to_main(chat_id)).start()
-
-def handle_add_entry(msg, date_key):
-    chat_id = msg.chat.id
-    text = msg.text.strip()
-    if not text:
-        bot.send_message(chat_id, "❌ Пустая запись не добавлена.")
-        update_or_send_day_window(chat_id, date_key, True, True, True)
-        return
-    store = get_chat_store(chat_id)
-    amount_token = text.split()[0]
-    note = " ".join(text.split()[1:])
-    amount = parse_amount_token(amount_token)
-    add_record_to_chat(chat_id, amount, note, msg.from_user.id)
-    bot.send_message(chat_id, f"✅ Запись добавлена в {date_key}.")
-    update_or_send_day_window(chat_id, date_key, True, True, True)
-
-def safe_back_to_main(chat_id):
-    """✅ добавлено по ТЗ 8 — возврат в основное окно при бездействии"""
-    try:
-        update_or_send_day_window(chat_id, today_key(), True, True, True)
-    except Exception as e:
-        log_error(f"safe_back_to_main: {e}")
-#⏺️⏺️⏺️⏺️⏺️⏺️⏺️⏺️⏺️⏺️
 def build_confirm_delete_keyboard(day_key: str, rid: int):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
@@ -808,8 +724,6 @@ def build_last_31days_calendar():
         if idx % 7 == 0:
             kb.row(*row); row = []
     if row: kb.row(*row)
-    # ✅ добавлено по ТЗ 9 — кнопка «Назад» в календаре
-    kb.row(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"d:{today_key()}:back_main"))
     return kb
 
 # ---------- Рендер окна дня ----------
@@ -958,7 +872,7 @@ def update_or_send_day_window(
 # ---------- Операции ----------
 def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     store = get_chat_store(chat_id)
-    rid = store.get("next_id", 1)  # 🔹 локальный ID только для этого чата
+    rid = data.get("next_id", 1)
     rec = {
         "id": rid,
         "short_id": f"R{rid}",
@@ -968,14 +882,14 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
         "owner": owner
     }
 
-   #data.setdefault("records", []).append(rec)
+    data.setdefault("records", []).append(rec)
     store.setdefault("records", []).append(rec)
     day = today_key()
     store.setdefault("daily_records", {}).setdefault(day, []).append(rec)
 
     store["balance"] = store.get("balance", 0) + amount
     data["overall_balance"] = data.get("overall_balance", 0) + amount
-    store["next_id"] = rid + 1
+    data["next_id"] = rid + 1
 
     save_data(data)                          # локально (общий кэш)
     save_chat_json(chat_id, data)            # ➕ пер-чатовые файлы
@@ -999,8 +913,8 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
                 if r["id"] == rid:
                     r.update(found)
         store["balance"] = sum(x["amount"] for x in store.get("records", []))
-        #data["records"] = [x if x["id"] != rid else found for x in data.get("records", [])]
-        #data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
+        data["records"] = [x if x["id"] != rid else found for x in data.get("records", [])]
+        data["overall_balance"] = sum(x["amount"] for x in data.get("records", []))
 
         save_data(data)
         save_chat_json(chat_id, data)        # ➕ пер-чатовые файлы
@@ -1040,37 +954,21 @@ def delete_record_in_chat(chat_id: int, rid: int, user=None):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("d:") and ":forward_menu" in c.data)
 def handle_forward_menu(call):
     if not OWNER_ID or str(call.message.chat.id) != str(OWNER_ID):
-        bot.answer_callback_query(call.id, "⛔ Только владелец может управлять пересылкой.")
-        return
+        bot.answer_callback_query(call.id, "⛔ Только владелец может управлять пересылкой."); return
     try:
         rules = data.get("forward_rules", {})
         chats_list = list(data.get("chats", {}).keys())
         lines = ["🔁 Настройка пересылки:\n"]
-        kb = types.InlineKeyboardMarkup(row_width=1)
-
-        # ✅ правильный отступ здесь ↓↓↓
         for src, targets in rules.items():
             for dst, mode in targets.items():
-                arrow = "⇄" if mode == "twoway" else "➡️"
-                lines.append(f"• {src} {arrow} {dst}")
-                kb.add(
-                    types.InlineKeyboardButton(
-                        f"❌ Удалить {src} → {dst}",
-                        callback_data=f"fw_cancel:{src}:{dst}"
-                    )
-                )
-
+                lines.append(f"• {src} → {dst} ({'⇄' if mode=='twoway' else '➡️'})")
         if not lines[1:]:
             lines.append("Пока нет активных маршрутов.")
-
         lines.append("\nВыберите чат для настройки:")
+        kb = types.InlineKeyboardMarkup(row_width=1)
         for cid in chats_list:
-            chat_info = data.get("chats", {}).get(cid, {}).get("info", {})
-            label = chat_info.get("title") or chat_info.get("name") or f"Чат {cid}"
-            if chat_info.get("username"):
-                label += f" @{chat_info['username']}"
-            kb.add(types.InlineKeyboardButton(label, callback_data=f"fw_src:{cid}"))
-
+            kb.add(types.InlineKeyboardButton(f"Чат {cid}", callback_data=f"fw_src:{cid}"))
+        kb.add(types.InlineKeyboardButton("❌ Закрыть", callback_data="fw_close"))
         bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
     except Exception as e:
         log_error(f"handle_forward_menu: {e}")
@@ -1080,78 +978,25 @@ def handle_fw_source(call):
     src = call.data.split(":")[1]
     chats = [cid for cid in data.get("chats", {}).keys() if cid != src]
     kb = types.InlineKeyboardMarkup(row_width=2)
-    # 🚗🚗🚗🚗🚗🚗🚗================================================================
-    #   ⬇️ обновлено: используем имя и username вместо голого ID
-    # ================================================================
     for cid in chats:
-        chat_info = data.get("chats", {}).get(cid, {}).get("info", {})
-        title = chat_info.get("title") or chat_info.get("name") or "Безымянный"
-        username = chat_info.get("username")
-        label_parts = [f"{title}", f"🆔 {cid}"]
-        if username:
-            label_parts.append(f"@{username}")
-        label = " | ".join(label_parts)
-
         kb.row(
-            types.InlineKeyboardButton(f"➡️ {label}", callback_data=f"fw_set:{src}:{cid}:oneway"),
-            types.InlineKeyboardButton(f"⇄ {label}", callback_data=f"fw_set:{src}:{cid}:twoway")
+            types.InlineKeyboardButton(f"➡️ {cid}", callback_data=f"fw_set:{src}:{cid}:oneway"),
+            types.InlineKeyboardButton(f"⇄ {cid}", callback_data=f"fw_set:{src}:{cid}:twoway")
         )
-        # 🧱🧱🧱🧱🧱🧱================================================================
     kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="d::forward_menu"))
     bot.edit_message_text(f"Источник {src}. Выберите получателя и тип пересылки:", call.message.chat.id, call.message.message_id, reply_markup=kb)
-# ⬇️⬇️⬇️ ДОБАВИТЬ НИЖЕ
-# ================================================================
-@bot.callback_query_handler(func=lambda c: c.data.startswith("fw_cancel:"))
-def handle_fw_cancel(call):
-    """🗑 Отмена существующей пересылки между чатами с автообновлением меню"""
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("fw_set:"))
+def handle_fw_set(call):
     try:
-        _, src, dst = call.data.split(":")
-        rules = data.get("forward_rules", {})
-        if src in rules and dst in rules[src]:
-            rules[src].pop(dst, None)
-            if not rules[src]:
-                rules.pop(src, None)
-            save_data(data)
-            sync_all_backups_gdrive_async(data)
-            bot.answer_callback_query(call.id, f"🚫 Отменена пересылка {src} → {dst}")
-        else:
-            bot.answer_callback_query(call.id, "ℹ️ Такой пересылки нет.")
-            return
-
-        # 🆕 сразу обновляем меню пересылки
-        try:
-            rules = data.get("forward_rules", {})
-            chats_list = list(data.get("chats", {}).keys())
-            lines = ["🔁 Настройка пересылки:\n"]
-            for s, targets in rules.items():
-                for d, mode in targets.items():
-                    arrow = "⇄" if mode == "twoway" else "➡️"
-                    lines.append(f"• {s} {arrow} {d}")
-            if not lines[1:]:
-                lines.append("Пока нет активных маршрутов.")
-            lines.append("\nВыберите чат для настройки:")
-
-            kb = types.InlineKeyboardMarkup(row_width=1)
-            for cid in chats_list:
-                chat_info = data.get("chats", {}).get(cid, {}).get("info", {})
-                title = chat_info.get("title") or chat_info.get("name") or f"Безымянный чат"
-                username = chat_info.get("username")
-                label_parts = [f"💬 {title}", f"🆔 {cid}"]
-                if username:
-                    label_parts.append(f"@{username}")
-                label = " | ".join(label_parts)
-                kb.add(types.InlineKeyboardButton(label, callback_data=f"fw_src:{cid}"))
-
-            kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{today_key()}:edit_menu"))
-
-            bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
-        except Exception as e:
-            log_error(f"fw_cancel refresh menu: {e}")
+        _, src, dst, mode = call.data.split(":")
+        data.setdefault("forward_rules", {}).setdefault(src, {})[dst] = mode
+        save_data(data)
+        sync_all_backups_gdrive_async(data)
+        bot.answer_callback_query(call.id, f"✅ Пересылка {src} → {dst} ({'⇄' if mode=='twoway' else '➡️'})")
     except Exception as e:
-        log_error(f"handle_fw_cancel: {e}")
-        bot.answer_callback_query(call.id, "Ошибка отмены пересылки.")
-# ================================================================
-# ⬆️⬆️⬆️
+        log_error(f"handle_fw_set: {e}")
+        bot.answer_callback_query(call.id, "Ошибка при установке маршрута.")
 #❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️✅✅✅✅✅✅✅
 
 # ---------- Callback ----------
@@ -2070,3 +1915,6 @@ if __name__ == "__main__":
         log_error(f"startup notify: {e}")
 
     app.run(host="0.0.0.0", port=PORT)
+
+#ТЗ:
+#Где и как в этом коде прописать чтобы бот определял ; username чата или группы, и имя чата или группы. И их также прописывал в кнопках
