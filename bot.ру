@@ -978,7 +978,7 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
 
     store["balance"] = store.get("balance", 0) + amount
     data["overall_balance"] = data.get("overall_balance", 0) + amount
-    data["next_id"] = rid + 1
+    store["next_id"] = rid + 1
 
     save_data(data)                          # локально (общий кэш)
     save_chat_json(chat_id, data)            # ➕ пер-чатовые файлы
