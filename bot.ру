@@ -1050,15 +1050,18 @@ def handle_forward_menu(call):
             lines.append("Пока нет активных маршрутов.")
         lines.append("\nВыберите чат для настройки:")
         kb = types.InlineKeyboardMarkup(row_width=1)
-        #for cid in chats_list:
+        
        # ================================================================
         #   ⬇️ обновлено: отображаем имя и username чата
         # ================================================================
         for cid in chats_list:
             chat_info = data.get("chats", {}).get(cid, {}).get("info", {})
-            label = chat_info.get("title") or chat_info.get("name") or f"Чат {cid}"
-            if chat_info.get("username"):
-                label += f" @{chat_info['username']}"
+            title = chat_info.get("title") or chat_info.get("name") or f"Безымянный чат"
+            username = chat_info.get("username")
+            label_parts = [f"💬 {title}", f"🆔 {cid}"]
+            if username:
+                label_parts.append(f"@{username}")
+            label = " | ".join(label_parts)
             kb.add(types.InlineKeyboardButton(label, callback_data=f"fw_src:{cid}"))
         # ================================================================
 #✅✅✅✅✅✅✅✅✅
@@ -1078,9 +1081,13 @@ def handle_fw_source(call):
     # ================================================================
     for cid in chats:
         chat_info = data.get("chats", {}).get(cid, {}).get("info", {})
-        label = chat_info.get("title") or chat_info.get("name") or f"{cid}"
-        if chat_info.get("username"):
-            label += f" @{chat_info['username']}"
+        title = chat_info.get("title") or chat_info.get("name") or "Безымянный"
+        username = chat_info.get("username")
+        label_parts = [f"{title}", f"🆔 {cid}"]
+        if username:
+            label_parts.append(f"@{username}")
+        label = " | ".join(label_parts)
+
         kb.row(
             types.InlineKeyboardButton(f"➡️ {label}", callback_data=f"fw_set:{src}:{cid}:oneway"),
             types.InlineKeyboardButton(f"⇄ {label}", callback_data=f"fw_set:{src}:{cid}:twoway")
