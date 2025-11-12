@@ -2526,7 +2526,7 @@ if __name__ == "__main__":
     try:
         save_known_chats_for_owner()
     except Exception as e:
-    log_error(f"startup save_known_chats_for_owner: {e}")
+        log_error(f"startup save_known_chats_for_owner: {e}")
     try:
         if BACKUP_CHAT_ID and "chats" in data and data["chats"]:
             summary_lines = ["📋 Текущие зарегистрированные чаты:"]
