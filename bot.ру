@@ -680,24 +680,48 @@ def send_backup_to_channel(chat_id: int | None = None, force: bool = True):
             # 🟡 Общие файлы (для старта или совместимости)
             target_files = [DATA_FILE, CSV_FILE, CSV_META_FILE]
 
-        for fpath in target_files:
+                for fpath in target_files:
             if not os.path.exists(fpath):
                 continue
             if os.path.getsize(fpath) == 0 and not force:
                 continue
-            with open(fpath, "rb") as f:
-                bot.send_document(
-                    int(BACKUP_CHAT_ID),
-                    f,
-                    caption=f"📦 {os.path.basename(fpath)} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
-                )
-            # 🔁 перезаписываем мету (обновляем отметку времени)
+
             meta = _load_csv_meta()
-            meta[f"timestamp_{os.path.basename(fpath)}"] = now_local().isoformat(timespec="seconds")
-            _save_csv_meta(meta)
-        log_info(f"📤 Бэкап в канал завершён ({'все файлы' if not chat_id else f'чат {chat_id}'}).")
-    except Exception as e:
-        log_error(f"send_backup_to_channel: {e}")
+            base = os.path.basename(fpath)
+            msg_key = f"message_id_{base}"
+
+            try:
+                with open(fpath, "rb") as f:
+                    # 🧩 если уже есть message_id — пробуем заменить файл
+                    if meta.get(msg_key):
+                        try:
+                            bot.edit_message_media(
+                                media=telebot.types.InputMediaDocument(
+                                    f,
+                                    caption=f"📦 {base} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
+                                ),
+                                chat_id=int(BACKUP_CHAT_ID),
+                                message_id=meta[msg_key]
+                            )
+                            log_info(f"♻️ Обновлён файл {base} (перезаписан в канале).")
+                        except Exception as e:
+                            log_error(f"edit_message_media {base}: {e}")
+                            sent = bot.send_document(
+                                int(BACKUP_CHAT_ID), f,
+                                caption=f"📦 {base} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
+                            )
+                            meta[msg_key] = sent.message_id
+                    else:
+                        sent = bot.send_document(
+                            int(BACKUP_CHAT_ID), f,
+                            caption=f"📦 {base} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
+                        )
+                        meta[msg_key] = sent.message_id
+
+                meta[f"timestamp_{base}"] = now_local().isoformat(timespec="seconds")
+                _save_csv_meta(meta)
+            except Exception as e:
+                log_error(f"send_backup_to_channel({base}): {e}")
 
 
 # первичная асинхронная синхронизация и стартовый бэкап в канал (опционально)
