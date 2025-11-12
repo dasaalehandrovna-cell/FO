@@ -1715,7 +1715,7 @@ ensure_forwarding_struct()
 
 # 🆕 Флаги бэкапа
 def ensure_backup_flags():
-    data.setdefault("backup_flags", {"drive": False, "channel": False})
+    data.setdefault("backup_flags", {"drive": False, "channel": True})
     save_data(data)
 
 ensure_backup_flags()
