@@ -1139,7 +1139,8 @@ def handle_forward_menu(call):
             if chat_info.get("username"):
                 label += f" @{chat_info['username']}"
             kb.add(types.InlineKeyboardButton(label, callback_data=f"fw_src:{cid}"))
-
+ #🔆🔆🔆🔆🔆
+            kb.row(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"d:{today_key()}:back_main"))
         bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
     except Exception as e:
         log_error(f"handle_forward_menu: {e}")
@@ -1149,6 +1150,7 @@ def handle_fw_source(call):
     src = call.data.split(":")[1]
     chats = [cid for cid in data.get("chats", {}).keys() if cid != src]
     kb = types.InlineKeyboardMarkup(row_width=2)
+
     # 🚗🚗🚗🚗🚗🚗🚗================================================================
     #   ⬇️ обновлено: используем имя и username вместо голого ID
     # ================================================================
