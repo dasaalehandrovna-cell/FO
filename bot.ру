@@ -476,8 +476,72 @@ def send_backup_to_channel(chat_id: int | None = None, force: bool = True):
         log_error(f"send_backup_to_channel outer: {e}")
 #🔴
 # ---------- Глобальные данные ----------
+# ---------- Глобальные данные ----------
+
+# ================================================================
+# 🔍 АВТООБНАРУЖЕНИЕ ЧАТОВ, где бот состоит (лички, группы, каналы)
+# ================================================================
+def preload_all_bot_chats():
+    """
+    Добавляет в data['chats'] все чаты, где бот реально состоит (лички, группы, каналы),
+    даже если там не активирован финансовый режим и нет сообщений.
+    """
+    try:
+        me = bot.get_me()
+        my_id = me.id
+        data.setdefault("chats", {})
+        known_chats = set(data["chats"].keys())
+
+        # --- 1️⃣ Берём чаты из последних апдейтов (если есть)
+        updates = bot.get_updates(limit=200)
+        for u in updates:
+            m = getattr(u, "message", None) or getattr(u, "channel_post", None)
+            if not m or not m.chat:
+                continue
+            cid = str(m.chat.id)
+            if cid not in data["chats"]:
+                info = {
+                    "title": getattr(m.chat, "title", None),
+                    "username": getattr(m.chat, "username", None),
+                    "type": getattr(m.chat, "type", None),
+                    "name": (getattr(m.chat, "first_name", "") + " " + getattr(m.chat, "last_name", "")).strip(),
+                }
+                data["chats"][cid] = {"info": info, "records": {}}
+                log_info(f"📡 Добавлен чат из апдейтов: {cid} ({info.get('title') or info.get('name')})")
+
+        # --- 2️⃣ Опрашиваем известные чаты — действительно ли бот там есть
+        verified_chats = {}
+        for cid, cdata in list(data["chats"].items()):
+            try:
+                cid_int = int(cid)
+                member = bot.get_chat_member(cid_int, my_id)
+                if not member or member.status in ("left", "kicked"):
+                    log_info(f"🚫 Бот не состоит в чате {cid}, пропускаем.")
+                    continue
+                chat_obj = bot.get_chat(cid_int)
+                info = {
+                    "title": getattr(chat_obj, "title", None),
+                    "username": getattr(chat_obj, "username", None),
+                    "type": getattr(chat_obj, "type", None),
+                    "name": (getattr(chat_obj, "first_name", "") + " " + getattr(chat_obj, "last_name", "")).strip(),
+                }
+                data["chats"][cid]["info"] = info
+                verified_chats[cid] = info
+                log_info(f"✅ Подтверждён чат {cid} ({info.get('title') or info.get('name')})")
+            except Exception as e:
+                log_error(f"preload_all_bot_chats check {cid}: {e}")
+
+        # --- 3️⃣ Сохраняем результат
+        save_data(data)
+        sync_all_backups_gdrive_async(data)
+        log_info(f"📋 Обнаружено и подтверждено чатов: {len(verified_chats)}")
+    except Exception as e:
+        log_error(f"preload_all_bot_chats: {e}")
+# ================================================================
+
 #%restore_from_gdrive_if_needed()
 data = load_data()
+preload_all_bot_chats()  # 🔍 автоматически находит все чаты, где бот состоит
 
 # ---------- Хранилище по чатам ---------
 #⏬️⏬️⏬️⏬️⏬️⏬️⏬️📃📃📃📃📃💧
