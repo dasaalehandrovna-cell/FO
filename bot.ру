@@ -361,13 +361,27 @@ def restore_from_gdrive_if_needed():
     if not os.path.exists(CSV_META_FILE): need.append(CSV_META_FILE)
     if not need:
         return
+
+    restored_any = False
     if OWNER_ID:
         send_info(int(OWNER_ID), "☁️ Пытаюсь восстановить локальные файлы с Google Drive…")
+
     for fn in [CSV_META_FILE, DATA_FILE, CSV_FILE]:
         if fn in need:
-            download_from_gdrive(fn, fn)
-    if not os.path.exists(DATA_FILE): _save_json(DATA_FILE, default_data())
-    if not os.path.exists(CSV_META_FILE): _save_json(CSV_META_FILE, {})
+            ok = download_from_gdrive(fn, fn)
+            if ok:
+                restored_any = True
+
+    if not os.path.exists(DATA_FILE):
+        _save_json(DATA_FILE, default_data())
+    if not os.path.exists(CSV_META_FILE):
+        _save_json(CSV_META_FILE, {})
+
+    if OWNER_ID:
+        if restored_any:
+            send_info(int(OWNER_ID), "✅ Данные успешно восстановлены с Google Drive.")
+        else:
+            send_info(int(OWNER_ID), "⚠️ Восстановление пропущено (файлы не найдены или квота 0).")
 
 # ---------- Полная синхронизация в Drive ----------
 # ---------- Полная синхронизация в Drive ----------
@@ -461,7 +475,7 @@ def send_backup_to_channel(chat_id: int | None = None, force: bool = True):
         log_error(f"send_backup_to_channel outer: {e}")
 #🔴
 # ---------- Глобальные данные ----------
-restore_from_gdrive_if_needed()
+#%restore_from_gdrive_if_needed()
 data = load_data()
 
 # ---------- Хранилище по чатам ---------
