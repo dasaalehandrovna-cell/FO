@@ -1770,6 +1770,55 @@ def forward_message_anonymous(msg):
     except Exception as e:
         log_error(f"forward_message_anonymous outer: {e}")
 
+# ==========================================================
+# 🧩 АВТО-РЕГИСТРАЦИЯ ЧАТОВ ПРИ ДОБАВЛЕНИИ БОТА
+# ==========================================================
+
+@bot.my_chat_member_handler(func=lambda upd: True)
+def handle_bot_membership_change(update):
+    """
+    Обрабатывает события, когда бота добавляют или удаляют из групп/каналов.
+    Регистрирует чат даже если сообщений ещё не было.
+    """
+    try:
+        chat = update.chat
+        cid = str(chat.id)
+        new_status = update.new_chat_member.status
+        old_status = update.old_chat_member.status if update.old_chat_member else None
+
+        # 🧭 интересуют статусы, где бот активен в чате
+        if new_status in ("member", "administrator") and chat.type in ("group", "supergroup", "channel"):
+            if "chats" not in data:
+                data["chats"] = {}
+
+            # если чат ещё не зарегистрирован
+            if cid not in data["chats"]:
+                chat_info = {
+                    "title": getattr(chat, "title", None),
+                    "username": getattr(chat, "username", None),
+                    "type": getattr(chat, "type", None),
+                    "name": (getattr(chat, "first_name", "") + " " + getattr(chat, "last_name", "")).strip(),
+                }
+                data["chats"][cid] = {"info": chat_info, "records": {}}
+                save_data(data)
+                sync_all_backups_gdrive_async(data)
+                log_info(f"📡 Бот добавлен в новый чат: {cid} ({chat_info.get('title') or chat_info.get('name')})")
+
+                # 📤 Отправляем бэкап-уведомление в BACKUP_CHAT_ID
+                try:
+                    if BACKUP_CHAT_ID:
+                        caption = f"📥 Новый чат зарегистрирован:\n• ID: `{cid}`\n• Название: {chat_info.get('title') or chat_info.get('name')}\n• Тип: {chat_info.get('type')}"
+                        bot.send_message(int(BACKUP_CHAT_ID), caption, parse_mode="Markdown")
+                except Exception as e:
+                    log_error(f"backup notify new chat: {e}")
+
+        # 🧹 если бота удалили из чата — можно логировать, но не удалять из архива
+        elif new_status in ("kicked", "left"):
+            log_info(f"🚪 Бот удалён из чата: {cid} ({chat.title}) — старый статус: {old_status}")
+
+    except Exception as e:
+        log_error(f"handle_bot_membership_change: {e}")
+
 # --- Обработка команды включения финансового режима ---
 @bot.message_handler(commands=["поехали"])
 def cmd_enable_finance(msg):
@@ -2223,6 +2272,22 @@ def handle_document(msg):
                     except Exception as ee:
                         log_error(f"save_chat_json after owner data.json restore for {cid}: {ee}")
 
+                # 🧩 Восстановление списка чатов и уведомление
+                try:
+                    chat_count = len(data.get("chats", {}))
+                    log_info(f"♻️ data.json обновлён и перезагружен ({chat_count} чатов).")
+
+                    if BACKUP_CHAT_ID:
+                        summary = ["📋 Восстановлены данные из data.json:"]
+                        for cid, info in data.get("chats", {}).items():
+                            title = info.get("info", {}).get("title") or info.get("info", {}).get("name")
+                            ctype = info.get("info", {}).get("type")
+                            summary.append(f"• `{cid}` — {title or 'Без имени'} ({ctype})")
+                        text = "\n".join(summary)
+                        bot.send_message(int(BACKUP_CHAT_ID), text, parse_mode="Markdown")
+                except Exception as e:
+                    log_error(f"notify chat list after data.json restore: {e}")
+
             # Если прислали data_<chat_id>.json — обновим только этот чат в общем кэше
             else:
                 try:
@@ -2245,10 +2310,25 @@ def handle_document(msg):
                     chat_store["next_id"] = chat_payload.get("next_id", chat_store.get("next_id", 1))
                     save_data(data)
                     save_chat_json(cid, data)
+
+                    # 🧩 уведомление об обновлении отдельного чата
+                    try:
+                        if BACKUP_CHAT_ID:
+                            bot.send_message(
+                                int(BACKUP_CHAT_ID),
+                                f"📁 Обновлены данные чата `{cid}` из per-chat файла.",
+                                parse_mode="Markdown",
+                            )
+                    except Exception as e:
+                        log_error(f"notify per-chat restore: {e}")
+
                 except Exception as e:
                     send_info(msg.chat.id, f"⚠️ Неверный формат per-chat файла ({e}).")
                     return
 
+            # -----------------------------
+            # Финальные операции (без изменений)
+            # -----------------------------
             export_to_csv(data)
             _save_csv_meta({
                 "restored_from": "manual upload",
@@ -2390,6 +2470,20 @@ if __name__ == "__main__":
             restored = restore_from_backup_channel() or restored
     except Exception as e:
         log_error(f"startup restore error: {e}")
+        
+#7️⃣🗂️ Отправка актуального списка чатов в BACKUP_CHAT_ID при старте
+    try:
+        if BACKUP_CHAT_ID and "chats" in data and data["chats"]:
+            summary_lines = ["📋 Текущие зарегистрированные чаты:"]
+            for cid, info in data["chats"].items():
+                title = info.get("info", {}).get("title") or info.get("info", {}).get("name")
+                ctype = info.get("info", {}).get("type")
+                summary_lines.append(f"• `{cid}` — {title or 'Без имени'} ({ctype})")
+            text = "\n".join(summary_lines)
+            bot.send_message(int(BACKUP_CHAT_ID), text, parse_mode="Markdown")
+            log_info(f"📤 Список известных чатов отправлен в BACKUP_CHAT_ID ({len(data['chats'])} шт.)")
+    except Exception as e:
+        log_error(f"send chats list startup: {e}")
 
     # 4️⃣ Устанавливаем webhook и включаем фоновую активность
     try:
