@@ -1669,7 +1669,7 @@ def forward_message_anonymous(msg):
         log_error(f"forward_message_anonymous outer: {e}")
 
 # --- Обработка команды включения финансового режима ---
-@bot.message_handler(commands=["⚙️ФинансовыйрежимвыключенАктивируйтекомандойпоехалиБрФо"])
+@bot.message_handler(commands=["поехали"])
 def cmd_enable_finance(msg):
     chat_id = msg.chat.id
     set_finance_mode(chat_id, True)
@@ -1767,10 +1767,9 @@ def cmd_toggle_backup(msg):
 #☢️☢️☢️☢️запускбота
 # ---------- Guard до активации фин-режима ----------
 def require_finance(chat_id: int) -> bool:
-    """Проверяет, включён ли финансовый режим в этом чате. 
-    Если нет — выводит подсказку и блокирует команды."""
-    if not is_finance_mode(chat_id):
-        send_info(chat_id, "/⚙️ФинансовыйрежимвыключенАктивируйтекомандойпоехалиБрФо")#"/ — \n"
+    """Проверяет, включён ли финансовый режим в этом чате."""
+    if not is_finance_mode(chat_id): #Если нет — выводит подсказку и блокирует команды
+        send_info(chat_id, "⚙️ Финансовый режим выключен.\nАктивируйте командой /поехалиБрФо")
         return False
     return True
 #☢️☢️☢️☢️☢️
