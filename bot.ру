@@ -1129,7 +1129,43 @@ def handle_forward_menu(call):
     try:
         rules = data.get("forward_rules", {})
         chats_list = list(data.get("chats", {}).keys())
+      # 🧩 Автообновление списка чатов при каждом открытии меню пересылки
+        updated_chats = {}
+        for cid in list(chats_list):
+            try:
+                chat_obj = bot.get_chat(int(cid))
+                info = {
+                    "title": getattr(chat_obj, "title", None),
+                    "username": getattr(chat_obj, "username", None),
+                    "type": getattr(chat_obj, "type", None),
+                    "name": (getattr(chat_obj, "first_name", "") + " " + getattr(chat_obj, "last_name", "")).strip(),
+                }
+                data["chats"][str(cid)]["info"] = info
+                updated_chats[cid] = info
+            except Exception as e:
+                log_error(f"refresh chat info {cid}: {e}")
+        if updated_chats:
+            save_data(data)
+            sync_all_backups_gdrive_async(data)
+
         lines = ["🔁 Настройка пересылки:\n"]
+                # 🧩 Новый блок: показываем все чаты, где бот состоит (включая неактивированные)
+        chats_info = []
+        for cid, cdata in data.get("chats", {}).items():
+            info = cdata.get("info", {})
+            title = info.get("title") or info.get("name") or f"Чат {cid}"
+            username = info.get("username")
+            active = "✅" if data.get("finance_active_chats", {}).get(cid, False) else "⚙️"
+            line = f"{active} {title} (ID: {cid})"
+            if username:
+                line += f" @{username}"
+            chats_info.append(line)
+
+        if chats_info:
+            lines.append("📋 Бот состоит в чатах:")
+            lines.extend(chats_info)
+            lines.append("")  # пустая строка-разделитель
+
         kb = types.InlineKeyboardMarkup(row_width=1)
 
         # ✅ правильный отступ здесь ↓↓↓
