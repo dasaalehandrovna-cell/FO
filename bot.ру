@@ -126,7 +126,7 @@ def auto_double_message(chat_id, text):
 def send_info(chat_id, text):
     try:
         bot.send_message(chat_id, text, parse_mode="HTML")
-        auto_double_message(chat_id, text)
+        #🔴auto_double_message(chat_id, text)
     except Exception as e:
         log_error(f"send_info: {e}")
 
