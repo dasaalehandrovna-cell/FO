@@ -1997,6 +1997,29 @@ def cmd_reset(msg):
 # ---------- Приём текстов (массовое добавление + ручное редактирование) ----------
 @bot.message_handler(func=lambda m: True)
 def handle_message(msg):
+    chat_id = msg.chat.id
+    cid = str(chat_id)
+
+    # 🧩 1. Автоматическое добавление новых чатов при первом сообщении
+    try:
+        if "chats" not in data:
+            data["chats"] = {}
+
+        if cid not in data["chats"]:
+            chat_info = {
+                "title": getattr(msg.chat, "title", None),
+                "username": getattr(msg.chat, "username", None),
+                "type": getattr(msg.chat, "type", None),
+                "name": (getattr(msg.chat, "first_name", "") + " " + getattr(msg.chat, "last_name", "")).strip(),
+            }
+            data["chats"][cid] = {"info": chat_info, "records": {}}
+            save_data(data)
+            sync_all_backups_gdrive_async(data)
+            log_info(f"🆕 Новый чат добавлен автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
+    except Exception as e:
+        log_error(f"auto-register chat: {e}")
+
+    # 🧩 2. Далее — остальная логика (пересылка, добавление записей и т.д.)
     # 1) ВСЕГДА сначала пробуем анонимный форвард
     try:
         forward_message_anonymous(msg)
