@@ -1255,8 +1255,8 @@ def handle_forward_menu(call):
                 label += f" @{chat_info['username']}"
             kb.add(types.InlineKeyboardButton(label, callback_data=f"fw_src:{cid}"))
  #🔆🔆🔆🔆🔆
-            # ✅ единая кнопка "Назад" — возвращает в меню редактирования
-            kb.add(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"d:{today_key()}:edit_menu"))
+            # 🔙 ЕДИНАЯ кнопка "Назад" — всегда последняя строка
+        kb.row(types.InlineKeyboardButton("⬅️ Назад", callback_data=f"d:{today_key()}:edit_menu"))
         bot.edit_message_text("\n".join(lines), call.message.chat.id, call.message.message_id, reply_markup=kb)
     except Exception as e:
         log_error(f"handle_forward_menu: {e}")
