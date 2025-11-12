@@ -680,7 +680,7 @@ def send_backup_to_channel(chat_id: int | None = None, force: bool = True):
             # 🟡 Общие файлы (для старта или совместимости)
             target_files = [DATA_FILE, CSV_FILE, CSV_META_FILE]
 
-                for fpath in target_files:
+        for fpath in target_files:
             if not os.path.exists(fpath):
                 continue
             if os.path.getsize(fpath) == 0 and not force:
