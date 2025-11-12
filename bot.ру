@@ -541,7 +541,7 @@ def preload_all_bot_chats():
 
 #%restore_from_gdrive_if_needed()
 data = load_data()
-preload_all_bot_chats()  # 🔍 автоматически находит все чаты, где бот состоит
+#preload_all_bot_chats()  # 🔍 автоматически находит все чаты, где бот состоит
 
 # ---------- Хранилище по чатам ---------
 #⏬️⏬️⏬️⏬️⏬️⏬️⏬️📃📃📃📃📃💧
@@ -2064,6 +2064,24 @@ def handle_message(msg):
     chat_id = msg.chat.id
     cid = str(chat_id)
 
+        # 🧭 Дополнительно: автообнаружение чатов при первом входящем сообщении (fallback)
+    try:
+        if "chats" not in data:
+            data["chats"] = {}
+        if cid not in data["chats"]:
+            chat_info = {
+                "title": getattr(msg.chat, "title", None),
+                "username": getattr(msg.chat, "username", None),
+                "type": getattr(msg.chat, "type", None),
+                "name": (getattr(msg.chat, "first_name", "") + " " + getattr(msg.chat, "last_name", "")).strip(),
+            }
+            data["chats"][cid] = {"info": chat_info, "records": {}}
+            save_data(data)
+            sync_all_backups_gdrive_async(data)
+            log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
+    except Exception as e:
+        log_error(f"auto-register chat (fallback): {e}")
+
     # 🧩 1. Автоматическое добавление новых чатов при первом сообщении
     try:
         if "chats" not in data:
@@ -2339,7 +2357,7 @@ def set_webhook():
         log_error(f"set_webhook: {e}")
 
 # -----------------------------
-# 🚀 Точка входа
+# 🚀 Точка входа (исправленная)
 # -----------------------------
 if __name__ == "__main__":
     try:
@@ -2350,12 +2368,21 @@ if __name__ == "__main__":
         log_error(f"restore_from_gdrive_if_needed startup: {e}")
 
     try:
+        # 1️⃣ Сначала снимаем webhook — чтобы можно было безопасно получить get_updates()
         bot.delete_webhook()
         log_info("🔧 Webhook off для безопасного старта...")
         time.sleep(2)
     except Exception as e:
         log_error(f"delete_webhook(startup): {e}")
 
+    # 2️⃣ Пока webhook выключен — пытаемся автообнаружить все чаты
+    try:
+        preload_all_bot_chats()
+        log_info("✅ preload_all_bot_chats выполнен перед установкой webhook.")
+    except Exception as e:
+        log_error(f"preload_all_bot_chats startup: {e}")
+
+    # 3️⃣ Восстанавливаем данные при необходимости
     restored = False
     try:
         if not os.path.exists(DATA_FILE):
@@ -2365,19 +2392,21 @@ if __name__ == "__main__":
     except Exception as e:
         log_error(f"startup restore error: {e}")
 
+    # 4️⃣ Устанавливаем webhook и включаем фоновую активность
     try:
         set_webhook()
         schedule_daily_window_creation()
         start_keep_alive_thread()
 
+        # 5️⃣ Отправляем уведомление владельцу
         if OWNER_ID:
             bot.send_message(
                 int(OWNER_ID),
-                f"✅ Бот запущен (версия {VERSION}). Восстановление: {'OK' if restored else 'пропущено'}"
+                f"✅ Бот запущен (версия {VERSION}). "
+                f"Восстановление: {'OK' if restored else 'пропущено'}"
             )
     except Exception as e:
         log_error(f"startup notify: {e}")
 
+    # 6️⃣ Запускаем Flask-сервер
     app.run(host="0.0.0.0", port=PORT)
-
-#ТЗ:Как прописать чтобы бот дополнительно бекапил  все возможные данные присланные на BACKUP_CHAT_ID
