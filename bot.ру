@@ -660,26 +660,6 @@ def restore_from_backup_channel():
 
 # ---------- Канальный бэкап ----------
 # ---------- Канальный бэкап ----------
-def send_backup_to_channel(chat_id: int | None = None, force: bool = True):
-    """📦 Отправляет только per-chat файлы (или общий, если chat_id=None) в приватный канал BACKUP_CHAT_ID."""
-    if not data.get("backup_flags", {}).get("channel", True):
-        log_info("📤 Бэкап в канал отключён настройкой."); return
-    if not BACKUP_CHAT_ID:
-        log_info("⚠️ BACKUP_CHAT_ID не задан — пропуск отправки в канал."); return
-    try:
-        time.sleep(0.8)
-        target_files = []
-        if chat_id:
-            # 🟢 Только файлы конкретного чата
-            target_files = [
-                chat_data_file(chat_id),
-                chat_csv_file(chat_id),
-                chat_meta_file(chat_id)
-            ]
-        else:
-            # 🟡 Общие файлы (для старта или совместимости)
-            target_files = [DATA_FILE, CSV_FILE, CSV_META_FILE]
-
         for fpath in target_files:
             if not os.path.exists(fpath):
                 continue
@@ -692,7 +672,6 @@ def send_backup_to_channel(chat_id: int | None = None, force: bool = True):
 
             try:
                 with open(fpath, "rb") as f:
-                    # 🧩 если уже есть message_id — пробуем заменить файл
                     if meta.get(msg_key):
                         try:
                             bot.edit_message_media(
@@ -723,6 +702,8 @@ def send_backup_to_channel(chat_id: int | None = None, force: bool = True):
             except Exception as e:
                 log_error(f"send_backup_to_channel({base}): {e}")
 
+    except Exception as e:
+        log_error(f"send_backup_to_channel outer: {e}")
 
 # первичная асинхронная синхронизация и стартовый бэкап в канал (опционально)
 sync_all_backups_gdrive_async(data)
