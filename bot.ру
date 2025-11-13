@@ -1410,14 +1410,25 @@ def handle_fw_set(call):
     try:
         _, src, dst, mode = call.data.split(":")
         rules = data.setdefault("forward_rules", {})
+
+        # записываем маршрут
         rules.setdefault(src, {})[dst] = "twoway" if mode == "twoway" else "oneway"
-        # если двусторонний — добавляем обратный маршрут
         if mode == "twoway":
             rules.setdefault(dst, {})[src] = "twoway"
+
+        # 💾 обычное сохранение (форвард-правила не попадут в data.json)
         save_data(data)
         sync_all_backups_gdrive_async(data)
-        bot.answer_callback_query(call.id, f"✅ Пересылка {src} {'⇄' if mode=='twoway' else '➡️'} {dst} сохранена")
 
+        # 🔐 и отдельно — forward_rules ТОЛЬКО в data_<OWNER_ID>.json
+        persist_forward_rules_to_owner()
+
+        bot.answer_callback_query(
+            call.id,
+            f"✅ Пересылка {src} {'⇄' if mode == 'twoway' else '➡️'} {dst} сохранена"
+        )
+
+        # ... ниже оставляешь твой код пересборки меню без изменений ...
         # Обновляем меню пересылки
         rules = data.get("forward_rules", {})
         chats_list = list(data.get("chats", {}).keys())
@@ -1461,8 +1472,14 @@ def handle_fw_cancel(call):
             rules[src].pop(dst, None)
             if not rules[src]:
                 rules.pop(src, None)
+
+            # 💾 сохранение фин.данных
             save_data(data)
             sync_all_backups_gdrive_async(data)
+
+            # 🔐 forward_rules уезжают только в data_<OWNER_ID>.json
+            persist_forward_rules_to_owner()
+
             bot.answer_callback_query(call.id, f"🚫 Отменена пересылка {src} → {dst}")
         else:
             bot.answer_callback_query(call.id, "ℹ️ Такой пересылки нет.")
@@ -1835,7 +1852,7 @@ ensure_forwarding_struct()
 # 🆕 Флаги бэкапа
 def ensure_backup_flags():
     data.setdefault("backup_flags", {"drive": False, "channel": True})
-    save_data(data)
+    # save_data(data)  # не обязательно сохранять каждый старт
 
 ensure_backup_flags()
 
@@ -1852,40 +1869,52 @@ def set_finance_mode(chat_id: int, enabled: bool):
 
 # --- Пересылка контента между чатами ---
 def forward_message_anonymous(msg):
+    """
+    Анонимная пересылка:
+      • не пишет имена/юзернеймы
+      • НЕ меняет правила в процессе (никаких автодобавлений)
+      • forward_rules храним только в памяти + в файле владельца
+    """
     try:
+        # не пересылаем сообщения самого бота
+        if getattr(msg.from_user, "is_bot", False):
+            return
+
         src = str(msg.chat.id)
         rules = data.get("forward_rules", {}).get(src, {})
         if not rules:
             return
+
         for dst, mode in rules.items():
-            dst = int(dst)
-            # Не пересылаем обратно то же самое сообщение в цикле
-            if dst == msg.chat.id:
+            try:
+                dst_id = int(dst)
+            except Exception:
                 continue
+
+            if dst_id == msg.chat.id:
+                continue
+
             try:
                 if msg.content_type == "text":
-                    bot.send_message(dst, msg.text)
+                    bot.send_message(dst_id, msg.text)
                 elif msg.content_type == "photo":
-                    bot.send_photo(dst, msg.photo[-1].file_id, caption=(msg.caption or ""))
+                    bot.send_photo(dst_id, msg.photo[-1].file_id, caption=(msg.caption or ""))
                 elif msg.content_type == "video":
-                    bot.send_video(dst, msg.video.file_id, caption=(msg.caption or ""))
+                    bot.send_video(dst_id, msg.video.file_id, caption=(msg.caption or ""))
                 elif msg.content_type == "document":
-                    bot.send_document(dst, msg.document.file_id, caption=(msg.caption or ""))
+                    bot.send_document(dst_id, msg.document.file_id, caption=(msg.caption or ""))
                 elif msg.content_type == "audio":
-                    bot.send_audio(dst, msg.audio.file_id, caption=(msg.caption or ""))
+                    bot.send_audio(dst_id, msg.audio.file_id, caption=(msg.caption or ""))
                 elif msg.content_type == "voice":
-                    bot.send_voice(dst, msg.voice.file_id, caption=(msg.caption or ""))
+                    bot.send_voice(dst_id, msg.voice.file_id, caption=(msg.caption or ""))
                 elif msg.content_type == "sticker":
-                    bot.send_sticker(dst, msg.sticker.file_id)
+                    bot.send_sticker(dst_id, msg.sticker.file_id)
                 else:
-                    bot.copy_message(dst, msg.chat.id, msg.message_id)
-                log_info(f"🔁 Переслано {msg.content_type} {src} → {dst}")
-                # если режим двухсторонний, добавляем обратный маршрут
-                if mode == "twoway":
-                    data.setdefault("forward_rules", {}).setdefault(str(dst), {})[src] = "twoway"
+                    bot.copy_message(dst_id, msg.chat.id, msg.message_id)
+
+                log_info(f"🔁 Переслано {msg.content_type} {src} → {dst_id}")
             except Exception as e:
-                log_error(f"forward_message_anonymous: {e}")
-        save_data(data)
+                log_error(f"forward_message_anonymous to {dst_id}: {e}")
     except Exception as e:
         log_error(f"forward_message_anonymous outer: {e}")
 
@@ -1992,11 +2021,13 @@ def cmd_stop_forward(msg):
         if src == target:
             data["forward_rules"].pop(src, None); removed = True
     if removed:
+        # 💾 сохраняем фин.данные
         save_data(data)
+        # 🔐 сохраняем forward_rules только владельцу
+        persist_forward_rules_to_owner()
         send_info(msg.chat.id, f"🚫 Пересылка с участием {target} отключена.")
     else:
         send_info(msg.chat.id, f"ℹ️ Пересылка с {target} не найдена.")
-
 # ==========================================================
 # 🧩 Команды управления бэкапами (вкл/выкл)
 # ==========================================================
