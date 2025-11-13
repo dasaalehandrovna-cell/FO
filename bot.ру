@@ -172,13 +172,78 @@ def load_data():
             d[k] = v
     return d
 
+# ✅ Вариант C: forward_rules и known_chats не храним в data.json — только фин.данные
 def save_data(d):
     try:
-        _save_json(DATA_FILE, d)
+        # Делаем копию без технических полей пересылки и списка чатов
+        trimmed = dict(d)
+        trimmed.pop("forward_rules", None)
+        trimmed.pop("known_chats", None)
+
+        _save_json(DATA_FILE, trimmed)
         export_to_csv(d)
-        log_info("💾 Данные сохранены локально (общие).")
+        log_info("💾 Данные сохранены локально (без forward_rules/known_chats в data.json).")
     except Exception as e:
         log_error(f"save_data: {e}")
+
+# ==========================================================
+# 🆕 HELPER’Ы ДЛЯ ВЛАДЕЛЬЦА: где лежат правила пересылки
+# ==========================================================
+def _owner_data_file() -> str | None:
+    """Путь к файлу data_<OWNER_ID>.json (per-chat JSON владельца бота)."""
+    if not OWNER_ID:
+        return None
+    try:
+        return chat_data_file(int(OWNER_ID))
+    except Exception as e:
+        log_error(f"_owner_data_file: {e}")
+        return None
+
+
+def load_forward_rules_from_owner():
+    """
+    При старте: подтягиваем forward_rules из data_<OWNER_ID>.json
+    и кладём их в data["forward_rules"].
+    """
+    try:
+        path = _owner_data_file()
+        if not path or not os.path.exists(path):
+            return
+
+        payload = _load_json(path, {})
+        fr = payload.get("forward_rules")
+
+        if isinstance(fr, dict):
+            data.setdefault("forward_rules", {})
+            data["forward_rules"] = fr
+            log_info(f"🔁 forward_rules загружены из {path}")
+    except Exception as e:
+        log_error(f"load_forward_rules_from_owner: {e}")
+
+
+def persist_forward_rules_to_owner():
+    """
+    Каждый раз, когда меняем forward_rules в памяти,
+    сохраняем их ТОЛЬКО в data_<OWNER_ID>.json.
+    """
+    try:
+        path = _owner_data_file()
+        if not path:
+            return
+
+        # Аккуратно подмерджим в существующий JSON владельца
+        payload = {}
+        if os.path.exists(path):
+            payload = _load_json(path, {})
+            if not isinstance(payload, dict):
+                payload = {}
+
+        payload["forward_rules"] = data.get("forward_rules", {})
+
+        _save_json(path, payload)
+        log_info(f"💾 forward_rules сохранены только в {path}")
+    except Exception as e:
+        log_error(f"persist_forward_rules_to_owner: {e}")
 
 # ---------- CSV экспорт ----------
 def export_to_csv(d):
@@ -1756,9 +1821,14 @@ def handle_callback(call):
 
 # --- Хранилище forwarding и статусов активации ---
 def ensure_forwarding_struct():
-    data.setdefault("forward_rules", {})          # {"src_chat_id": {"dst_chat_id": "oneway"|"twoway"}}
-    data.setdefault("finance_active_chats", {})   # {"chat_id": True/False}
-    save_data(data)
+    """
+    Инициализация структур пересылки и статусов фин.режима.
+    Здесь НИЧЕГО не пишем в data.json напрямую.
+    """
+    data.setdefault("forward_rules", {})
+    data.setdefault("finance_active_chats", {})
+    # Подтягиваем сохранённые правила пересылки из data_<OWNER_ID>.json
+    load_forward_rules_from_owner()
 
 ensure_forwarding_struct()
 
