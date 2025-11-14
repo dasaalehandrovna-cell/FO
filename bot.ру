@@ -1,6 +1,6 @@
 # 2661/испр числа/ Каждый чат ведёт собственные файлы:
 # ======================================
-# 🧭 Описание:
+# 🧭 Описание: Code_021b
 #  • Полный UI как в 9.8.6-fo_6: окно дня, кнопки, меню редактирования,
 #    навигация /prev /next /view, календарь 31 день, отчёты, пересчёты
 #  • ☁️ Бэкап и восстановление через Google Drive + канал
@@ -609,9 +609,6 @@ def preload_all_bot_chats():
         updates = bot.get_updates(limit=200)
         for u in updates:
             m = getattr(u, "message", None) or getattr(u, "channel_post", None)
-            if not m or not m.chat:
-                continue
-            cid = str(m.chat.id)
             if cid not in data["chats"]:
                 info = {
                     "title": getattr(m.chat, "title", None),
@@ -619,8 +616,20 @@ def preload_all_bot_chats():
                     "type": getattr(m.chat, "type", None),
                     "name": (getattr(m.chat, "first_name", "") + " " + getattr(m.chat, "last_name", "")).strip(),
                 }
-                data["chats"][cid] = {"info": info, "records": {}}
+                # ✅ правильная структура чата
+                data["chats"][cid] = {
+                    "info": info,
+                    "balance": 0,
+                    "records": [],
+                    "daily_records": {},
+                    "next_id": 1,
+                    "active_windows": {},
+                    "edit_wait": None,
+                    "edit_target": None,
+                    "current_view_day": today_key()
+                }
                 log_info(f"📡 Добавлен чат из апдейтов: {cid} ({info.get('title') or info.get('name')})")
+
 
         # --- 2️⃣ Опрашиваем известные чаты — действительно ли бот там есть
         verified_chats = {}
@@ -655,8 +664,29 @@ def preload_all_bot_chats():
 
 #%restore_from_gdrive_if_needed()
 data = load_data()
-#preload_all_bot_chats()  # 🔍 автоматически находит все чаты, где бот состоит
 
+# 🔧 Нормализация структуры чатов (исправление старых JSON, где records = {})
+for cid, store in list(data.get("chats", {}).items()):
+    if not isinstance(store, dict):
+        store = {}
+        data["chats"][cid] = store
+
+    recs = store.get("records")
+    # если по ошибке был dict — превращаем в список значений
+    if isinstance(recs, dict):
+        store["records"] = list(recs.values())
+    elif not isinstance(recs, list):
+        store["records"] = []
+
+    store.setdefault("daily_records", {})
+    store.setdefault("balance", 0)
+    store.setdefault("next_id", 1)
+    store.setdefault("active_windows", {})
+    store.setdefault("edit_wait", None)
+    store.setdefault("edit_target", None)
+    store.setdefault("current_view_day", today_key())
+
+#preload_all_bot_chats()  # 🔍 автоматически находит все чаты, где бот состоит
 # ---------- Хранилище по чатам ---------
 #⏬️⏬️⏬️⏬️⏬️⏬️⏬️📃📃📃📃📃💧
 # ================================================================
@@ -1940,6 +1970,10 @@ def handle_bot_membership_change(update):
                 data["chats"] = {}
 
             # если чат ещё не зарегистрирован
+            if "chats" not in data:
+                data["chats"] = {}
+
+            # если чат ещё не зарегистрирован
             if cid not in data["chats"]:
                 chat_info = {
                     "title": getattr(chat, "title", None),
@@ -1947,9 +1981,18 @@ def handle_bot_membership_change(update):
                     "type": getattr(chat, "type", None),
                     "name": (getattr(chat, "first_name", "") + " " + getattr(chat, "last_name", "")).strip(),
                 }
-                data["chats"][cid] = {"info": chat_info, "records": {}}
-                save_data(data)
-                sync_all_backups_gdrive_async(data)
+                data["chats"][cid] = {
+                    "info": chat_info,
+                    "balance": 0,
+                    "records": [],
+                    "daily_records": {},
+                    "next_id": 1,
+                    "active_windows": {},
+                    "edit_wait": None,
+                    "edit_target": None,
+                    "current_view_day": today_key()
+                }
+                save_data(data)                sync_all_backups_gdrive_async(data)
                 log_info(f"📡 Бот добавлен в новый чат: {cid} ({chat_info.get('title') or chat_info.get('name')})")
                 # 🧾 Обновляем known_chats для владельца
                 save_known_chats_for_owner()
@@ -2274,10 +2317,19 @@ def handle_message(msg):
                 "type": getattr(chat_obj, "type", None),
             }
             if str(chat_id) not in data.get("chats", {}):
-                data.setdefault("chats", {})[str(chat_id)] = {"info": info, "records": {}}
+                data.setdefault("chats", {})[str(chat_id)] = {
+                    "info": info,
+                    "balance": 0,
+                    "records": [],
+                    "daily_records": {},
+                    "next_id": 1,
+                    "active_windows": {},
+                    "edit_wait": None,
+                    "edit_target": None,
+                    "current_view_day": today_key()
+                }
                 save_data(data)
-                sync_all_backups_gdrive_async(data)
-                log_info(f"📦 Автоматически зарегистрирована группа/канал: {chat_id} ({info.get('title')})")
+                sync_all_backups_gdrive_async(data)                log_info(f"📦 Автоматически зарегистрирована группа/канал: {chat_id} ({info.get('title')})")
     except Exception as e:
         log_error(f"auto-register group/channel: {e}")
 
@@ -2292,10 +2344,19 @@ def handle_message(msg):
                 "type": getattr(msg.chat, "type", None),
                 "name": (getattr(msg.chat, "first_name", "") + " " + getattr(msg.chat, "last_name", "")).strip(),
             }
-            data["chats"][cid] = {"info": chat_info, "records": {}}
+            data["chats"][cid] = {
+                "info": chat_info,
+                "balance": 0,
+                "records": [],
+                "daily_records": {},
+                "next_id": 1,
+                "active_windows": {},
+                "edit_wait": None,
+                "edit_target": None,
+                "current_view_day": today_key()
+            }
             save_data(data)
-            sync_all_backups_gdrive_async(data)
-            log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
+            sync_all_backups_gdrive_async(data)           log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
     except Exception as e:
         log_error(f"auto-register chat (fallback): {e}")
 
