@@ -2306,7 +2306,6 @@ def handle_message(msg):
     if added:
         send_info(chat_id, f"✅ Записей добавлено: {added}")
 
-# ====== 📄 Восстановление по присланному файлу data.json (от владельца) ======
 @bot.message_handler(content_types=["document"])
 def handle_document(msg):
     try:
@@ -2318,7 +2317,9 @@ def handle_document(msg):
         owner_id = int(OWNER_ID) if OWNER_ID else None
 
         # Разрешаем владельцу прислать как общий data.json, так и per-chat data_<chat_id>.json
-        if owner_id and msg.chat.id == owner_id and (fname == "data.json" or fname.startswith("data_") and fname.endswith(".json")):
+        if owner_id and msg.chat.id == owner_id and (
+            fname == "data.json" or (fname.startswith("data_") and fname.endswith(".json"))
+        ):
             file_info = bot.get_file(doc.file_id)
             downloaded = bot.download_file(file_info.file_path)
             local_name = fname if fname.startswith("data_") else DATA_FILE
@@ -2340,6 +2341,7 @@ def handle_document(msg):
                 except Exception as e:
                     send_info(msg.chat.id, f"⚠️ Файл data.json имеет неверный формат ({e}).")
                     return
+
                 # перегенерируем per-chat файлы для всех чатов
                 for cid in data.get("chats", {}):
                     try:
@@ -2347,6 +2349,7 @@ def handle_document(msg):
                     except Exception as ee:
                         log_error(f"save_chat_json after owner data.json restore for {cid}: {ee}")
                 save_known_chats_for_owner()
+
                 # 🧩 Восстановление списка чатов и уведомление
                 try:
                     chat_count = len(data.get("chats", {}))
@@ -2364,7 +2367,7 @@ def handle_document(msg):
                     log_error(f"notify chat list after data.json restore: {e}")
 
             # Если прислали data_<chat_id>.json — обновим только этот чат в общем кэше
-                        else:
+            else:
                 try:
                     # из имени вытащим chat_id
                     m_id = re.match(r"data_(\-?\d+)\.json$", local_name)
@@ -2391,16 +2394,25 @@ def handle_document(msg):
                         data["forward_rules"] = chat_payload["forward_rules"]
                         persist_forward_rules_to_owner()
 
-                    # мягкая валидация
+                    # мягкая валидация одного чата
                     chat_store = data.setdefault("chats", {}).setdefault(str(cid), {
-                        "balance": 0, "records": [], "daily_records": {}, "next_id": 1,
-                        "active_windows": {}, "edit_wait": None, "edit_target": None,
+                        "balance": 0,
+                        "records": [],
+                        "daily_records": {},
+                        "next_id": 1,
+                        "active_windows": {},
+                        "edit_wait": None,
+                        "edit_target": None,
                         "current_view_day": today_key()
                     })
                     chat_store["balance"] = chat_payload.get("balance", chat_store.get("balance", 0))
                     chat_store["records"] = chat_payload.get("records", chat_store.get("records", []))
-                    chat_store["daily_records"] = chat_payload.get("daily_records", chat_store.get("daily_records", {}))
+                    chat_store["daily_records"] = chat_payload.get(
+                        "daily_records",
+                        chat_store.get("daily_records", {})
+                    )
                     chat_store["next_id"] = chat_payload.get("next_id", chat_store.get("next_id", 1))
+
                     save_data(data)
                     save_chat_json(cid, data)
 
@@ -2420,7 +2432,7 @@ def handle_document(msg):
                     return
 
             # -----------------------------
-            # Финальные операции (без изменений)
+            # Финальные операции общие для обоих случаев
             # -----------------------------
             export_to_csv(data)
             _save_csv_meta({
