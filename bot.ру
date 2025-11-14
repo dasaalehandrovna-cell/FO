@@ -61,13 +61,15 @@ def chat_csv_file(chat_id: int) -> str:
 def chat_meta_file(chat_id: int) -> str:
     return f"csv_meta_{chat_id}.json"
 
-KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 11 * 60))
+KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 14 * 60))
 KEEP_ALIVE_SEND_TO_OWNER = True
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON", "service_account.json")
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
 BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")
-
+# === Хранение известных чатов (общий список) ===
+KNOWN_CHATS_FILE = "known_chats.json"
+known_chats = {}
 if not TOKEN:
     raise ValueError("BOT_TOKEN не установлен!")
 
@@ -2627,7 +2629,7 @@ def keep_alive_task():
                     log_error(f"Keep-alive self-ping error: {e}")
             if KEEP_ALIVE_SEND_TO_OWNER and OWNER_ID:
                 try:
-                    send_temp_message(int(OWNER_ID), f"🟢 Keep-alive: бот {VERSION} активен.\n{now_local().isoformat(timespec='seconds')}")
+                    #send_temp_message(int(OWNER_ID), f"🟢 Keep-alive: бот {VERSION} активен.\n{now_local().isoformat(timespec='seconds')}")
                 except Exception as e:
                     log_error(f"Keep-alive notify owner: {e}")
         except Exception as e:
