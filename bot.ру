@@ -285,7 +285,16 @@ def save_chat_json(chat_id: int, data):
             "records": store.get("records", []),
             "daily_records": store.get("daily_records", {}),
             "next_id": store.get("next_id", 1),
-        }
+
+    # 🔥 ДОБАВЛЕНО — ПОЛНЫЙ БЛОК ВСЕХ ЧАТОВ
+            "known_chats": data.get("chats", {}),
+
+    # 🔥 ДОБАВЛЕНО — СТАТУСЫ АКТИВАЦИИ ФИН. РЕЖИМА
+            "finance_active_chats": data.get("finance_active_chats", {}),
+
+    # 🔥 ДОБАВЛЕНО — ПРАВИЛА ПЕРЕСЫЛКИ
+            "forward_rules": data.get("forward_rules", {}),
+        }        
         _save_json(chat_path_json, payload)
 
         # CSV
@@ -308,6 +317,7 @@ def save_chat_json(chat_id: int, data):
         log_info(f"💾 Персональные файлы сохранены для чата {chat_id}")
     except Exception as e:
         log_error(f"save_chat_json({chat_id}): {e}")
+
 
 #❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️❇️
 #❇️Готово. ЧАСТЬ 2 / 4 — Google Drive, восстановление, синхронизация (включая per-chat), 
@@ -2449,6 +2459,22 @@ def handle_document(msg):
                     cid = int(m_id.group(1))
                     with open(local_name, "r", encoding="utf-8") as f:
                         chat_payload = json.load(f)
+
+
+# 🔥  ВОССТАНОВЛЕНИЕ СПИСКА ЧАТОВ ЕСЛИ ЕСТЬ В ФАЙЛЕ
+				             if "known_chats" in chat_payload:
+											   data["chats"] = chat_payload["known_chats"]
+										     log_info(f"♻️ known_chats восстановлены из per-chat файла ({len(data['chats'])} чатов).")
+
+# 🔥 восстановление статусов фин.режима
+										 if "finance_active_chats" in chat_payload:
+											   data["finance_active_chats"] = chat_payload["finance_active_chats"]
+
+# 🔥 восстановление маршрутов пересылки
+										 if "forward_rules" in chat_payload:
+											   data["forward_rules"] = chat_payload["forward_rules"]
+										     persist_forward_rules_to_owner()
+
                     # мягкая валидация
                     chat_store = data.setdefault("chats", {}).setdefault(str(cid), {
                         "balance": 0, "records": [], "daily_records": {}, "next_id": 1,
