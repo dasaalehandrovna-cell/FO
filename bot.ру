@@ -1,4 +1,4 @@
-# 2661/испр числа/ Каждый чат ведёт собственные файлы:
+# 2752/испр числа/ Каждый чат ведёт собственные файлы:
 # ======================================
 # 🧭 Описание: Code_021b
 #  • Полный UI как в 9.8.6-fo_6: окно дня, кнопки, меню редактирования,
@@ -61,7 +61,7 @@ def chat_csv_file(chat_id: int) -> str:
 def chat_meta_file(chat_id: int) -> str:
     return f"csv_meta_{chat_id}.json"
 
-KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 11 * 60))
+KEEP_ALIVE_INTERVAL_SECONDS = int(os.getenv("KEEP_ALIVE_INTERVAL_SECONDS", 14 * 60))
 KEEP_ALIVE_SEND_TO_OWNER = True
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON", "service_account.json")
@@ -308,11 +308,6 @@ def save_chat_json(chat_id: int, data):
         }
         _save_json(chat_path_meta, meta)
         log_info(f"💾 Персональные файлы сохранены для чата {chat_id}")
-        # 🧾 Дополнительно: обновляем личный backup владельца (список чатов, статусы и пересылка)
-        try:
-            trigger_owner_backup()
-        except Exception as e2:
-            log_error(f"trigger_owner_backup in save_chat_json({chat_id}): {e2}")
     except Exception as e:
         log_error(f"save_chat_json({chat_id}): {e}")
 
@@ -578,8 +573,6 @@ def save_known_chats_for_owner():
             }
 
         content["known_chats"] = known
-        content["finance_active_chats"] = data.get("finance_active_chats", {})
-        content["forward_rules"] = data.get("forward_rules", {})
         content["known_chats_updated"] = now_local().isoformat(timespec="seconds")
 
         # 💾 Сохраняем обновлённый файл владельца
@@ -644,25 +637,6 @@ def save_known_chats_json():
         log_error(f"save_known_chats_json: {e}")
 
 #🔴
-# ================================================================
-# 🔔 Триггер обновления личного data_{OWNER_ID}.json владельца
-# ================================================================
-def trigger_owner_backup():
-    """
-    Обновляет личный файл владельца data_<OWNER_ID>.json:
-    • встраивает внутрь него known_chats, finance_active_chats и forward_rules
-    • отправляет обновлённый файл в BACKUP_CHAT_ID (через save_known_chats_for_owner)
-    Вызывается после любых изменений данных, через save_chat_json().
-    """
-    try:
-        # Если OWNER_ID не задан — просто ничего не делаем
-        if not OWNER_ID:
-            return
-        # Переиспользуем существующую логику сохранения/бэкапа владельца
-        save_known_chats_for_owner()
-    except Exception as e:
-        log_error(f"trigger_owner_backup: {e}")
-
 # ---------- Глобальные данные ----------
 
 # ================================================================
@@ -2655,7 +2629,7 @@ def keep_alive_task():
                     log_error(f"Keep-alive self-ping error: {e}")
             if KEEP_ALIVE_SEND_TO_OWNER and OWNER_ID:
                 try:
-                    send_temp_message(int(OWNER_ID), f"🟢 Keep-alive: бот {VERSION} активен.\n{now_local().isoformat(timespec='seconds')}")
+                    #send_temp_message(int(OWNER_ID), f"🟢 Keep-alive: бот {VERSION} активен.\n{now_local().isoformat(timespec='seconds')}")
                 except Exception as e:
                     log_error(f"Keep-alive notify owner: {e}")
         except Exception as e:
