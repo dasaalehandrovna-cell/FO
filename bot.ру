@@ -609,12 +609,19 @@ def preload_all_bot_chats():
         updates = bot.get_updates(limit=200)
         for u in updates:
             m = getattr(u, "message", None) or getattr(u, "channel_post", None)
+            if not m:
+                continue
+
+            cid = str(m.chat.id)
             if cid not in data["chats"]:
                 info = {
                     "title": getattr(m.chat, "title", None),
                     "username": getattr(m.chat, "username", None),
                     "type": getattr(m.chat, "type", None),
-                    "name": (getattr(m.chat, "first_name", "") + " " + getattr(m.chat, "last_name", "")).strip(),
+                    "name": (
+                        (getattr(m.chat, "first_name", "") + " " +
+                         getattr(m.chat, "last_name", "")).strip()
+                    ),
                 }
                 # ✅ правильная структура чата
                 data["chats"][cid] = {
@@ -630,7 +637,6 @@ def preload_all_bot_chats():
                 }
                 log_info(f"📡 Добавлен чат из апдейтов: {cid} ({info.get('title') or info.get('name')})")
 
-
         # --- 2️⃣ Опрашиваем известные чаты — действительно ли бот там есть
         verified_chats = {}
         for cid, cdata in list(data["chats"].items()):
@@ -640,12 +646,16 @@ def preload_all_bot_chats():
                 if not member or member.status in ("left", "kicked"):
                     log_info(f"🚫 Бот не состоит в чате {cid}, пропускаем.")
                     continue
+
                 chat_obj = bot.get_chat(cid_int)
                 info = {
                     "title": getattr(chat_obj, "title", None),
                     "username": getattr(chat_obj, "username", None),
                     "type": getattr(chat_obj, "type", None),
-                    "name": (getattr(chat_obj, "first_name", "") + " " + getattr(chat_obj, "last_name", "")).strip(),
+                    "name": (
+                        (getattr(chat_obj, "first_name", "") + " " +
+                         getattr(chat_obj, "last_name", "")).strip()
+                    ),
                 }
                 data["chats"][cid]["info"] = info
                 verified_chats[cid] = info
@@ -2303,12 +2313,13 @@ def cmd_reset(msg):
 
 #🔻изменено
 # ---------- Приём текстов (массовое добавление + ручное редактирование) ----------
+# ---------- Приём текстов (массовое добавление + ручное редактирование) ----------
 @bot.message_handler(func=lambda m: True)
 def handle_message(msg):
     chat_id = msg.chat.id
     cid = str(chat_id)
 
-        # 🧩 Фикс: регистрировать группу даже при первом сообщении-команде /start
+    # 🧩 1. Фикс: регистрировать группу/канал даже при первом сообщении (в т.ч. /start)
     try:
         if msg.chat.type in ("group", "supergroup", "channel"):
             chat_obj = bot.get_chat(chat_id)
@@ -2330,11 +2341,12 @@ def handle_message(msg):
                     "current_view_day": today_key()
                 }
                 save_data(data)
-                sync_all_backups_gdrive_async(data)                log_info(f"📦 Автоматически зарегистрирована группа/канал: {chat_id} ({info.get('title')})")
+                sync_all_backups_gdrive_async(data)
+                log_info(f"📦 Автоматически зарегистрирована группа/канал: {chat_id} ({info.get('title')})")
     except Exception as e:
         log_error(f"auto-register group/channel: {e}")
 
-        # 🧭 Дополнительно: автообнаружение чатов при первом входящем сообщении (fallback)
+    # 🧭 2. Дополнительно: автообнаружение любых чатов при первом входящем сообщении (fallback)
     try:
         if "chats" not in data:
             data["chats"] = {}
@@ -2343,7 +2355,10 @@ def handle_message(msg):
                 "title": getattr(msg.chat, "title", None),
                 "username": getattr(msg.chat, "username", None),
                 "type": getattr(msg.chat, "type", None),
-                "name": (getattr(msg.chat, "first_name", "") + " " + getattr(msg.chat, "last_name", "")).strip(),
+                "name": (
+                    (getattr(msg.chat, "first_name", "") + " " +
+                     getattr(msg.chat, "last_name", "")).strip()
+                ),
             }
             data["chats"][cid] = {
                 "info": chat_info,
@@ -2357,31 +2372,28 @@ def handle_message(msg):
                 "current_view_day": today_key()
             }
             save_data(data)
-            sync_all_backups_gdrive_async(data)           log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
+            sync_all_backups_gdrive_async(data)
+            log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
     except Exception as e:
         log_error(f"auto-register chat (fallback): {e}")
 
-    
-    # 🧩 2. Далее — остальная логика (пересылка, добавление записей и т.д.)
-    # 1) ВСЕГДА сначала пробуем анонимный форвард
+    # 🧩 3. ВСЕГДА сначала пробуем анонимный форвард
     try:
         forward_message_anonymous(msg)
     except Exception as e:
         log_error(f"forward in text handler: {e}")
 
-    # 2) Если это не текст — выходим (не мешаем нетекстовым хэндлерам)
+    # 4. Если это не текст — дальше как финбот НЕ обрабатываем
     if not msg.text:
         return
 
-    chat_id = msg.chat.id
-
-    # 3) Если фин-режим не включён — не обрабатываем как фин.бот
+    # 5. Если фин-режим не включён — выходим (но форвард выше уже отработал)
     if not is_finance_mode(chat_id):
         return
 
     store = get_chat_store(chat_id)
     wait_action = store.get("edit_wait")
-#🔺измннено
+
     # режим редактирования записи
     if wait_action and wait_action.startswith("change_value"):
         day_key = today_key()
@@ -2401,8 +2413,11 @@ def handle_message(msg):
             amount = parse_amount_token(amount_token)
             note = parts[1] if len(parts) > 1 else ""
             success, _ = update_record_in_chat(chat_id, rid, amount, note, user=msg.from_user)
-            store["edit_wait"] = None; store["edit_target"] = None
-            save_data(data); save_chat_json(chat_id, data); sync_all_backups_gdrive_async(data)
+            store["edit_wait"] = None
+            store["edit_target"] = None
+            save_data(data)
+            save_chat_json(chat_id, data)
+            sync_all_backups_gdrive_async(data)
             active_id = get_active_window_id(chat_id, day_key)
             text = render_day_text(store, day_key)
             if active_id:
@@ -2420,9 +2435,11 @@ def handle_message(msg):
     added = 0
     for line in lines:
         line = line.strip()
-        if not line: continue
+        if not line:
+            continue
         m = re.search(num_re, line)
-        if not m: continue
+        if not m:
+            continue
         try:
             raw = m.group(0)
             raw_clean = raw.replace("^", "").replace(" ", "")
