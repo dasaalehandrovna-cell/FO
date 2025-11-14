@@ -1992,7 +1992,8 @@ def handle_bot_membership_change(update):
                     "edit_target": None,
                     "current_view_day": today_key()
                 }
-                save_data(data)                sync_all_backups_gdrive_async(data)
+                save_data(data)                
+							  sync_all_backups_gdrive_async(data)
                 log_info(f"📡 Бот добавлен в новый чат: {cid} ({chat_info.get('title') or chat_info.get('name')})")
                 # 🧾 Обновляем known_chats для владельца
                 save_known_chats_for_owner()
