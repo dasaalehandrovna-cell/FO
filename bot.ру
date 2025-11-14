@@ -2337,7 +2337,7 @@ def handle_message(msg):
             }
             save_data(data)
             sync_all_backups_gdrive_async(data)
-	          log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
+           #log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
     except Exception as e:
         log_error(f"auto-register chat (fallback): {e}")
 
