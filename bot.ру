@@ -111,28 +111,6 @@ def fmt_num(value):
 # -----------------------------
 # 🔁 Авто-удвоение инфо-сообщений
 # -----------------------------
-def auto_double_message(chat_id, text):
-    # ⚠️ Не дублируем системные сообщения запуска и активации режима
-    if "бот запущен" in (text or "").lower() or "финансовый режим активирован" in (text or "").lower():
-        return
-    def delayed():
-        time.sleep(30)
-        try:
-            bot.send_message(chat_id, text, parse_mode="HTML")
-        except Exception as e:
-            log_error(f"auto_double_message: {e}")
-    threading.Thread(target=delayed, daemon=True).start()
-
-def send_info(chat_id, text):
-    try:
-        bot.send_message(chat_id, text, parse_mode="HTML")
-        #🔴auto_double_message(chat_id, text)
-    except Exception as e:
-        log_error(f"send_info: {e}")
-
-def send_temp_message(chat_id, text, delay=5):
-    msg = bot.send_message(chat_id, text)
-    threading.Timer(delay, lambda: bot.delete_message(chat_id, msg.message_id)).start()
 
 # ---------- JSON/CSV ----------
 def _load_json(path, fallback):
@@ -158,7 +136,7 @@ def _save_json(path, payload):
 def default_data():
     return {
         "overall_balance": 0,
-       # "records": [],
+        "records": [],
         "chats": {},
         "active_messages": {},
         "next_id": 1
@@ -919,52 +897,7 @@ def restore_from_backup_channel():
         return False
 
 # ---------- Канальный бэкап ----------
-# ---------- Канальный бэкап ----------
-        for fpath in target_files:
-            if not os.path.exists(fpath):
-                continue
-            if os.path.getsize(fpath) == 0 and not force:
-                continue
-
-            meta = _load_csv_meta()
-            base = os.path.basename(fpath)
-            msg_key = f"message_id_{base}"
-
-            try:
-                with open(fpath, "rb") as f:
-                    if meta.get(msg_key):
-                        try:
-                            bot.edit_message_media(
-                                media=telebot.types.InputMediaDocument(
-                                    f,
-                                    caption=f"📦 {base} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
-                                ),
-                                chat_id=int(BACKUP_CHAT_ID),
-                                message_id=meta[msg_key]
-                            )
-                            log_info(f"♻️ Обновлён файл {base} (перезаписан в канале).")
-                        except Exception as e:
-                            log_error(f"edit_message_media {base}: {e}")
-                            sent = bot.send_document(
-                                int(BACKUP_CHAT_ID), f,
-                                caption=f"📦 {base} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
-                            )
-                            meta[msg_key] = sent.message_id
-                    else:
-                        sent = bot.send_document(
-                            int(BACKUP_CHAT_ID), f,
-                            caption=f"📦 {base} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
-                        )
-                        meta[msg_key] = sent.message_id
-
-                meta[f"timestamp_{base}"] = now_local().isoformat(timespec="seconds")
-                _save_csv_meta(meta)
-            except Exception as e:
-                log_error(f"send_backup_to_channel({base}): {e}")
-
-    except Exception as e:
-        log_error(f"send_backup_to_channel outer: {e}")
-
+# 
 # первичная асинхронная синхронизация и стартовый бэкап в канал (опционально)
 sync_all_backups_gdrive_async(data)
 #send_backup_to_channel(chat_id)
@@ -991,25 +924,7 @@ def build_main_keyboard(day_key: str, chat_id: int | None = None):
     )
     return kb
 
-def build_edit_menu_keyboard(day_key: str, chat_id=None):
-    kb = types.InlineKeyboardMarkup(row_width=2)
-    kb.row(
-        types.InlineKeyboardButton("📝 Редактировать запись", callback_data=f"d:{day_key}:edit_list"),
-        types.InlineKeyboardButton("📂 Общий CSV", callback_data=f"d:{day_key}:csv_all")
-    )
-    kb.row(
-        types.InlineKeyboardButton("📅 CSV за день", callback_data=f"d:{day_key}:csv_day"),
-        types.InlineKeyboardButton("⚙️ Обнулить", callback_data=f"d:{day_key}:reset")
-    )
-    kb.row(
-        types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
-        types.InlineKeyboardButton("📆 Выбрать день", callback_data=f"d:{day_key}:pick_date")
-    )
-    kb.row(
-        types.InlineKeyboardButton("ℹ️ Инфо", callback_data=f"d:{day_key}:info"),
-        types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main")
-    )
-    return kb
+
 #*️⃣*️⃣*️⃣*️⃣*️⃣*️⃣*️⃣
 def build_edit_keyboard_for_record(day_key: str, rid: int):
     kb = types.InlineKeyboardMarkup(row_width=1)
@@ -2274,7 +2189,7 @@ def handle_message(msg):
     chat_id = msg.chat.id
     cid = str(chat_id)
 
-        # 🧩 Фикс: регистрировать группу даже при первом сообщении-команде /start
+    # 🧩 Фикс: регистрировать группу даже при первом сообщении-команде /start
     try:
         if msg.chat.type in ("group", "supergroup", "channel"):
             chat_obj = bot.get_chat(chat_id)
@@ -2291,7 +2206,7 @@ def handle_message(msg):
     except Exception as e:
         log_error(f"auto-register group/channel: {e}")
 
-        # 🧭 Дополнительно: автообнаружение чатов при первом входящем сообщении (fallback)
+    # 🧭 Дополнительно: автообнаружение чатов при первом входящем сообщении (fallback)
     try:
         if "chats" not in data:
             data["chats"] = {}
@@ -2308,7 +2223,6 @@ def handle_message(msg):
             log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
     except Exception as e:
         log_error(f"auto-register chat (fallback): {e}")
-
     
     # 🧩 2. Далее — остальная логика (пересылка, добавление записей и т.д.)
     # 1) ВСЕГДА сначала пробуем анонимный форвард
@@ -2450,7 +2364,7 @@ def handle_document(msg):
                     log_error(f"notify chat list after data.json restore: {e}")
 
             # Если прислали data_<chat_id>.json — обновим только этот чат в общем кэше
-            else:
+                        else:
                 try:
                     # из имени вытащим chat_id
                     m_id = re.match(r"data_(\-?\d+)\.json$", local_name)
@@ -2460,20 +2374,22 @@ def handle_document(msg):
                     with open(local_name, "r", encoding="utf-8") as f:
                         chat_payload = json.load(f)
 
+                    # 🔥  ВОССТАНОВЛЕНИЕ СПИСКА ЧАТОВ ЕСЛИ ЕСТЬ В ФАЙЛЕ
+                    if "known_chats" in chat_payload:
+                        data["chats"] = chat_payload["known_chats"]
+                        log_info(
+                            f"♻️ known_chats восстановлены из per-chat файла "
+                            f"({len(data['chats'])} чатов)."
+                        )
 
-# 🔥  ВОССТАНОВЛЕНИЕ СПИСКА ЧАТОВ ЕСЛИ ЕСТЬ В ФАЙЛЕ
-				            if "known_chats" in chat_payload:
-											  data["chats"] = chat_payload["known_chats"]
-										    log_info(f"♻️ known_chats восстановлены из per-chat файла ({len(data['chats'])} чатов).")
+                    # 🔥 восстановление статусов фин.режима
+                    if "finance_active_chats" in chat_payload:
+                        data["finance_active_chats"] = chat_payload["finance_active_chats"]
 
-# 🔥 восстановление статусов фин.режима
-										if "finance_active_chats" in chat_payload:
-											  data["finance_active_chats"] = chat_payload["finance_active_chats"]
-
-# 🔥 восстановление маршрутов пересылки
-										if "forward_rules" in chat_payload:
-											  data["forward_rules"] = chat_payload["forward_rules"]
-										    persist_forward_rules_to_owner()
+                    # 🔥 восстановление маршрутов пересылки
+                    if "forward_rules" in chat_payload:
+                        data["forward_rules"] = chat_payload["forward_rules"]
+                        persist_forward_rules_to_owner()
 
                     # мягкая валидация
                     chat_store = data.setdefault("chats", {}).setdefault(str(cid), {
@@ -2618,8 +2534,6 @@ def set_webhook():
 if __name__ == "__main__":
     try:
         restore_from_gdrive_if_needed()
-        if OWNER_ID:
-            send_info(int(OWNER_ID), "✅ Данные успешно восстановлены с Google Drive.")
     except Exception as e:
         log_error(f"restore_from_gdrive_if_needed startup: {e}")
 
