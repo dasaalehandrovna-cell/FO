@@ -2462,18 +2462,18 @@ def handle_document(msg):
 
 
 # 🔥  ВОССТАНОВЛЕНИЕ СПИСКА ЧАТОВ ЕСЛИ ЕСТЬ В ФАЙЛЕ
-				             if "known_chats" in chat_payload:
-											   data["chats"] = chat_payload["known_chats"]
-										     log_info(f"♻️ known_chats восстановлены из per-chat файла ({len(data['chats'])} чатов).")
+				            if "known_chats" in chat_payload:
+											  data["chats"] = chat_payload["known_chats"]
+										    log_info(f"♻️ known_chats восстановлены из per-chat файла ({len(data['chats'])} чатов).")
 
 # 🔥 восстановление статусов фин.режима
-										 if "finance_active_chats" in chat_payload:
-											   data["finance_active_chats"] = chat_payload["finance_active_chats"]
+										if "finance_active_chats" in chat_payload:
+											  data["finance_active_chats"] = chat_payload["finance_active_chats"]
 
 # 🔥 восстановление маршрутов пересылки
-										 if "forward_rules" in chat_payload:
-											   data["forward_rules"] = chat_payload["forward_rules"]
-										     persist_forward_rules_to_owner()
+										if "forward_rules" in chat_payload:
+											  data["forward_rules"] = chat_payload["forward_rules"]
+										    persist_forward_rules_to_owner()
 
                     # мягкая валидация
                     chat_store = data.setdefault("chats", {}).setdefault(str(cid), {
