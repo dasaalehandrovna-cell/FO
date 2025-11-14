@@ -603,27 +603,26 @@ def preload_all_bot_chats():
         me = bot.get_me()
         my_id = me.id
         data.setdefault("chats", {})
-        known_chats = set(data["chats"].keys())
 
         # --- 1️⃣ Берём чаты из последних апдейтов (если есть)
         updates = bot.get_updates(limit=200)
         for u in updates:
             m = getattr(u, "message", None) or getattr(u, "channel_post", None)
-            if not m:
+            if not m or not m.chat:
                 continue
 
             cid = str(m.chat.id)
             if cid not in data["chats"]:
+                chat_obj = m.chat
                 info = {
-                    "title": getattr(m.chat, "title", None),
-                    "username": getattr(m.chat, "username", None),
-                    "type": getattr(m.chat, "type", None),
+                    "title": getattr(chat_obj, "title", None),
+                    "username": getattr(chat_obj, "username", None),
+                    "type": getattr(chat_obj, "type", None),
                     "name": (
-                        (getattr(m.chat, "first_name", "") + " " +
-                         getattr(m.chat, "last_name", "")).strip()
+                        (getattr(chat_obj, "first_name", "") + " " +
+                         getattr(chat_obj, "last_name", "")).strip()
                     ),
                 }
-                # ✅ правильная структура чата
                 data["chats"][cid] = {
                     "info": info,
                     "balance": 0,
@@ -637,7 +636,7 @@ def preload_all_bot_chats():
                 }
                 log_info(f"📡 Добавлен чат из апдейтов: {cid} ({info.get('title') or info.get('name')})")
 
-        # --- 2️⃣ Опрашиваем известные чаты — действительно ли бот там есть
+        # --- 2️⃣ Проверяем, что бот реально ещё в этих чатах
         verified_chats = {}
         for cid, cdata in list(data["chats"].items()):
             try:
@@ -663,13 +662,13 @@ def preload_all_bot_chats():
             except Exception as e:
                 log_error(f"preload_all_bot_chats check {cid}: {e}")
 
-        # --- 3️⃣ Сохраняем результат
         save_data(data)
         sync_all_backups_gdrive_async(data)
         save_known_chats_for_owner()
         log_info(f"📋 Обнаружено и подтверждено чатов: {len(verified_chats)}")
     except Exception as e:
         log_error(f"preload_all_bot_chats: {e}")
+
 # ================================================================
 
 #%restore_from_gdrive_if_needed()
@@ -948,52 +947,6 @@ def restore_from_backup_channel():
         log_error(f"restore_from_backup_channel: {e}")
         return False
 
-# ---------- Канальный бэкап ----------
-# ---------- Канальный бэкап ----------
-        for fpath in target_files:
-            if not os.path.exists(fpath):
-                continue
-            if os.path.getsize(fpath) == 0 and not force:
-                continue
-
-            meta = _load_csv_meta()
-            base = os.path.basename(fpath)
-            msg_key = f"message_id_{base}"
-
-            try:
-                with open(fpath, "rb") as f:
-                    if meta.get(msg_key):
-                        try:
-                            bot.edit_message_media(
-                                media=telebot.types.InputMediaDocument(
-                                    f,
-                                    caption=f"📦 {base} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
-                                ),
-                                chat_id=int(BACKUP_CHAT_ID),
-                                message_id=meta[msg_key]
-                            )
-                            log_info(f"♻️ Обновлён файл {base} (перезаписан в канале).")
-                        except Exception as e:
-                            log_error(f"edit_message_media {base}: {e}")
-                            sent = bot.send_document(
-                                int(BACKUP_CHAT_ID), f,
-                                caption=f"📦 {base} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
-                            )
-                            meta[msg_key] = sent.message_id
-                    else:
-                        sent = bot.send_document(
-                            int(BACKUP_CHAT_ID), f,
-                            caption=f"📦 {base} — обновлён {now_local().strftime('%Y-%m-%d %H:%M')}"
-                        )
-                        meta[msg_key] = sent.message_id
-
-                meta[f"timestamp_{base}"] = now_local().isoformat(timespec="seconds")
-                _save_csv_meta(meta)
-            except Exception as e:
-                log_error(f"send_backup_to_channel({base}): {e}")
-
-    except Exception as e:
-        log_error(f"send_backup_to_channel outer: {e}")
 
 # первичная асинхронная синхронизация и стартовый бэкап в канал (опционально)
 sync_all_backups_gdrive_async(data)
@@ -1961,7 +1914,6 @@ def forward_message_anonymous(msg):
 # ==========================================================
 # 🧩 АВТО-РЕГИСТРАЦИЯ ЧАТОВ ПРИ ДОБАВЛЕНИИ БОТА
 # ==========================================================
-
 @bot.my_chat_member_handler(func=lambda upd: True)
 def handle_bot_membership_change(update):
     """
@@ -1970,26 +1922,26 @@ def handle_bot_membership_change(update):
     """
     try:
         chat = update.chat
+        if not chat:
+            return
+
         cid = str(chat.id)
         new_status = update.new_chat_member.status
         old_status = update.old_chat_member.status if update.old_chat_member else None
 
         # 🧭 интересуют статусы, где бот активен в чате
-        if new_status in ("member", "administrator") and chat.type in ("group", "supergroup", "channel"):
-            if "chats" not in data:
-                data["chats"] = {}
+        if new_status in ("member", "administrator") and chat.type in ("group", "supergroup", "channel", "private"):
+            data.setdefault("chats", {})
 
-            # если чат ещё не зарегистрирован
-            if "chats" not in data:
-                data["chats"] = {}
-
-            # если чат ещё не зарегистрирован
             if cid not in data["chats"]:
                 chat_info = {
                     "title": getattr(chat, "title", None),
                     "username": getattr(chat, "username", None),
                     "type": getattr(chat, "type", None),
-                    "name": (getattr(chat, "first_name", "") + " " + getattr(chat, "last_name", "")).strip(),
+                    "name": (
+                        (getattr(chat, "first_name", "") + " " +
+                         getattr(chat, "last_name", "")).strip()
+                    ),
                 }
                 data["chats"][cid] = {
                     "info": chat_info,
@@ -2002,21 +1954,34 @@ def handle_bot_membership_change(update):
                     "edit_target": None,
                     "current_view_day": today_key()
                 }
-                save_data(data); sync_all_backups_gdrive_async(data)
+
+                save_data(data)
+                save_chat_json(chat.id, data)
+                sync_all_backups_gdrive_async(data)
                 log_info(f"📡 Бот добавлен в новый чат: {cid} ({chat_info.get('title') or chat_info.get('name')})")
-                # 🧾 Обновляем known_chats для владельца
-                save_known_chats_for_owner()
-                # 📤 Отправляем бэкап-уведомление в BACKUP_CHAT_ID
+
+                # 🧾 Обновляем список чатов владельцу
+                try:
+                    save_known_chats_for_owner()
+                except Exception as e:
+                    log_error(f"save_known_chats_for_owner (membership): {e}")
+
+                # 📤 Уведомление в BACKUP_CHAT_ID
                 try:
                     if BACKUP_CHAT_ID:
-                        caption = f"📥 Новый чат зарегистрирован:\n• ID: `{cid}`\n• Название: {chat_info.get('title') or chat_info.get('name')}\n• Тип: {chat_info.get('type')}"
+                        caption = (
+                            "📥 Новый чат зарегистрирован:\n"
+                            f"• ID: `{cid}`\n"
+                            f"• Название: {chat_info.get('title') or chat_info.get('name')}\n"
+                            f"• Тип: {chat_info.get('type')}"
+                        )
                         bot.send_message(int(BACKUP_CHAT_ID), caption, parse_mode="Markdown")
                 except Exception as e:
                     log_error(f"backup notify new chat: {e}")
 
-        # 🧹 если бота удалили из чата — можно логировать, но не удалять из архива
+        # 🧹 если бота удалили из чата — просто логируем
         elif new_status in ("kicked", "left"):
-            log_info(f"🚪 Бот удалён из чата: {cid} ({chat.title}) — старый статус: {old_status}")
+            log_info(f"🚪 Бот удалён из чата: {cid} ({getattr(chat, 'title', '')}) — старый статус: {old_status}")
 
     except Exception as e:
         log_error(f"handle_bot_membership_change: {e}")
@@ -2372,7 +2337,7 @@ def handle_message(msg):
             }
             save_data(data)
             sync_all_backups_gdrive_async(data)
-            log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
+	          log_info(f"📡 Новый чат зарегистрирован автоматически: {cid} ({chat_info.get('title') or chat_info.get('name')})")
     except Exception as e:
         log_error(f"auto-register chat (fallback): {e}")
 
@@ -2670,8 +2635,6 @@ def set_webhook():
 if __name__ == "__main__":
     try:
         restore_from_gdrive_if_needed()
-        if OWNER_ID:
-            send_info(int(OWNER_ID), "✅ Данные успешно восстановлены с Google Drive.")
     except Exception as e:
         log_error(f"restore_from_gdrive_if_needed startup: {e}")
 
