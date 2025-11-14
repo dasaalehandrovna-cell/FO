@@ -2010,7 +2010,7 @@ def handle_bot_membership_change(update):
                 # 🧾 Обновляем список чатов владельцу
                 try:
                     save_known_chats_for_owner()
-                     save_known_chats_json()
+                    save_known_chats_json()
                 except Exception as e:
                     log_error(f"save_known_chats_for_owner (membership): {e}")
 
