@@ -588,6 +588,52 @@ def save_known_chats_for_owner():
     except Exception as e:
         log_error(f"save_known_chats_for_owner: {e}")
 
+# ================================================================
+# 📘 Сохранение известного списка чатов в JSON и отправка в канал
+# ================================================================
+def save_known_chats_json():
+    """
+    Создаёт файл known_chats.json со списком всех чатов,
+    где бот когда-либо состоял, и отправляет его в BACKUP_CHAT_ID.
+    """
+    try:
+        fname = "known_chats.json"
+
+        output = {
+            "updated": now_local().isoformat(timespec="seconds"),
+            "chats": {}
+        }
+
+        for cid, cdata in data.get("chats", {}).items():
+            info = cdata.get("info", {}) or {}
+            output["chats"][cid] = {
+                "title": info.get("title"),
+                "username": info.get("username"),
+                "type": info.get("type"),
+                "name": info.get("name"),
+                "records_count": sum(len(v) for v in cdata.get("daily_records", {}).values()),
+                "balance": cdata.get("balance", 0)
+            }
+
+        # 💾 сохраняем локально
+        with open(fname, "w", encoding="utf-8") as f:
+            json.dump(output, f, ensure_ascii=False, indent=2)
+
+        log_info(f"📘 known_chats.json сохранён ({len(output['chats'])} чатов)")
+
+        # 📤 отправляем в BACKUP_CHAT_ID
+        if BACKUP_CHAT_ID:
+            with open(fname, "rb") as f:
+                bot.send_document(
+                    int(BACKUP_CHAT_ID),
+                    f,
+                    caption=f"📘 Список чатов (обновлён {output['updated']})"
+                )
+            log_info("📤 known_chats.json отправлен в BACKUP_CHAT_ID")
+
+    except Exception as e:
+        log_error(f"save_known_chats_json: {e}")
+
 #🔴
 # ---------- Глобальные данные ----------
 
@@ -665,6 +711,7 @@ def preload_all_bot_chats():
         save_data(data)
         sync_all_backups_gdrive_async(data)
         save_known_chats_for_owner()
+        save_known_chats_json()
         log_info(f"📋 Обнаружено и подтверждено чатов: {len(verified_chats)}")
     except Exception as e:
         log_error(f"preload_all_bot_chats: {e}")
@@ -1963,6 +2010,7 @@ def handle_bot_membership_change(update):
                 # 🧾 Обновляем список чатов владельцу
                 try:
                     save_known_chats_for_owner()
+                     save_known_chats_json()
                 except Exception as e:
                     log_error(f"save_known_chats_for_owner (membership): {e}")
 
