@@ -1254,10 +1254,7 @@ def on_callback(call):
 # ==========================================================
 
 
-@bot.message_handler(
-    content_types=["text"],
-    func=lambda m: not (m.text or "").startswith("/")
-)
+@bot.message_handler(content_types=["text"], func=lambda m: not (m.text or "").startswith("/"))
 def handle_text(msg):
     """
     Обработка текстов:
@@ -1278,14 +1275,15 @@ def handle_text(msg):
         store = get_chat_store(chat_id)
 
         # ---------- 2) Пересылка текста между чатами ----------
-        if str(chat_id) != str(OWNER_ID):
-            targets = resolve_forward_targets(chat_id)
-            if targets:
-                for dst in targets:
-                    try:
-                        bot.send_message(dst, text)
-                    except Exception as e:
-                        log_error(f"handle_text: forward error: {e}")
+        targets = resolve_forward_targets(chat_id)
+        if targets:
+            for dst in targets:
+                if dst == chat_id:
+                    continue
+                try:
+                    bot.send_message(dst, text)
+                except Exception as e:
+                    log_error(f"handle_text: forward error: {e}")
 
         # ---------- 3) Обработка ожидаемого состояния ----------
         wait = store.get("edit_wait")
@@ -1434,14 +1432,15 @@ def handle_media(msg):
         register_known_chat_from_chat(msg.chat)
 
         # пересылка
-        if str(chat_id) != str(OWNER_ID):
-            targets = resolve_forward_targets(chat_id)
-            if targets:
-                for dst in targets:
-                    try:
-                        bot.copy_message(dst, chat_id, msg.message_id)
-                    except Exception as e:
-                        log_error(f"handle_media: {e}")
+        targets = resolve_forward_targets(chat_id)
+        if targets:
+            for dst in targets:
+                if dst == chat_id:
+                    continue
+                try:
+                    bot.copy_message(dst, chat_id, msg.message_id)
+                except Exception as e:
+                    log_error(f"handle_media: {e}")
 
     except Exception as e:
         log_error(f"handle_media outer: {e}")
