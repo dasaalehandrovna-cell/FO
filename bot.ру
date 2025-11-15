@@ -1,4 +1,4 @@
-# 🧭 Description: Code_022.3
+# 🧭 Description: Code_022.2
 #  • Full finance UI: окно дня, навигация, edit-меню
 #  • Per-chat независимые файлы: data_<chat>.json, .csv, meta
 #  • Backup: Google Drive + Backup Channel
@@ -1408,8 +1408,8 @@ def handle_text(msg):
 
 
 # ==========================================================
-# SECTION 18 — MEDIA HANDLER (фото, видео, документы и т.п.)
-# (фото, видео, документы и т.п.)
+# SECTION 18 — MEDIA HANDLER 
+ 
 # ==========================================================
 
 @bot.message_handler(content_types=[
@@ -1647,13 +1647,26 @@ def handle_document(msg):
 
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
+    """
+    Старт: регистрирует чат, включает финансовый режим и сразу открывает окно дня.
+    """
     chat_id = msg.chat.id
     register_known_chat_from_chat(msg.chat)
 
+    # Включаем финансовый режим сразу
+    set_finance_mode(chat_id, True)
+    save_data(data)
+
+    dk = today_key()
+    txt, _ = render_day_window(chat_id, dk)
+    kb = build_main_keyboard(dk, chat_id)
+
     bot.send_message(
         chat_id,
-        "👋 Бот активен.\nДля включения финансового режима отправьте /поехали"
+        "👋 Бот активен.\nФинансовый режим включён, окно на сегодня открыто."
     )
+    bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+
 
 
 @bot.message_handler(commands=["поехали"])
