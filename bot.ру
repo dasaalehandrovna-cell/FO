@@ -132,7 +132,7 @@ def send_info(chat_id, text):
     except Exception as e:
         log_error(f"send_info: {e}")
 
-def send_temp_message(chat_id, text, delay=5):
+def send_temp_message(chat_id, text, delay=900):
     msg = bot.send_message(chat_id, text)
     threading.Timer(delay, lambda: bot.delete_message(chat_id, msg.message_id)).start()
 
@@ -2629,7 +2629,7 @@ def keep_alive_task():
                     log_error(f"Keep-alive self-ping error: {e}")
             if KEEP_ALIVE_SEND_TO_OWNER and OWNER_ID:
                 try:
-                    #send_temp_message(int(OWNER_ID), f"🟢 Keep-alive: бот {VERSION} активен.\n{now_local().isoformat(timespec='seconds')}")
+                    send_temp_message(int(OWNER_ID), f"🟢 Keep-alive: бот {VERSION} активен.\n{now_local().isoformat(timespec='seconds')}")
                 except Exception as e:
                     log_error(f"Keep-alive notify owner: {e}")
         except Exception as e:
