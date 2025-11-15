@@ -1,4 +1,3 @@
-# 🧭 Description: Code_022.2
 #  • Full finance UI: окно дня, навигация, edit-меню
 #  • Per-chat независимые файлы: data_<chat>.json, .csv, meta
 #  • Backup: Google Drive + Backup Channel
