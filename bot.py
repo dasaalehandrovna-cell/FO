@@ -36,13 +36,17 @@ from google.oauth2 import service_account
 # -----------------------------
 # ⚙️ Конфигурация
 # -----------------------------
-TOKEN = os.getenv("BOT_TOKEN")
-OWNER_ID = os.getenv("OWNER_ID")
-APP_URL = os.getenv("APP_URL", "https://yourapp.onrender.com")
-PORT = int(os.getenv("PORT", 5000))
+# -----------------------------
+# ⚙️ Конфигурация (жёстко прописанные значения для Render)
+# -----------------------------
+TOKEN = "8353050321:AAHS5p9JAZpqfesrScSOgSbGw8_FADEX8l8"
+OWNER_ID = "8592220081"
+APP_URL = "https://fo-1.onrender.com"
+WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
+PORT = 5000
 #VERSION = "9.8.6-fo_6+GDriveOnly (per-chat)"
 VERSION = "Code_022.3-C"
-
+BACKUP_CHAT_ID = "-1003291414261"
 try:
     TZ = ZoneInfo((os.getenv("TZ") or "America/Argentina/Buenos_Aires").strip())
 except Exception:
@@ -68,7 +72,7 @@ KEEP_ALIVE_SEND_TO_OWNER = True
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID")
 SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON", "service_account.json")
 SCOPES = ["https://www.googleapis.com/auth/drive.file"]
-BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")
+#BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")
 # === Хранение известных чатов (общий список) ===
 KNOWN_CHATS_FILE = "known_chats.json"
 known_chats = {}
