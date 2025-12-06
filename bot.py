@@ -869,8 +869,8 @@ def render_day_window(chat_id: int, day_key: str):
     store = get_chat_store(chat_id)
     recs = store.get("daily_records", {}).get(day_key, [])
     lines = []
-        d = datetime.strptime(day_key, "%Y-%m-%d")
-    wd = ["пн","вт","ср","чт","пт","сб","вс"][d.weekday()]
+    d = datetime.strptime(day_key, "%Y-%m-%d")
+    wd = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"][d.weekday()]
     t = now_local()
     td = t.strftime("%Y-%m-%d")
     yd = (t - timedelta(days=1)).strftime("%Y-%m-%d")
@@ -2766,7 +2766,7 @@ def main():
             owner_id = None
         if owner_id:
             try:
-                bot.end_message(
+                bot.send_message(
                     owner_id,
                     f"✅ Бот запущен (версия {VERSION}).\n"
                     f"Восстановление: {'OK' if restored else 'пропущено'}"
