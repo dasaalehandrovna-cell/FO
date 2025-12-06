@@ -22,16 +22,27 @@ from flask import Flask, request
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
-BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-OWNER_ID = os.getenv("OWNER_ID", "").strip()
-BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID", "").strip()
+# -----------------------------
+# ⚙️ Конфигурация (жёстко прописанные значения для Render)
+# -----------------------------
+TOKEN = "8353050321:AAHS5p9JAZpqfesrScSOgSbGw8_FADEX8l8"
+OWNER_ID = "8592220081"
+APP_URL = "https://fo-1.onrender.com"
+WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
+PORT = 5000
+VERSION = "Code_022.3-C"
+BACKUP_CHAT_ID = "-1003291414261"
+
+#BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+#OWNER_ID = os.getenv("OWNER_ID", "").strip()
+#BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
-APP_URL = os.getenv("APP_URL", "").strip()
-PORT = int(os.getenv("PORT", "8443"))
+#APP_URL = os.getenv("APP_URL", "").strip()
+#PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
+#VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
