@@ -30,7 +30,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-VERSION = "Code_022.3-C"
+#VERSION = "Code_022.3-C"
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -42,7 +42,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-#VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
+VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
@@ -869,7 +869,15 @@ def render_day_window(chat_id: int, day_key: str):
     store = get_chat_store(chat_id)
     recs = store.get("daily_records", {}).get(day_key, [])
     lines = []
-    lines.append(f"📅 <b>{day_key}</b>")
+        d = datetime.strptime(day_key, "%Y-%m-%d")
+    wd = ["пн","вт","ср","чт","пт","сб","вс"][d.weekday()]
+    t = now_local()
+    td = t.strftime("%Y-%m-%d")
+    yd = (t - timedelta(days=1)).strftime("%Y-%m-%d")
+    tm = (t + timedelta(days=1)).strftime("%Y-%m-%d")
+    tag = "сегодня" if day_key == td else "вчера" if day_key == yd else "завтра" if day_key == tm else ""
+    label = f"{day_key} ({tag}, {wd})" if tag else f"{day_key} ({wd})"
+    lines.append(f"📅 <b>{label}</b>")
     lines.append("")
     total_income = 0.0
     total_expense = 0.0
@@ -2605,7 +2613,7 @@ def handle_document(msg):
                 data["overall_balance"] = sum(r.get("amount", 0) for r in all_recs)
                 save_data(data)
                 save_chat_json(target)
-                update_or_send_day_window(target, today_key())
+                force_new_day_window(target, today_key())
                 restore_mode = False
                 send_and_auto_delete(
                     chat_id,
