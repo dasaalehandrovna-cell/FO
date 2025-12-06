@@ -1820,24 +1820,44 @@ def require_finance(chat_id: int) -> bool:
 def refresh_total_message_if_any(chat_id: int):
     """
     Если в чате есть активное сообщение '💰 Общий итог',
-    пересчитывает и обновляет его текст.
+    пересчитывает и обновляет его текст на основе ВСЕХ записей,
+    даже если старые окна не создавались.
     """
     store = get_chat_store(chat_id)
     msg_id = store.get("total_msg_id")
     if not msg_id:
         return
     try:
-        chat_bal = store.get("balance", 0)
+        # пересчитываем баланс этого чата по реальным записям
+        chat_bal = sum(r.get("amount", 0) for r in store.get("records", []))
+        store["balance"] = chat_bal
+
+        # пересчитываем общий список записей и общий баланс по всем чатам
+        all_chats = data.get("chats", {})
+        all_recs = []
+        for cid, st in all_chats.items():
+            if st is store:
+                st_bal = chat_bal
+            else:
+                st_bal = sum(r.get("amount", 0) for r in st.get("records", []))
+                st["balance"] = st_bal
+            all_recs.extend(st.get("records", []))
+        data["records"] = all_recs
+        data["overall_balance"] = sum(r.get("amount", 0) for r in all_recs)
+        save_data(data)
+
+        # обычный чат
         if not OWNER_ID or str(chat_id) != str(OWNER_ID):
             text = f"💰 <b>Общий итог по этому чату:</b> {fmt_num(chat_bal)}"
         else:
+            # владелец — общий итог по всем чатам
             lines = []
             info = store.get("info", {})
             title = info.get("title") or f"Чат {chat_id}"
             lines.append("💰 <b>Общий итог (для владельца)</b>")
             lines.append("")
             lines.append(f"• Этот чат ({title}): <b>{fmt_num(chat_bal)}</b>")
-            all_chats = data.get("chats", {})
+
             total_all = 0
             other_lines = []
             for cid, st in all_chats.items():
@@ -1852,6 +1872,7 @@ def refresh_total_message_if_any(chat_id: int):
                 info2 = st.get("info", {})
                 title2 = info2.get("title") or f"Чат {cid_int}"
                 other_lines.append(f"   • {title2}: {fmt_num(bal)}")
+
             if other_lines:
                 lines.append("")
                 lines.append("• Другие чаты:")
@@ -1859,6 +1880,7 @@ def refresh_total_message_if_any(chat_id: int):
             lines.append("")
             lines.append(f"• Всего по всем чатам: <b>{fmt_num(total_all)}</b>")
             text = "\n".join(lines)
+
         bot.edit_message_text(
             text,
             chat_id=chat_id,
@@ -1992,9 +2014,19 @@ def cmd_balance(msg):
     if not require_finance(chat_id):
         return
     store = get_chat_store(chat_id)
-    bal = store.get("balance", 0)
-    send_info(chat_id, f"💰 Баланс: {fmt_num(bal)}")
-@bot.message_handler(commands=["report"])
+    # пересчитываем текущий баланс по всем реальным записям
+    bal = sum(r.get("amount", 0) for r in store.get("records", []))
+    store["balance"] = bal
+    # одновременно обновляем общий список записей и общий баланс
+    all_recs = []
+    for cid, st in data.get("chats", {}).items():
+        if st is store:
+            st["balance"] = bal
+        all_recs.extend(st.get("records", []))
+    data["records"] = all_recs
+    data["overall_balance"] = sum(r.get("amount", 0) for r in all_recs)
+    save_data(data)
+    send_info(chat_id, f"💰 Баланс: {fmt_num(bal)}")@bot.message_handler(commands=["report"])
 def cmd_report(msg):
     chat_id = msg.chat.id
     delete_message_later(chat_id, msg.message_id, 15)
