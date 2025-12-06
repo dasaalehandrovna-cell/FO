@@ -2576,24 +2576,30 @@ def handle_document(msg):
     update_chat_info_from_message(msg)
     file = msg.document
     fname = (file.file_name or "").lower()
+
+    # ---------- РЕЖИМ ВОССТАНОВЛЕНИЯ ----------
     if restore_mode:
+        # принимаем только json/csv
         if not (fname.endswith(".json") or fname.endswith(".csv")):
             send_and_auto_delete(chat_id, f"⚠️ Файл '{fname}' не является JSON/CSV.")
             return
+        # один раз скачиваем файл
         try:
             file_info = bot.get_file(file.file_id)
             raw = bot.download_file(file_info.file_path)
         except Exception as e:
             send_and_auto_delete(chat_id, f"❌ Ошибка скачивания файла: {e}")
             return
+
         tmp_path = f"restore_{chat_id}_{fname}"
         with open(tmp_path, "wb") as f:
             f.write(raw)
+
+        # 1) Глобальный data.json
         if fname == "data.json":
             try:
                 os.replace(tmp_path, "data.json")
                 data = load_data()
-                # после восстановления глобальных данных — новое окно в текущем чате
                 try:
                     day_key = today_key()
                     force_new_day_window(chat_id, day_key)
@@ -2604,10 +2610,11 @@ def handle_document(msg):
             except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
             return
-           if fname == "csv_meta.json":
+
+        # 2) csv_meta.json
+        if fname == "csv_meta.json":
             try:
                 os.replace(tmp_path, "csv_meta.json")
-                # после восстановления меты — можно тоже пересоздать окно
                 try:
                     day_key = today_key()
                     force_new_day_window(chat_id, day_key)
@@ -2618,21 +2625,15 @@ def handle_document(msg):
             except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
             return
+
+        # 3) Чатовый JSON с полем chat_id (любой data_<что-то>.json)
         if fname.endswith(".json"):
             try:
-                try:
-                    file_info = bot.get_file(file.file_id)
-                    raw = bot.download_file(file_info.file_path)
-                except Exception as e:
-                    send_and_auto_delete(chat_id, f"❌ Ошибка скачивания файла: {e}")
-                    return
-                tmp_path = f"restore_{chat_id}_{fname}"
-                with open(tmp_path, "wb") as f:
-                    f.write(raw)
                 payload = _load_json(tmp_path, None)
                 if not payload or not isinstance(payload, dict):
                     send_and_auto_delete(chat_id, "❌ JSON повреждён или пуст.")
                     return
+
                 target = payload.get("chat_id")
                 if not target:
                     send_and_auto_delete(
@@ -2640,30 +2641,29 @@ def handle_document(msg):
                         "❌ В JSON нет поля chat_id — не могу определить чат!"
                     )
                     return
+
                 target = int(target)
                 out_name = f"data_{target}.json"
                 os.replace(tmp_path, out_name)
+
                 store = payload
                 store["balance"] = sum(r.get("amount", 0) for r in store.get("records", []))
                 data.setdefault("chats", {})[str(target)] = store
                 finance_active_chats.add(target)
+
                 all_recs = []
                 for cid, s in data.get("chats", {}).items():
                     all_recs.extend(s.get("records", []))
                 data["records"] = all_recs
                 data["overall_balance"] = sum(r.get("amount", 0) for r in all_recs)
+
                 save_data(data)
                 save_chat_json(target)
+                # новое окно в восстановленном чате
                 force_new_day_window(target, today_key())
                 restore_mode = False
-                send_and_auto_delete(
-                    chat_id,
-                    f"🟢 Чат {target} восстановлен из файла '{fname}'.\n"
-                    f"Записей: {len(store.get('records', []))}\n"
-                    f"Баланс: {store['balance']}"
-                )
-            except Exception as e:
-                                # Авто-обновление общих итогов после восстановления чата
+
+                # обновляем общие итоги
                 try:
                     refresh_total_message_if_any(target)
                     if OWNER_ID and str(target) != str(OWNER_ID):
@@ -2673,8 +2673,18 @@ def handle_document(msg):
                             log_error(f"restore JSON: refresh_total_message_if_any(owner) error: {e2}")
                 except Exception as e2:
                     log_error(f"restore JSON: refresh_total_message_if_any({target}) error: {e2}")
+
+                send_and_auto_delete(
+                    chat_id,
+                    f"🟢 Чат {target} восстановлен из файла '{fname}'.\n"
+                    f"Записей: {len(store.get('records', []))}\n"
+                    f"Баланс: {store['balance']}"
+                )
+            except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка восстановления JSON: {e}")
             return
+
+        # 4) CSV data_<chat>.csv
         if fname.startswith("data_") and fname.endswith(".csv"):
             try:
                 os.replace(tmp_path, fname)
@@ -2683,8 +2693,12 @@ def handle_document(msg):
             except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
             return
+
+        # всё остальное в restore_mode не поддерживаем
         send_and_auto_delete(chat_id, f"⚠️ Формат не поддерживается: {fname}")
         return
+
+    # ---------- Обычный режим: просто пересылка документа ----------
     try:
         try:
             BOT_ID = bot.get_me().id
@@ -2707,8 +2721,7 @@ def handle_document(msg):
             except Exception as e:
                 log_error(f"handle_document forward to {dst}: {e}")
     except Exception as e:
-        log_error(f"handle_document error: {e}")
-@bot.edited_message_handler(content_types=["text"])
+        log_error(f"handle_document error: {e}")@bot.edited_message_handler(content_types=["text"])
 def handle_edited_message(msg):
     """
     Редактирование записи через редактирование сообщения.
