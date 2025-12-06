@@ -1391,21 +1391,36 @@ def on_callback(call):
             return
         if cmd == "total":
             chat_bal = store.get("balance", 0)
+            total_msg_id = store.get("total_msg_id")
+
+            # Обычный чат (не владелец)
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
-                sent = bot.send_message(
-                    chat_id,
-                    f"💰 <b>Общий итог по этому чату:</b> {fmt_num(chat_bal)}",
-                    parse_mode="HTML"
-                )
+                text = f"💰 <b>Общий итог по этому чату:</b> {fmt_num(chat_bal)}"
+                if total_msg_id:
+                    try:
+                        bot.edit_message_text(
+                            text,
+                            chat_id=chat_id,
+                            message_id=total_msg_id,
+                            parse_mode="HTML"
+                        )
+                        save_data(data)
+                        return
+                    except Exception as e:
+                        log_error(f"total: edit total_msg_id for chat {chat_id} failed: {e}")
+                sent = bot.send_message(chat_id, text, parse_mode="HTML")
                 store["total_msg_id"] = sent.message_id
                 save_data(data)
                 return
+
+            # Владелец — общий итог по всем чатам
             lines = []
             info = store.get("info", {})
             title = info.get("title") or f"Чат {chat_id}"
             lines.append("💰 <b>Общий итог (для владельца)</b>")
             lines.append("")
             lines.append(f"• Этот чат ({title}): <b>{fmt_num(chat_bal)}</b>")
+
             all_chats = data.get("chats", {})
             total_all = 0
             other_lines = []
@@ -1427,7 +1442,21 @@ def on_callback(call):
                 lines.extend(other_lines)
             lines.append("")
             lines.append(f"• Всего по всем чатам: <b>{fmt_num(total_all)}</b>")
-            sent = bot.send_message(chat_id, "\n".join(lines), parse_mode="HTML")
+
+            text = "\n".join(lines)
+            if total_msg_id:
+                try:
+                    bot.edit_message_text(
+                        text,
+                        chat_id=chat_id,
+                        message_id=total_msg_id,
+                        parse_mode="HTML"
+                    )
+                    save_data(data)
+                    return
+                except Exception as e:
+                    log_error(f"total(owner): edit total_msg_id for chat {chat_id} failed: {e}")
+            sent = bot.send_message(chat_id, text, parse_mode="HTML")
             store["total_msg_id"] = sent.message_id
             save_data(data)
             return
@@ -2564,14 +2593,26 @@ def handle_document(msg):
             try:
                 os.replace(tmp_path, "data.json")
                 data = load_data()
+                # после восстановления глобальных данных — новое окно в текущем чате
+                try:
+                    day_key = today_key()
+                    force_new_day_window(chat_id, day_key)
+                except Exception as e2:
+                    log_error(f"restore data.json: force_new_day_window({chat_id}) error: {e2}")
                 restore_mode = False
                 send_and_auto_delete(chat_id, "🟢 Глобальный data.json восстановлен!")
             except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
             return
-        if fname == "csv_meta.json":
+           if fname == "csv_meta.json":
             try:
                 os.replace(tmp_path, "csv_meta.json")
+                # после восстановления меты — можно тоже пересоздать окно
+                try:
+                    day_key = today_key()
+                    force_new_day_window(chat_id, day_key)
+                except Exception as e2:
+                    log_error(f"restore csv_meta.json: force_new_day_window({chat_id}) error: {e2}")
                 restore_mode = False
                 send_and_auto_delete(chat_id, "🟢 csv_meta.json восстановлен!")
             except Exception as e:
@@ -2622,6 +2663,16 @@ def handle_document(msg):
                     f"Баланс: {store['balance']}"
                 )
             except Exception as e:
+                                # Авто-обновление общих итогов после восстановления чата
+                try:
+                    refresh_total_message_if_any(target)
+                    if OWNER_ID and str(target) != str(OWNER_ID):
+                        try:
+                            refresh_total_message_if_any(int(OWNER_ID))
+                        except Exception as e2:
+                            log_error(f"restore JSON: refresh_total_message_if_any(owner) error: {e2}")
+                except Exception as e2:
+                    log_error(f"restore JSON: refresh_total_message_if_any({target}) error: {e2}")
                 send_and_auto_delete(chat_id, f"❌ Ошибка восстановления JSON: {e}")
             return
         if fname.startswith("data_") and fname.endswith(".csv"):
@@ -2699,6 +2750,15 @@ def handle_edited_message(msg):
     update_record_in_chat(chat_id, rid, new_amount, new_note)
     update_or_send_day_window(chat_id, day_key)
     log_info(f"EDITED: окно дня {day_key} обновлено для чата {chat_id}")
+    try:
+        refresh_total_message_if_any(chat_id)
+        if OWNER_ID and str(chat_id) != str(OWNER_ID):
+            try:
+                refresh_total_message_if_any(int(OWNER_ID))
+            except Exception as e:
+                log_error(f"EDITED: refresh_total_message_if_any(owner) error: {e}")
+    except Exception as e:
+        log_error(f"EDITED: refresh_total_message_if_any({chat_id}) error: {e}")
 @bot.message_handler(content_types=["deleted_message"])
 def handle_deleted_message(msg):
     try:
