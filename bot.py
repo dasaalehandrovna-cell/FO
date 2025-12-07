@@ -150,8 +150,7 @@ def send_backup_to_chat(chat_id: int) -> None:
 
         chat_title = _get_chat_title_for_backup(chat_id)
         caption = (
-            f"🧾 Авто-бэкап JSON чата: {chat_title}
-"
+            f"🧾 Авто-бэкап JSON чата: {chat_title}\n"
             f"⏱ {now_local().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
