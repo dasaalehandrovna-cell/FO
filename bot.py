@@ -1,4 +1,4 @@
-# даты/оновл цифр/нов окно вост/обнов отч/ обновл бек чат/
+# даты/оновл цифр/нов окно вост/обновл везде/
 import os
 import io
 import json
@@ -280,7 +280,6 @@ def get_chat_store(chat_id: int) -> dict:
             "edit_wait": None,
             "edit_target": None,
             "current_view_day": today_key(),
-            "report_msg_id": None,
             "settings": {
                 "auto_add": False
             },
@@ -1406,21 +1405,7 @@ def on_callback(call):
             for dk, recs in sorted(store.get("daily_records", {}).items()):
                 s = sum(r["amount"] for r in recs)
                 lines.append(f"{dk}: {fmt_num(s)}")
-            text = "\n".join(lines)
-            rep_id = store.get("report_msg_id")
-            if rep_id:
-                try:
-                    bot.edit_message_text(
-                        text,
-                        chat_id=chat_id,
-                        message_id=rep_id
-                    )
-                    return
-                except Exception:
-                    pass
-            sent = bot.send_message(chat_id, text)
-            store["report_msg_id"] = sent.message_id
-            save_data(data)
+            bot.send_message(chat_id, "\n".join(lines))
             return
         if cmd == "total":
             chat_bal = store.get("balance", 0)
@@ -1850,28 +1835,6 @@ def require_finance(chat_id: int) -> bool:
         send_and_auto_delete(chat_id, "⚙️ Финансовый режим выключен.\nАктивируйте командой /поехали")
         return False
     return True
-def refresh_report(chat_id: int):
-    store = get_chat_store(chat_id)
-    rep_id = store.get("report_msg_id")
-    if not rep_id:
-        return
-
-    lines = ["📊 Отчёт:"]
-    for dk, recs in sorted(store.get("daily_records", {}).items()):
-        s = sum(r["amount"] for r in recs)
-        lines.append(f"{dk}: {fmt_num(s)}")
-    text = "\n".join(lines)
-
-    try:
-        bot.edit_message_text(
-            text,
-            chat_id=chat_id,
-            message_id=rep_id
-        )
-    except Exception:
-        # если сообщение удалили — сброс
-        store["report_msg_id"] = None
-        save_data(data)
 def refresh_total_message_if_any(chat_id: int):
     """
     Если в чате есть активное сообщение '💰 Общий итог',
@@ -2326,11 +2289,10 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
 
         # 2️⃣ Обновление/создание окна дня
         _safe("force_new_day_window", lambda: force_new_day_window(chat_id, day_key))
-        _safe("refresh_report", lambda: refresh_report(chat_id))
 
         # 3️⃣ Бэкапы
         _safe("backup_to_channel", lambda: send_backup_to_channel(chat_id))
-        _safe("backup_to_chat", lambda: send_backup_to_chat(chat_id))
+        _safe("backup_to_chat", lambda: force_backup_to_chat(chat_id))
 
         # 4️⃣ Итоги
         _safe("refresh_total_chat", lambda: refresh_total_message_if_any(chat_id))
