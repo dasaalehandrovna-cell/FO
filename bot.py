@@ -1,3 +1,4 @@
+# даты/оновл цифр/нов окно вост/
 import os
 import io
 import json
@@ -129,6 +130,7 @@ def send_backup_to_chat(chat_id: int) -> None:
     • если есть msg_id → edit_message_media()
     • если нет / не найдено → отправляем новое сообщение
     • обновляем meta-файл в рабочей директории (Render-friendly)
+    • при смене дня (после 00:00) создаётся НОВОЕ сообщение с файлом
     """
     try:
         if not chat_id:
@@ -141,14 +143,30 @@ def send_backup_to_chat(chat_id: int) -> None:
         if not os.path.exists(json_path):
             log_error(f"send_backup_to_chat: {json_path} NOT FOUND")
             return
+
         meta = _load_chat_backup_meta()
         msg_key = f"msg_chat_{chat_id}"
         ts_key = f"timestamp_chat_{chat_id}"
+
         chat_title = _get_chat_title_for_backup(chat_id)
         caption = (
-            f"🧾 Авто-бэкап JSON чата: {chat_title}\n"
+            f"🧾 Авто-бэкап JSON чата: {chat_title}
+"
             f"⏱ {now_local().strftime('%Y-%m-%d %H:%M:%S')}"
         )
+
+        # 🔄 Новый файл после смены дня
+        last_ts = meta.get(ts_key)
+        msg_id = meta.get(msg_key)
+        if msg_id and last_ts:
+            try:
+                prev_dt = datetime.fromisoformat(last_ts)
+                if prev_dt.date() != now_local().date():
+                    # Новый день — старое сообщение оставляем как архив, создаём новое
+                    msg_id = None
+            except Exception as e:
+                log_error(f"send_backup_to_chat: bad timestamp for chat {chat_id}: {e}")
+
         def _open_file() -> io.BytesIO | None:
             """Чтение JSON в BytesIO с правильным именем файла."""
             try:
@@ -171,7 +189,7 @@ def send_backup_to_chat(chat_id: int) -> None:
             buf = io.BytesIO(data_bytes)
             buf.name = file_name
             return buf
-        msg_id = meta.get(msg_key)
+
         if msg_id:
             fobj = _open_file()
             if not fobj:
@@ -188,6 +206,7 @@ def send_backup_to_chat(chat_id: int) -> None:
                 return
             except Exception as e:
                 log_error(f"send_backup_to_chat edit FAILED in {chat_id}: {e}")
+
         fobj = _open_file()
         if not fobj:
             return
@@ -1820,44 +1839,24 @@ def require_finance(chat_id: int) -> bool:
 def refresh_total_message_if_any(chat_id: int):
     """
     Если в чате есть активное сообщение '💰 Общий итог',
-    пересчитывает и обновляет его текст на основе ВСЕХ записей,
-    даже если старые окна не создавались.
+    пересчитывает и обновляет его текст.
     """
     store = get_chat_store(chat_id)
     msg_id = store.get("total_msg_id")
     if not msg_id:
         return
     try:
-        # пересчитываем баланс этого чата по реальным записям
-        chat_bal = sum(r.get("amount", 0) for r in store.get("records", []))
-        store["balance"] = chat_bal
-
-        # пересчитываем общий список записей и общий баланс по всем чатам
-        all_chats = data.get("chats", {})
-        all_recs = []
-        for cid, st in all_chats.items():
-            if st is store:
-                st_bal = chat_bal
-            else:
-                st_bal = sum(r.get("amount", 0) for r in st.get("records", []))
-                st["balance"] = st_bal
-            all_recs.extend(st.get("records", []))
-        data["records"] = all_recs
-        data["overall_balance"] = sum(r.get("amount", 0) for r in all_recs)
-        save_data(data)
-
-        # обычный чат
+        chat_bal = store.get("balance", 0)
         if not OWNER_ID or str(chat_id) != str(OWNER_ID):
             text = f"💰 <b>Общий итог по этому чату:</b> {fmt_num(chat_bal)}"
         else:
-            # владелец — общий итог по всем чатам
             lines = []
             info = store.get("info", {})
             title = info.get("title") or f"Чат {chat_id}"
             lines.append("💰 <b>Общий итог (для владельца)</b>")
             lines.append("")
             lines.append(f"• Этот чат ({title}): <b>{fmt_num(chat_bal)}</b>")
-
+            all_chats = data.get("chats", {})
             total_all = 0
             other_lines = []
             for cid, st in all_chats.items():
@@ -1872,7 +1871,6 @@ def refresh_total_message_if_any(chat_id: int):
                 info2 = st.get("info", {})
                 title2 = info2.get("title") or f"Чат {cid_int}"
                 other_lines.append(f"   • {title2}: {fmt_num(bal)}")
-
             if other_lines:
                 lines.append("")
                 lines.append("• Другие чаты:")
@@ -1880,7 +1878,6 @@ def refresh_total_message_if_any(chat_id: int):
             lines.append("")
             lines.append(f"• Всего по всем чатам: <b>{fmt_num(total_all)}</b>")
             text = "\n".join(lines)
-
         bot.edit_message_text(
             text,
             chat_id=chat_id,
@@ -2014,19 +2011,9 @@ def cmd_balance(msg):
     if not require_finance(chat_id):
         return
     store = get_chat_store(chat_id)
-    # пересчитываем текущий баланс по всем реальным записям
-    bal = sum(r.get("amount", 0) for r in store.get("records", []))
-    store["balance"] = bal
-    # одновременно обновляем общий список записей и общий баланс
-    all_recs = []
-    for cid, st in data.get("chats", {}).items():
-        if st is store:
-            st["balance"] = bal
-        all_recs.extend(st.get("records", []))
-    data["records"] = all_recs
-    data["overall_balance"] = sum(r.get("amount", 0) for r in all_recs)
-    save_data(data)
-    send_info(chat_id, f"💰 Баланс: {fmt_num(bal)}")@bot.message_handler(commands=["report"])
+    bal = store.get("balance", 0)
+    send_info(chat_id, f"💰 Баланс: {fmt_num(bal)}")
+@bot.message_handler(commands=["report"])
 def cmd_report(msg):
     chat_id = msg.chat.id
     delete_message_later(chat_id, msg.message_id, 15)
@@ -2286,18 +2273,27 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
         except Exception as e:
             log_error(f"[FINALIZE ERROR] {action_name}: {e}")
             return None
+
     def _job():
+        # 1️⃣ Внутренний перерасчёт и сохранение
         _safe("recalc_balance", lambda: recalc_balance(chat_id))
         _safe("rebuild_global_records", rebuild_global_records)
         _safe("save_chat_json", lambda: save_chat_json(chat_id))
         _safe("save_data", lambda: save_data(data))
         _safe("export_global_csv", lambda: export_global_csv(data))
+
+        # 2️⃣ Обновление/создание окна дня
+        _safe("force_new_day_window", lambda: force_new_day_window(chat_id, day_key))
+
+        # 3️⃣ Бэкапы
         _safe("backup_to_channel", lambda: send_backup_to_channel(chat_id))
         _safe("backup_to_chat", lambda: force_backup_to_chat(chat_id))
-        _safe("update_day_window", lambda: force_new_day_window(chat_id, day_key))
+
+        # 4️⃣ Итоги
         _safe("refresh_total_chat", lambda: refresh_total_message_if_any(chat_id))
         if OWNER_ID and str(chat_id) != str(OWNER_ID):
             _safe("refresh_total_owner", lambda: refresh_total_message_if_any(int(OWNER_ID)))
+
     t_prev = _finalize_timers.get(chat_id)
     if t_prev and t_prev.is_alive():
         try:
@@ -2323,13 +2319,29 @@ def force_backup_to_chat(chat_id: int):
         if not os.path.exists(json_path):
             log_error(f"force_backup_to_chat: {json_path} missing")
             return
+
         meta = _load_chat_backup_meta()
-        old_mid = meta.get(f"msg_chat_{chat_id}")
+        msg_key = f"msg_chat_{chat_id}"
+        ts_key = f"timestamp_chat_{chat_id}"
+        old_mid = meta.get(msg_key)
+        last_ts = meta.get(ts_key)
+
+        # 🔄 Новый файл после смены дня
+        if old_mid and last_ts:
+            try:
+                prev_dt = datetime.fromisoformat(last_ts)
+                if prev_dt.date() != now_local().date():
+                    old_mid = None
+            except Exception as e:
+                log_error(f"force_backup_to_chat: bad timestamp for chat {chat_id}: {e}")
+
         chat_title = _get_chat_title_for_backup(chat_id)
         caption = (
-            f"🧾 Авто-бэкап JSON чата: {chat_title}\n"
+            f"🧾 Авто-бэкап JSON чата: {chat_title}
+"
             f"⏱ {now_local().strftime('%Y-%m-%d %H:%M:%S')}"
         )
+
         with open(json_path, "rb") as f:
             data = f.read()
             if not data:
@@ -2346,6 +2358,7 @@ def force_backup_to_chat(chat_id: int):
                 file_name += f".{ext}"
             buf = io.BytesIO(data)
             buf.name = file_name
+
         if old_mid:
             try:
                 bot.edit_message_media(
@@ -2357,9 +2370,10 @@ def force_backup_to_chat(chat_id: int):
                 return
             except Exception as e:
                 log_error(f"force_backup_to_chat: edit failed: {e}")
+
         sent = bot.send_document(chat_id, buf, caption=caption)
-        meta[f"msg_chat_{chat_id}"] = sent.message_id
-        meta[f"timestamp_chat_{chat_id}"] = now_local().isoformat(timespec="seconds")
+        meta[msg_key] = sent.message_id
+        meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_chat_backup_meta(meta)
     except Exception as e:
         log_error(f"force_backup_to_chat({chat_id}): {e}")
@@ -2608,64 +2622,51 @@ def handle_document(msg):
     update_chat_info_from_message(msg)
     file = msg.document
     fname = (file.file_name or "").lower()
-
-    # ---------- РЕЖИМ ВОССТАНОВЛЕНИЯ ----------
     if restore_mode:
-        # принимаем только json/csv
         if not (fname.endswith(".json") or fname.endswith(".csv")):
             send_and_auto_delete(chat_id, f"⚠️ Файл '{fname}' не является JSON/CSV.")
             return
-        # один раз скачиваем файл
         try:
             file_info = bot.get_file(file.file_id)
             raw = bot.download_file(file_info.file_path)
         except Exception as e:
             send_and_auto_delete(chat_id, f"❌ Ошибка скачивания файла: {e}")
             return
-
         tmp_path = f"restore_{chat_id}_{fname}"
         with open(tmp_path, "wb") as f:
             f.write(raw)
-
-        # 1) Глобальный data.json
         if fname == "data.json":
             try:
                 os.replace(tmp_path, "data.json")
                 data = load_data()
-                try:
-                    day_key = today_key()
-                    force_new_day_window(chat_id, day_key)
-                except Exception as e2:
-                    log_error(f"restore data.json: force_new_day_window({chat_id}) error: {e2}")
                 restore_mode = False
                 send_and_auto_delete(chat_id, "🟢 Глобальный data.json восстановлен!")
             except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
             return
-
-        # 2) csv_meta.json
         if fname == "csv_meta.json":
             try:
                 os.replace(tmp_path, "csv_meta.json")
-                try:
-                    day_key = today_key()
-                    force_new_day_window(chat_id, day_key)
-                except Exception as e2:
-                    log_error(f"restore csv_meta.json: force_new_day_window({chat_id}) error: {e2}")
                 restore_mode = False
                 send_and_auto_delete(chat_id, "🟢 csv_meta.json восстановлен!")
             except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
             return
-
-        # 3) Чатовый JSON с полем chat_id (любой data_<что-то>.json)
         if fname.endswith(".json"):
             try:
+                try:
+                    file_info = bot.get_file(file.file_id)
+                    raw = bot.download_file(file_info.file_path)
+                except Exception as e:
+                    send_and_auto_delete(chat_id, f"❌ Ошибка скачивания файла: {e}")
+                    return
+                tmp_path = f"restore_{chat_id}_{fname}"
+                with open(tmp_path, "wb") as f:
+                    f.write(raw)
                 payload = _load_json(tmp_path, None)
                 if not payload or not isinstance(payload, dict):
                     send_and_auto_delete(chat_id, "❌ JSON повреждён или пуст.")
                     return
-
                 target = payload.get("chat_id")
                 if not target:
                     send_and_auto_delete(
@@ -2673,29 +2674,30 @@ def handle_document(msg):
                         "❌ В JSON нет поля chat_id — не могу определить чат!"
                     )
                     return
-
                 target = int(target)
                 out_name = f"data_{target}.json"
                 os.replace(tmp_path, out_name)
-
                 store = payload
                 store["balance"] = sum(r.get("amount", 0) for r in store.get("records", []))
                 data.setdefault("chats", {})[str(target)] = store
                 finance_active_chats.add(target)
-
                 all_recs = []
                 for cid, s in data.get("chats", {}).items():
                     all_recs.extend(s.get("records", []))
                 data["records"] = all_recs
                 data["overall_balance"] = sum(r.get("amount", 0) for r in all_recs)
-
                 save_data(data)
                 save_chat_json(target)
-                # новое окно в восстановленном чате
                 force_new_day_window(target, today_key())
                 restore_mode = False
-
-                # обновляем общие итоги
+                send_and_auto_delete(
+                    chat_id,
+                    f"🟢 Чат {target} восстановлен из файла '{fname}'.\n"
+                    f"Записей: {len(store.get('records', []))}\n"
+                    f"Баланс: {store['balance']}"
+                )
+            except Exception as e:
+                                # Авто-обновление общих итогов после восстановления чата
                 try:
                     refresh_total_message_if_any(target)
                     if OWNER_ID and str(target) != str(OWNER_ID):
@@ -2705,18 +2707,8 @@ def handle_document(msg):
                             log_error(f"restore JSON: refresh_total_message_if_any(owner) error: {e2}")
                 except Exception as e2:
                     log_error(f"restore JSON: refresh_total_message_if_any({target}) error: {e2}")
-
-                send_and_auto_delete(
-                    chat_id,
-                    f"🟢 Чат {target} восстановлен из файла '{fname}'.\n"
-                    f"Записей: {len(store.get('records', []))}\n"
-                    f"Баланс: {store['balance']}"
-                )
-            except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка восстановления JSON: {e}")
             return
-
-        # 4) CSV data_<chat>.csv
         if fname.startswith("data_") and fname.endswith(".csv"):
             try:
                 os.replace(tmp_path, fname)
@@ -2725,12 +2717,8 @@ def handle_document(msg):
             except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
             return
-
-        # всё остальное в restore_mode не поддерживаем
         send_and_auto_delete(chat_id, f"⚠️ Формат не поддерживается: {fname}")
         return
-
-    # ---------- Обычный режим: просто пересылка документа ----------
     try:
         try:
             BOT_ID = bot.get_me().id
@@ -2753,7 +2741,8 @@ def handle_document(msg):
             except Exception as e:
                 log_error(f"handle_document forward to {dst}: {e}")
     except Exception as e:
-        log_error(f"handle_document error: {e}")@bot.edited_message_handler(content_types=["text"])
+        log_error(f"handle_document error: {e}")
+@bot.edited_message_handler(content_types=["text"])
 def handle_edited_message(msg):
     """
     Редактирование записи через редактирование сообщения.
