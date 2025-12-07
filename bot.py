@@ -2405,6 +2405,7 @@ def handle_text(msg):
         wait = store.get("edit_wait")
         auto_add_enabled = store.get("settings", {}).get("auto_add", False)
         should_add = False
+        
         if wait and wait.get("type") == "add" and looks_like_amount(text):
                 should_add = True
                 day_key = wait.get("day_key")
@@ -2441,8 +2442,28 @@ def handle_text(msg):
                         store["next_id"] = rid + 1
                         added_any = True
                 if added_any:
-                        update_or_send_day_window(chat_id, day_key)
-                        schedule_finalize(chat_id, day_key)
+                        update_or_send_day_window(chat_id, day_key); schedule_finalize(chat_id, day_key); refresh_total_message_if_any(chat_id)
+                        if OWNER_ID and str(chat_id) != str(OWNER_ID):
+                                try: refresh_total_message_if_any(int(OWNER_ID))
+                                except Exception: pass
+                store["balance"] = sum(x["amount"] for x in store["records"])
+                data["records"] = []
+                for cid, st in data.get("chats", {}).items():
+                        data["records"].extend(st.get("records", []))
+                data["overall_balance"] = sum(x["amount"] for x in data["records"])
+                save_data(data)
+                save_chat_json(chat_id)
+                store["edit_wait"] = None
+                save_data(data)
+                return
+
+# --- NEW: мгновенное обновление общего итога ---
+                        refresh_total_message_if_any(chat_id)
+if OWNER_ID and str(chat_id) != str(OWNER_ID):
+    try:
+        refresh_total_message_if_any(int(OWNER_ID))
+    except Exception:
+        pass
                 store["balance"] = sum(x["amount"] for x in store["records"])
                 data["records"] = []
                 for cid, st in data.get("chats", {}).items():
@@ -2487,17 +2508,15 @@ def handle_text(msg):
                 store.setdefault("records", []).append(new_rec)
                 store.setdefault("daily_records", {}).setdefault(day_key, []).append(new_rec)
                 store["next_id"] = rid2 + 1
-            update_record_in_chat(chat_id, rid, amount, note)
-            schedule_finalize(chat_id, day_key)
-            refresh_total_message_if_any(chat_id)
+            update_record_in_chat(chat_id, rid, amount, note); update_or_send_day_window(chat_id, day_key); refresh_total_message_if_any(chat_id)
             if OWNER_ID and str(chat_id) != str(OWNER_ID):
-                try:
-                    refresh_total_message_if_any(int(OWNER_ID))
-                except Exception:
-                    pass
+                try: refresh_total_message_if_any(int(OWNER_ID))
+                except Exception: pass
+            schedule_finalize(chat_id, day_key)
             store["edit_wait"] = None
             save_data(data)
             return
+            
         if text.upper() == "ДА":
             reset_flag = store.get("reset_wait", False)
             reset_time = store.get("reset_time", 0)
