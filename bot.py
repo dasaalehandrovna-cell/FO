@@ -1962,7 +1962,7 @@ def cmd_ping(msg):
 @bot.message_handler(commands=["view"])
 def cmd_view(msg):
     chat_id = msg.chat.id
-    send_and_auto_delete(chat_id, msg.message_id, 15)
+    delete_message_later(chat_id, msg.message_id, 15)
     if not require_finance(chat_id):
         return
     parts = (msg.text or "").split()
@@ -1982,7 +1982,7 @@ def cmd_view(msg):
 @bot.message_handler(commands=["prev"])
 def cmd_prev(msg):
     chat_id = msg.chat.id
-    send_and_auto_delete(chat_id, msg.message_id, 15)
+    delete_message_later(chat_id, msg.message_id, 15)
     if not require_finance(chat_id):
         return
     d = datetime.strptime(today_key(), "%Y-%m-%d") - timedelta(days=1)
@@ -2135,35 +2135,41 @@ def cmd_reset(msg):
     schedule_cancel_wait(chat_id, 15)
 @bot.message_handler(commands=["stopforward"])
 def cmd_stopforward(msg):
-    if str(msg.chat.id) != str(OWNER_ID):
-        send_info(msg.chat.id, "Эта команда только для владельца.")
+    chat_id = msg.chat.id
+    if str(chat_id) != str(OWNER_ID):
+        send_info(chat_id, "Эта команда только для владельца.")
         delete_message_later(chat_id, msg.message_id, 15)
         return
     clear_forward_all()
-    send_info(msg.chat.id, "Пересылка полностью отключена.")
+    send_info(chat_id, "Пересылка полностью отключена.")
+    delete_message_later(chat_id, msg.message_id, 15)
 @bot.message_handler(commands=["backup_gdrive_on"])
 def cmd_on_drive(msg):
+    chat_id = msg.chat.id
     backup_flags["drive"] = True
     save_data(data)
-    send_info(msg.chat.id, "☁️ Бэкап в Google Drive включён")
+    send_info(chat_id, "☁️ Бэкап в Google Drive включён")
     delete_message_later(chat_id, msg.message_id, 15)
 @bot.message_handler(commands=["backup_gdrive_off"])
 def cmd_off_drive(msg):
+    chat_id = msg.chat.id
     backup_flags["drive"] = False
     save_data(data)
-    send_info(msg.chat.id, "☁️ Бэкап в Google Drive выключен")
+    send_info(chat_id, "☁️ Бэкап в Google Drive выключен")
     delete_message_later(chat_id, msg.message_id, 15)
 @bot.message_handler(commands=["backup_channel_on"])
 def cmd_on_channel(msg):
+    chat_id = msg.chat.id
     backup_flags["channel"] = True
     save_data(data)
-    send_info(msg.chat.id, "📡 Бэкап в канал включён")
+    send_info(chat_id, "📡 Бэкап в канал включён")
     delete_message_later(chat_id, msg.message_id, 15)
 @bot.message_handler(commands=["backup_channel_off"])
 def cmd_off_channel(msg):
+    chat_id = msg.chat.id
     backup_flags["channel"] = False
     save_data(data)
-    send_info(msg.chat.id, "📡 Бэкап в канал выключен")
+    send_info(chat_id, "📡 Бэкап в канал выключен")
     delete_message_later(chat_id, msg.message_id, 15)
 @bot.message_handler(commands=["autoadd_info", "autoadd.info"])
 def cmd_autoadd_info(msg):
@@ -2336,8 +2342,7 @@ def force_backup_to_chat(chat_id: int):
 
         chat_title = _get_chat_title_for_backup(chat_id)
         caption = (
-            f"🧾 Авто-бэкап JSON чата: {chat_title}
-"
+            f"🧾 Авто-бэкап JSON чата: {chat_title}\n"
             f"⏱ {now_local().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
