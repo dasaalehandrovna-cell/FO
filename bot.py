@@ -2369,15 +2369,22 @@ def force_backup_to_chat(chat_id: int):
         old_mid = meta.get(msg_key)
         last_ts = meta.get(ts_key)
 
-        # 🔄 Новый файл после смены дня
-        if old_mid and last_ts:
+        if old_mid:
             try:
-                prev_dt = datetime.fromisoformat(last_ts)
-                if prev_dt.date() != now_local().date():
-                    old_mid = None
+                bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=old_mid,
+                    media=telebot.types.InputMediaDocument(buf),
+                    caption=caption
+                )
+                meta[ts_key] = now_local().isoformat(timespec="seconds")
+                _save_chat_backup_meta(meta)
+                return
             except Exception as e:
-                log_error(f"force_backup_to_chat: bad timestamp for chat {chat_id}: {e}")
-
+                log_error(f"force_backup_to_chat: edit failed (msg deleted?): {e}")
+                old_mid = None
+                meta[msg_key] = None
+                _save_chat_backup_meta(meta)
         chat_title = _get_chat_title_for_backup(chat_id)
         caption = (
             f"🧾 Авто-бэкап JSON чата: {chat_title}\n"
