@@ -1817,6 +1817,33 @@ def update_or_send_day_window(chat_id: int, day_key: str):
     Если окно дня существует — обновляем через edit.
     Если нет — создаём.
     """
+        # === Специальный режим для OWNER_ID: окно дня = документ JSON ===
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        mid = get_active_window_id(chat_id, day_key)
+
+        # Удаляем старое окно
+        if mid:
+            try:
+                bot.delete_message(chat_id, mid)
+            except:
+                pass
+
+        # Обновляем json-файл
+        save_chat_json(chat_id)
+        json_path = chat_json_file(chat_id)
+
+        # Отправляем окно в виде документа
+        with open(json_path, "rb") as f:
+            sent = bot.send_document(
+                chat_id,
+                f,
+                caption=txt,
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+
+        set_active_window_id(chat_id, day_key, sent.message_id)
+        return
     txt, _ = render_day_window(chat_id, day_key)
     kb = build_main_keyboard(day_key, chat_id)
     mid = get_active_window_id(chat_id, day_key)
@@ -2404,6 +2431,31 @@ def force_backup_to_chat(chat_id: int):
     except Exception as e:
         log_error(f"force_backup_to_chat({chat_id}): {e}")
 def force_new_day_window(chat_id: int, day_key: str):
+        # === Специально для OWNER_ID: окно дня = JSON-документ ===
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        save_chat_json(chat_id)
+        json_path = chat_json_file(chat_id)
+        txt, _ = render_day_window(chat_id, day_key)
+        kb = build_main_keyboard(day_key, chat_id)
+
+        old_mid = get_active_window_id(chat_id, day_key)
+        if old_mid:
+            try:
+                bot.delete_message(chat_id, old_mid)
+            except:
+                pass
+
+        with open(json_path, "rb") as f:
+            sent = bot.send_document(
+                chat_id,
+                f,
+                caption=txt,
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+
+        set_active_window_id(chat_id, day_key, sent.message_id)
+        return
     old_mid = get_active_window_id(chat_id, day_key)
     txt, _ = render_day_window(chat_id, day_key)
     kb = build_main_keyboard(day_key, chat_id)
