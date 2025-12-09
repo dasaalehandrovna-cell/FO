@@ -127,6 +127,25 @@ def mega_find_or_create_folder(name):
 
     log_error("MEGA: folder create failed")
     return None
+
+def restore_from_mega_if_needed() -> bool:
+    restored = False
+    try:
+        if not os.path.exists(DATA_FILE):
+            if download_from_mega(DATA_FILE, DATA_FILE):
+                restored = True
+        if not os.path.exists(CSV_FILE):
+            if download_from_mega(CSV_FILE, CSV_FILE):
+                restored = True
+        if not os.path.exists(CSV_META_FILE):
+            if download_from_mega(CSV_META_FILE, CSV_META_FILE):
+                restored = True
+        log_info("MEGA restore: OK" if restored else "MEGA restore: nothing to restore")
+        return restored
+    except Exception as e:
+        log_error(f"restore_from_mega_if_needed ERROR: {e}")
+        return False
+
     
     
 backup_flags = {
@@ -298,7 +317,7 @@ def send_backup_to_chat(chat_id: int) -> None:
         try:
             upload_to_mega(json_path)
         except Exception as e:
-    log_error(f"MEGA backup (chat) error: {e}")
+        log_error(f"MEGA backup (chat) error: {e}")
     except Exception as e:
         log_error(f"send_backup_to_chat({chat_id}): {e}")
 def default_data():
@@ -3001,7 +3020,7 @@ def set_webhook():
     log_info(f"Webhook установлен: {wh_url}")
 def main():
     global data
-    restored = restore_from_gdrive_if_needed()
+    restored_g = restore_from_gdrive_if_needed()
     # 🔄 Попытка восстановить из MEGA
     restored_m = restore_from_mega_if_needed()
     # хотя бы один источник дал восстановление
