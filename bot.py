@@ -282,7 +282,7 @@ def get_chat_store(chat_id: int) -> dict:
             "current_view_day": today_key(),
             "report_msg_id": None,
             "settings": {
-                "auto_add": False
+                "auto_add": True if str(chat_id) == str(OWNER_ID) else False
             },
         }
     )
@@ -327,7 +327,7 @@ def save_chat_json(chat_id: int):
                         r.get("id"),
                         r.get("short_id"),
                         r.get("timestamp"),
-                        r.get("amount"),
+                        csv_clean_number(r.get("amount")),
                         r.get("note"),
                         r.get("owner"),
                         dk,
@@ -409,6 +409,18 @@ def parse_amount(raw: str) -> float:
     if not is_positive and not is_negative:
         is_negative = True
     return -value if is_negative else value
+def csv_clean_number(x):
+    """
+    Делает число чистым для Excel:
+    120.0 → 120
+    120.50 → 120.5
+    -50.000 → -50
+    """
+    try:
+        s = f"{float(x):.12f}".rstrip("0").rstrip(".")
+        return s
+    except:
+        return str(x)
 def split_amount_and_note(text: str):
     """
     Возвращает:
@@ -545,7 +557,7 @@ def export_global_csv(d: dict):
                             r.get("id"),
                             r.get("short_id"),
                             r.get("timestamp"),
-                            r.get("amount"),
+                            csv_clean_number(r.get("amount")),
                             r.get("note"),
                             r.get("owner"),
                             dk,
