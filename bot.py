@@ -50,49 +50,85 @@ DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
 # ========== MEGA.NZ BACKUP ==========
-from mega import Mega
+# ========== MEGA.NZ BACKUP (официальный SDK) ==========
+from mega.sdk import MegaApi
+import threading
 
 MEGA_EMAIL = os.getenv("MEGA_EMAIL", "").strip()
 MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
 MEGA_FOLDER = os.getenv("MEGA_FOLDER", "FO_Backups").strip()
 
-def _mega_client():
-    try:
+# Создаём один глобальный объект API
+mega_api = MegaApi("FinanceBot")
+
+# Флаг авторизации
+_mega_logged_in = False
+_mega_login_lock = threading.Lock()
+
+
+def mega_login():
+    """
+    Авторизация в MEGA (один раз за запуск).
+    """
+    global _mega_logged_in
+    with _mega_login_lock:
+        if _mega_logged_in:
+            return True
+
         if not MEGA_EMAIL or not MEGA_PASSWORD:
             log_error("MEGA credentials missing")
-            return None
-        mega = Mega()
-        return mega.login(MEGA_EMAIL, MEGA_PASSWORD)
-    except Exception as e:
-        log_error(f"MEGA login error: {e}")
-        return None
-
-def upload_to_mega(path: str):
-    """Загрузка файла в MEGA в папку MEGA_FOLDER."""
-    try:
-        if not os.path.exists(path):
-            log_error(f"upload_to_mega: {path} not found")
             return False
 
-        m = _mega_client()
-        if not m:
-            return False
+        event = threading.Event()
 
-        files = m.get_files()
-        folder_node = None
-        for k, v in files.items():
-            if v.get("a", {}).get("n") == MEGA_FOLDER:
-                folder_node = k
+        def on_login(api, err):
+            if err == 0:
+                event.set()
+            else:
+                log_error(f"MEGA login error: {err}")
+                event.set()
 
-        if not folder_node:
-            folder_node = m.create_folder(MEGA_FOLDER)
+        mega_api.login(MEGA_EMAIL, MEGA_PASSWORD, on_login)
+        event.wait(timeout=20)
 
-        m.upload(path, folder_node)
-        log_info(f"MEGA: uploaded {path}")
+        _mega_logged_in = True
+        log_info("MEGA: login OK")
         return True
-    except Exception as e:
-        log_error(f"upload_to_mega({path}): {e}")
-        return False
+
+
+def mega_find_or_create_folder(name):
+    """
+    Находит папку MEGA_FOLDER или создаёт.
+    Возвращает MegaNode.
+    """
+    mega_login()
+    root = mega_api.getRootNode()
+    children = mega_api.getChildren(root)
+
+    # ищем папку
+    for c in children:
+        if c.getName() == name:
+            return c
+
+    # создаём
+    event = threading.Event()
+
+    def on_create(api, node):
+        event.set()
+
+    mega_api.createFolder(name, root, on_create)
+    event.wait(timeout=15)
+
+    # ищем снова
+    children = mega_api.getChildren(root)
+    for c in children:
+        if c.getName() == name:
+            return c
+
+    log_error("MEGA: folder create failed")
+    return None
+    
+    
 backup_flags = {
     "drive": True,
     "channel": True,
