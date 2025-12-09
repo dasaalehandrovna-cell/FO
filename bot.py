@@ -49,6 +49,50 @@ KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
+# ========== MEGA.NZ BACKUP ==========
+from mega import Mega
+
+MEGA_EMAIL = os.getenv("MEGA_EMAIL", "").strip()
+MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
+MEGA_FOLDER = os.getenv("MEGA_FOLDER", "FO_Backups").strip()
+
+def _mega_client():
+    try:
+        if not MEGA_EMAIL or not MEGA_PASSWORD:
+            log_error("MEGA credentials missing")
+            return None
+        mega = Mega()
+        return mega.login(MEGA_EMAIL, MEGA_PASSWORD)
+    except Exception as e:
+        log_error(f"MEGA login error: {e}")
+        return None
+
+def upload_to_mega(path: str):
+    """Загрузка файла в MEGA в папку MEGA_FOLDER."""
+    try:
+        if not os.path.exists(path):
+            log_error(f"upload_to_mega: {path} not found")
+            return False
+
+        m = _mega_client()
+        if not m:
+            return False
+
+        files = m.get_files()
+        folder_node = None
+        for k, v in files.items():
+            if v.get("a", {}).get("n") == MEGA_FOLDER:
+                folder_node = k
+
+        if not folder_node:
+            folder_node = m.create_folder(MEGA_FOLDER)
+
+        m.upload(path, folder_node)
+        log_info(f"MEGA: uploaded {path}")
+        return True
+    except Exception as e:
+        log_error(f"upload_to_mega({path}): {e}")
+        return False
 backup_flags = {
     "drive": True,
     "channel": True,
