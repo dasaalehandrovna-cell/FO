@@ -258,6 +258,11 @@ def send_backup_to_chat(chat_id: int) -> None:
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_chat_backup_meta(meta)
         log_info(f"Chat backup CREATED in chat {chat_id}")
+        # MEGA backup
+        try:
+            upload_to_mega(json_path)
+        except Exception as e:
+    log_error(f"MEGA backup (chat) error: {e}")
     except Exception as e:
         log_error(f"send_backup_to_chat({chat_id}): {e}")
 def default_data():
@@ -788,6 +793,12 @@ def send_backup_to_channel(chat_id: int):
         csv_path = chat_csv_file(chat_id)
         send_backup_to_channel_for_file(json_path, f"json_{chat_id}", chat_title)
         send_backup_to_channel_for_file(csv_path, f"csv_{chat_id}", chat_title)
+        # MEGA backup
+        try:
+            upload_to_mega(json_path)
+            upload_to_mega(csv_path)
+        except Exception as e:
+            log_error(f"MEGA backup error: {e}")
     except Exception as e:
         log_error(f"send_backup_to_channel({chat_id}): {e}")
 def _owner_data_file() -> str | None:
@@ -1783,6 +1794,8 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     save_chat_json(chat_id)
     export_global_csv(data)
     send_backup_to_channel(chat_id)
+    upload_to_mega(chat_json_file(chat_id))
+    upload_to_mega(chat_csv_file(chat_id))
 def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str):
     store = get_chat_store(chat_id)
     found = None
@@ -1806,6 +1819,8 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
     export_global_csv(data)
     send_backup_to_channel(chat_id)
     send_backup_to_chat(chat_id)
+    upload_to_mega(chat_json_file(chat_id))
+    upload_to_mega(chat_csv_file(chat_id))
 def delete_record_in_chat(chat_id: int, rid: int):
     store = get_chat_store(chat_id)
     store["records"] = [x for x in store["records"] if x["id"] != rid]
@@ -1824,6 +1839,8 @@ def delete_record_in_chat(chat_id: int, rid: int):
     export_global_csv(data)
     send_backup_to_channel(chat_id)
     send_backup_to_chat(chat_id)
+    upload_to_mega(chat_json_file(chat_id))
+    upload_to_mega(chat_csv_file(chat_id))
 def renumber_chat_records(chat_id: int):
     """
     Перенумеровывает записи в чате по реальному порядку:
@@ -2584,6 +2601,7 @@ def handle_text(msg):
             update_record_in_chat(chat_id, rid, amount, note)
             schedule_finalize(chat_id, day_key)
             refresh_total_message_if_any(chat_id)
+            
             if OWNER_ID and str(chat_id) != str(OWNER_ID):
                 try:
                     refresh_total_message_if_any(int(OWNER_ID))
@@ -2636,6 +2654,8 @@ def reset_chat_data(chat_id: int):
         export_global_csv(data)
         send_backup_to_channel(chat_id)
         send_backup_to_chat(chat_id)
+        upload_to_mega(chat_json_file(chat_id))
+        upload_to_mega(chat_csv_file(chat_id))
         day_key = store.get("current_view_day", today_key())
         update_or_send_day_window(chat_id, day_key)
         try:
@@ -2946,6 +2966,10 @@ def set_webhook():
 def main():
     global data
     restored = restore_from_gdrive_if_needed()
+    # 🔄 Попытка восстановить из MEGA
+    restored_m = restore_from_mega_if_needed()
+    # хотя бы один источник дал восстановление
+    restored = restored_g or restored_m
     data = load_data()
     data["forward_rules"] = load_forward_rules()
     log_info(f"Данные загружены. Версия бота: {VERSION}")
