@@ -45,6 +45,64 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
 VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
+
+# ========== MEGA via MEGAcmd (CLI) ==========
+import subprocess
+
+MEGA_EMAIL = os.getenv("MEGA_EMAIL", "").strip()
+MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
+MEGA_FOLDER = os.getenv("MEGA_FOLDER", "/FO_Backups").strip()
+
+def mega_login():
+    try:
+        subprocess.run(["mega-logout"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except:
+        pass
+    result = subprocess.run(["mega-login", MEGA_EMAIL, MEGA_PASSWORD], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode == 0:
+        log_info("MEGA: login OK")
+        return True
+    else:
+        log_error(f"MEGA login error: {result.stderr.decode()}")
+        return False
+
+def upload_to_mega(path: str):
+    if not os.path.exists(path):
+        log_error(f"upload_to_mega: file not found {path}")
+        return
+    mega_login()
+    remote = f"{MEGA_FOLDER}/{os.path.basename(path)}"
+    result = subprocess.run(["mega-put", path, remote], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode == 0:
+        log_info(f"MEGA: uploaded {path} → {remote}")
+    else:
+        log_error(f"MEGA upload error: {result.stderr.decode()}")
+
+def download_from_mega(remote_name: str, dest_path: str) -> bool:
+    mega_login()
+    remote = f"{MEGA_FOLDER}/{remote_name}"
+    result = subprocess.run(["mega-get", remote, dest_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode == 0:
+        log_info(f"MEGA: downloaded {remote_name}")
+        return True
+    else:
+        log_info(f"MEGA: no file {remote_name} found")
+        return False
+
+def restore_from_mega_if_needed() -> bool:
+    restored = False
+    if not os.path.exists(DATA_FILE):
+        if download_from_mega(DATA_FILE, DATA_FILE):
+            restored = True
+    if not os.path.exists(CSV_FILE):
+        if download_from_mega(CSV_FILE, CSV_FILE):
+            restored = True
+    if not os.path.exists(CSV_META_FILE):
+        if download_from_mega(CSV_META_FILE, CSV_META_FILE):
+            restored = True
+    log_info("MEGA restore: OK" if restored else "MEGA restore skipped")
+    return restored
+
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
@@ -127,25 +185,6 @@ def mega_find_or_create_folder(name):
 
     log_error("MEGA: folder create failed")
     return None
-
-def restore_from_mega_if_needed() -> bool:
-    restored = False
-    try:
-        if not os.path.exists(DATA_FILE):
-            if download_from_mega(DATA_FILE, DATA_FILE):
-                restored = True
-        if not os.path.exists(CSV_FILE):
-            if download_from_mega(CSV_FILE, CSV_FILE):
-                restored = True
-        if not os.path.exists(CSV_META_FILE):
-            if download_from_mega(CSV_META_FILE, CSV_META_FILE):
-                restored = True
-        log_info("MEGA restore: OK" if restored else "MEGA restore: nothing to restore")
-        return restored
-    except Exception as e:
-        log_error(f"restore_from_mega_if_needed ERROR: {e}")
-        return False
-
     
     
 backup_flags = {
@@ -317,7 +356,7 @@ def send_backup_to_chat(chat_id: int) -> None:
         try:
             upload_to_mega(json_path)
         except Exception as e:
-        log_error(f"MEGA backup (chat) error: {e}")
+    log_error(f"MEGA backup (chat) error: {e}")
     except Exception as e:
         log_error(f"send_backup_to_chat({chat_id}): {e}")
 def default_data():
@@ -3020,7 +3059,7 @@ def set_webhook():
     log_info(f"Webhook установлен: {wh_url}")
 def main():
     global data
-    restored_g = restore_from_gdrive_if_needed()
+    restored = restore_from_gdrive_if_needed()
     # 🔄 Попытка восстановить из MEGA
     restored_m = restore_from_mega_if_needed()
     # хотя бы один источник дал восстановление
