@@ -43,7 +43,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
+VERSION = "Code_ 022.9.11 🏝️3️⃣"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 
 # ========== MEGA via MEGAcmd (CLI) ==========
