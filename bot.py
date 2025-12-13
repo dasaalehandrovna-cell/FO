@@ -1,4 +1,4 @@
-# даты/оновл цифр/нов окно вост/обнов отч/ обновл бек чат/
+# даты/оновл цифр/нов окно вост/обновл везде/с .json в окне
 import os
 import io
 import json
@@ -43,150 +43,12 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_ 022.9.11 🏝️3️⃣"
+VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
-
-# ========== MEGA via MEGAcmd (CLI) ==========
-import subprocess
-
-MEGA_EMAIL = os.getenv("MEGA_EMAIL", "").strip()
-MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
-MEGA_FOLDER = os.getenv("MEGA_FOLDER", "/FO_Backups").strip()
-
-def mega_login():
-    try:
-        subprocess.run(["mega-logout"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except:
-        pass
-    result = subprocess.run(["mega-login", MEGA_EMAIL, MEGA_PASSWORD], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode == 0:
-        log_info("MEGA: login OK")
-        return True
-    else:
-        log_error(f"MEGA login error: {result.stderr.decode()}")
-        return False
-
-def upload_to_mega(path: str):
-    if not os.path.exists(path):
-        log_error(f"upload_to_mega: file not found {path}")
-        return
-    mega_login()
-    remote = f"{MEGA_FOLDER}/{os.path.basename(path)}"
-    result = subprocess.run(["mega-put", path, remote], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode == 0:
-        log_info(f"MEGA: uploaded {path} → {remote}")
-    else:
-        log_error(f"MEGA upload error: {result.stderr.decode()}")
-
-def download_from_mega(remote_name: str, dest_path: str) -> bool:
-    mega_login()
-    remote = f"{MEGA_FOLDER}/{remote_name}"
-    result = subprocess.run(["mega-get", remote, dest_path], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    if result.returncode == 0:
-        log_info(f"MEGA: downloaded {remote_name}")
-        return True
-    else:
-        log_info(f"MEGA: no file {remote_name} found")
-        return False
-
-def restore_from_mega_if_needed() -> bool:
-    restored = False
-    if not os.path.exists(DATA_FILE):
-        if download_from_mega(DATA_FILE, DATA_FILE):
-            restored = True
-    if not os.path.exists(CSV_FILE):
-        if download_from_mega(CSV_FILE, CSV_FILE):
-            restored = True
-    if not os.path.exists(CSV_META_FILE):
-        if download_from_mega(CSV_META_FILE, CSV_META_FILE):
-            restored = True
-    log_info("MEGA restore: OK" if restored else "MEGA restore skipped")
-    return restored
-
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
-# ========== MEGA.NZ BACKUP ==========
-# ========== MEGA.NZ BACKUP (официальный SDK) ==========
-from mega.sdk import MegaApi
-import threading
-
-MEGA_EMAIL = os.getenv("MEGA_EMAIL", "").strip()
-MEGA_PASSWORD = os.getenv("MEGA_PASSWORD", "").strip()
-MEGA_FOLDER = os.getenv("MEGA_FOLDER", "FO_Backups").strip()
-
-# Создаём один глобальный объект API
-mega_api = MegaApi("FinanceBot")
-
-# Флаг авторизации
-_mega_logged_in = False
-_mega_login_lock = threading.Lock()
-
-
-def mega_login():
-    """
-    Авторизация в MEGA (один раз за запуск).
-    """
-    global _mega_logged_in
-    with _mega_login_lock:
-        if _mega_logged_in:
-            return True
-
-        if not MEGA_EMAIL or not MEGA_PASSWORD:
-            log_error("MEGA credentials missing")
-            return False
-
-        event = threading.Event()
-
-        def on_login(api, err):
-            if err == 0:
-                event.set()
-            else:
-                log_error(f"MEGA login error: {err}")
-                event.set()
-
-        mega_api.login(MEGA_EMAIL, MEGA_PASSWORD, on_login)
-        event.wait(timeout=20)
-
-        _mega_logged_in = True
-        log_info("MEGA: login OK")
-        return True
-
-
-def mega_find_or_create_folder(name):
-    """
-    Находит папку MEGA_FOLDER или создаёт.
-    Возвращает MegaNode.
-    """
-    mega_login()
-    root = mega_api.getRootNode()
-    children = mega_api.getChildren(root)
-
-    # ищем папку
-    for c in children:
-        if c.getName() == name:
-            return c
-
-    # создаём
-    event = threading.Event()
-
-    def on_create(api, node):
-        event.set()
-
-    mega_api.createFolder(name, root, on_create)
-    event.wait(timeout=15)
-
-    # ищем снова
-    children = mega_api.getChildren(root)
-    for c in children:
-        if c.getName() == name:
-            return c
-
-    log_error("MEGA: folder create failed")
-    return None
-    
-    
 backup_flags = {
     "drive": True,
     "channel": True,
@@ -352,11 +214,6 @@ def send_backup_to_chat(chat_id: int) -> None:
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_chat_backup_meta(meta)
         log_info(f"Chat backup CREATED in chat {chat_id}")
-        # MEGA backup
-        try:
-            upload_to_mega(json_path)
-        except Exception as e:
-    log_error(f"MEGA backup (chat) error: {e}")
     except Exception as e:
         log_error(f"send_backup_to_chat({chat_id}): {e}")
 def default_data():
@@ -423,9 +280,8 @@ def get_chat_store(chat_id: int) -> dict:
             "edit_wait": None,
             "edit_target": None,
             "current_view_day": today_key(),
-            "report_msg_id": None,
             "settings": {
-                "auto_add": True if str(chat_id) == str(OWNER_ID) else False
+                "auto_add": False
             },
         }
     )
@@ -470,7 +326,7 @@ def save_chat_json(chat_id: int):
                         r.get("id"),
                         r.get("short_id"),
                         r.get("timestamp"),
-                        csv_clean_number(r.get("amount")),
+                        r.get("amount"),
                         r.get("note"),
                         r.get("owner"),
                         dk,
@@ -552,18 +408,6 @@ def parse_amount(raw: str) -> float:
     if not is_positive and not is_negative:
         is_negative = True
     return -value if is_negative else value
-def csv_clean_number(x):
-    """
-    Делает число чистым для Excel:
-    120.0 → 120
-    120.50 → 120.5
-    -50.000 → -50
-    """
-    try:
-        s = f"{float(x):.12f}".rstrip("0").rstrip(".")
-        return s
-    except:
-        return str(x)
 def split_amount_and_note(text: str):
     """
     Возвращает:
@@ -700,7 +544,7 @@ def export_global_csv(d: dict):
                             r.get("id"),
                             r.get("short_id"),
                             r.get("timestamp"),
-                            csv_clean_number(r.get("amount")),
+                            r.get("amount"),
                             r.get("note"),
                             r.get("owner"),
                             dk,
@@ -887,12 +731,6 @@ def send_backup_to_channel(chat_id: int):
         csv_path = chat_csv_file(chat_id)
         send_backup_to_channel_for_file(json_path, f"json_{chat_id}", chat_title)
         send_backup_to_channel_for_file(csv_path, f"csv_{chat_id}", chat_title)
-        # MEGA backup
-        try:
-            upload_to_mega(json_path)
-            upload_to_mega(csv_path)
-        except Exception as e:
-            log_error(f"MEGA backup error: {e}")
     except Exception as e:
         log_error(f"send_backup_to_channel({chat_id}): {e}")
 def _owner_data_file() -> str | None:
@@ -1494,61 +1332,73 @@ def on_callback(call):
         _, day_key, cmd = data_str.split(":", 2)
         store = get_chat_store(chat_id)
         if cmd == "open":
-            txt, _ = render_day_window(chat_id, day_key)
-            kb = build_main_keyboard(day_key, chat_id)
             store["current_view_day"] = day_key
-            bot.edit_message_text(
-                txt,
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-            set_active_window_id(chat_id, day_key, call.message.message_id)
+            if OWNER_ID and str(chat_id) == str(OWNER_ID):
+                backup_window_for_owner(chat_id, day_key)
+            else:
+                txt, _ = render_day_window(chat_id, day_key)
+                kb = build_main_keyboard(day_key, chat_id)
+                bot.edit_message_text(
+                    txt,
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+                set_active_window_id(chat_id, day_key, call.message.message_id)
             return
         if cmd == "prev":
             d = datetime.strptime(day_key, "%Y-%m-%d") - timedelta(days=1)
             nd = d.strftime("%Y-%m-%d")
-            txt, _ = render_day_window(chat_id, nd)
-            kb = build_main_keyboard(nd, chat_id)
             store["current_view_day"] = nd
-            bot.edit_message_text(
-                txt,
-                chat_id,
-                call.message.message_id,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-            set_active_window_id(chat_id, nd, call.message.message_id)
+            if OWNER_ID and str(chat_id) == str(OWNER_ID):
+                backup_window_for_owner(chat_id, nd)
+            else:
+                txt, _ = render_day_window(chat_id, nd)
+                kb = build_main_keyboard(nd, chat_id)
+                bot.edit_message_text(
+                    txt,
+                    chat_id,
+                    call.message.message_id,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+                set_active_window_id(chat_id, nd, call.message.message_id)
             return
         if cmd == "next":
             d = datetime.strptime(day_key, "%Y-%m-%d") + timedelta(days=1)
             nd = d.strftime("%Y-%m-%d")
-            txt, _ = render_day_window(chat_id, nd)
-            kb = build_main_keyboard(nd, chat_id)
             store["current_view_day"] = nd
-            bot.edit_message_text(
-                txt,
-                chat_id,
-                call.message.message_id,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-            set_active_window_id(chat_id, nd, call.message.message_id)
+            if OWNER_ID and str(chat_id) == str(OWNER_ID):
+                backup_window_for_owner(chat_id, nd)
+            else:
+                txt, _ = render_day_window(chat_id, nd)
+                kb = build_main_keyboard(nd, chat_id)
+                bot.edit_message_text(
+                    txt,
+                    chat_id,
+                    call.message.message_id,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+                set_active_window_id(chat_id, nd, call.message.message_id)
             return
         if cmd == "today":
             nd = today_key()
-            txt, _ = render_day_window(chat_id, nd)
-            kb = build_main_keyboard(nd, chat_id)
             store["current_view_day"] = nd
-            bot.edit_message_text(
-                txt,
-                chat_id,
-                call.message.message_id,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-            set_active_window_id(chat_id, nd, call.message.message_id)
+            if OWNER_ID and str(chat_id) == str(OWNER_ID):
+                backup_window_for_owner(chat_id, nd)
+            else:
+                txt, _ = render_day_window(chat_id, nd)
+                kb = build_main_keyboard(nd, chat_id)
+                bot.edit_message_text(
+                    txt,
+                    chat_id,
+                    call.message.message_id,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
+                set_active_window_id(chat_id, nd, call.message.message_id)
             return
         if cmd == "calendar":
             try:
@@ -1567,21 +1417,7 @@ def on_callback(call):
             for dk, recs in sorted(store.get("daily_records", {}).items()):
                 s = sum(r["amount"] for r in recs)
                 lines.append(f"{dk}: {fmt_num(s)}")
-            text = "\n".join(lines)
-            rep_id = store.get("report_msg_id")
-            if rep_id:
-                try:
-                    bot.edit_message_text(
-                        text,
-                        chat_id=chat_id,
-                        message_id=rep_id
-                    )
-                    return
-                except Exception:
-                    pass
-            sent = bot.send_message(chat_id, text)
-            store["report_msg_id"] = sent.message_id
-            save_data(data)
+            bot.send_message(chat_id, "\n".join(lines))
             return
         if cmd == "total":
             chat_bal = store.get("balance", 0)
@@ -1693,15 +1529,18 @@ def on_callback(call):
             return
         if cmd == "back_main":
             store["current_view_day"] = day_key
-            txt, _ = render_day_window(chat_id, day_key)
-            kb = build_main_keyboard(day_key, chat_id)
-            bot.edit_message_text(
-                txt,
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
+            if OWNER_ID and str(chat_id) == str(OWNER_ID):
+                backup_window_for_owner(chat_id, day_key)
+            else:
+                txt, _ = render_day_window(chat_id, day_key)
+                kb = build_main_keyboard(day_key, chat_id)
+                bot.edit_message_text(
+                    txt,
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    reply_markup=kb,
+                    parse_mode="HTML"
+                )
             return
         if cmd == "csv_all":
             cmd_csv_all(chat_id)
@@ -1888,8 +1727,6 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     save_chat_json(chat_id)
     export_global_csv(data)
     send_backup_to_channel(chat_id)
-    upload_to_mega(chat_json_file(chat_id))
-    upload_to_mega(chat_csv_file(chat_id))
 def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str):
     store = get_chat_store(chat_id)
     found = None
@@ -1913,8 +1750,6 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
     export_global_csv(data)
     send_backup_to_channel(chat_id)
     send_backup_to_chat(chat_id)
-    upload_to_mega(chat_json_file(chat_id))
-    upload_to_mega(chat_csv_file(chat_id))
 def delete_record_in_chat(chat_id: int, rid: int):
     store = get_chat_store(chat_id)
     store["records"] = [x for x in store["records"] if x["id"] != rid]
@@ -1933,8 +1768,6 @@ def delete_record_in_chat(chat_id: int, rid: int):
     export_global_csv(data)
     send_backup_to_channel(chat_id)
     send_backup_to_chat(chat_id)
-    upload_to_mega(chat_json_file(chat_id))
-    upload_to_mega(chat_csv_file(chat_id))
 def renumber_chat_records(chat_id: int):
     """
     Перенумеровывает записи в чате по реальному порядку:
@@ -2017,28 +1850,6 @@ def require_finance(chat_id: int) -> bool:
         send_and_auto_delete(chat_id, "⚙️ Финансовый режим выключен.\nАктивируйте командой /поехали")
         return False
     return True
-def refresh_report(chat_id: int):
-    store = get_chat_store(chat_id)
-    rep_id = store.get("report_msg_id")
-    if not rep_id:
-        return
-
-    lines = ["📊 Отчёт:"]
-    for dk, recs in sorted(store.get("daily_records", {}).items()):
-        s = sum(r["amount"] for r in recs)
-        lines.append(f"{dk}: {fmt_num(s)}")
-    text = "\n".join(lines)
-
-    try:
-        bot.edit_message_text(
-            text,
-            chat_id=chat_id,
-            message_id=rep_id
-        )
-    except Exception:
-        # если сообщение удалили — сброс
-        store["report_msg_id"] = None
-        save_data(data)
 def refresh_total_message_if_any(chat_id: int):
     """
     Если в чате есть активное сообщение '💰 Общий итог',
@@ -2108,10 +1919,14 @@ def cmd_start(msg):
     if not require_finance(chat_id):
         return
     day_key = today_key()
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-    sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
-    set_active_window_id(chat_id, day_key, sent.message_id)
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        backup_window_for_owner(chat_id, day_key)
+    else:
+        txt, _ = render_day_window(chat_id, day_key)
+        kb = build_main_keyboard(day_key, chat_id)
+        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+        set_active_window_id(chat_id, day_key, sent.message_id)
+        
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
     chat_id = msg.chat.id
@@ -2179,10 +1994,13 @@ def cmd_view(msg):
     except ValueError:
         send_info(chat_id, "❌ Неверная дата. Формат: YYYY-MM-DD")
         return
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-    sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
-    set_active_window_id(chat_id, day_key, sent.message_id)
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        backup_window_for_owner(chat_id, day_key)
+    else:
+        txt, _ = render_day_window(chat_id, day_key)
+        kb = build_main_keyboard(day_key, chat_id)
+        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+        set_active_window_id(chat_id, day_key, sent.message_id)
 @bot.message_handler(commands=["prev"])
 def cmd_prev(msg):
     chat_id = msg.chat.id
@@ -2191,10 +2009,13 @@ def cmd_prev(msg):
         return
     d = datetime.strptime(today_key(), "%Y-%m-%d") - timedelta(days=1)
     day_key = d.strftime("%Y-%m-%d")
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-    sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
-    set_active_window_id(chat_id, day_key, sent.message_id)
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        backup_window_for_owner(chat_id, day_key)
+    else:
+        txt, _ = render_day_window(chat_id, day_key)
+        kb = build_main_keyboard(day_key, chat_id)
+        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+        set_active_window_id(chat_id, day_key, sent.message_id)
 @bot.message_handler(commands=["next"])
 def cmd_next(msg):
     chat_id = msg.chat.id
@@ -2203,10 +2024,14 @@ def cmd_next(msg):
         return
     d = datetime.strptime(today_key(), "%Y-%m-%d") + timedelta(days=1)
     day_key = d.strftime("%Y-%m-%d")
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-    sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
-    set_active_window_id(chat_id, day_key, sent.message_id)
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        backup_window_for_owner(chat_id, day_key)
+    else:
+        txt, _ = render_day_window(chat_id, day_key)
+        kb = build_main_keyboard(day_key, chat_id)
+        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+        set_active_window_id(chat_id, day_key, sent.message_id)
+        
 @bot.message_handler(commands=["balance"])
 def cmd_balance(msg):
     chat_id = msg.chat.id
@@ -2491,14 +2316,16 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
         _safe("save_data", lambda: save_data(data))
         _safe("export_global_csv", lambda: export_global_csv(data))
 
-        # 2️⃣ Обновление/создание окна дня
-        _safe("force_new_day_window", lambda: force_new_day_window(chat_id, day_key))
-        _safe("refresh_report", lambda: refresh_report(chat_id))
+                # 2️⃣ Окно дня + бэкап для OWNER_ID / обычный режим для остальных
+        if OWNER_ID and str(chat_id) == str(OWNER_ID):
+            _safe("owner_backup_window", lambda: backup_window_for_owner(chat_id, day_key))
+        else:
+            _safe("force_new_day_window", lambda: force_new_day_window(chat_id, day_key))
+            _safe("backup_to_chat", lambda: force_backup_to_chat(chat_id))
 
-        # 3️⃣ Бэкапы
+        # 3️⃣ Бэкап в канал (для всех)
         _safe("backup_to_channel", lambda: send_backup_to_channel(chat_id))
-        _safe("backup_to_chat", lambda: send_backup_to_chat(chat_id))
-
+        
         # 4️⃣ Итоги
         _safe("refresh_total_chat", lambda: refresh_total_message_if_any(chat_id))
         if OWNER_ID and str(chat_id) != str(OWNER_ID):
@@ -2586,6 +2413,77 @@ def force_backup_to_chat(chat_id: int):
         _save_chat_backup_meta(meta)
     except Exception as e:
         log_error(f"force_backup_to_chat({chat_id}): {e}")
+def backup_window_for_owner(chat_id: int, day_key: str):
+    """
+    Для OWNER_ID: одно сообщение, в котором:
+      • документ JSON (backup)
+      • caption = окно дня (render_day_window)
+      • те же кнопки (build_main_keyboard)
+    """
+    if not OWNER_ID or str(chat_id) != str(OWNER_ID):
+        return
+
+    # Текст окна и кнопки
+    txt, _ = render_day_window(chat_id, day_key)
+    kb = build_main_keyboard(day_key, chat_id)
+
+    # Обновляем JSON-файл
+    save_chat_json(chat_id)
+    json_path = chat_json_file(chat_id)
+    if not os.path.exists(json_path):
+        log_error(f"backup_window_for_owner: {json_path} missing")
+        return
+
+    try:
+        with open(json_path, "rb") as f:
+            data_bytes = f.read()
+        if not data_bytes:
+            log_error("backup_window_for_owner: empty JSON")
+            return
+
+        base = os.path.basename(json_path)
+        name_no_ext, dot, ext = base.partition(".")
+        suffix = get_chat_name_for_filename(chat_id)
+        if suffix:
+            file_name = suffix
+        else:
+            file_name = name_no_ext
+        if dot:
+            file_name += f".{ext}"
+
+        buf = io.BytesIO(data_bytes)
+        buf.name = file_name
+
+        mid = get_active_window_id(chat_id, day_key)
+
+        # Пытаемся обновить старое окно, если оно есть
+        if mid:
+            try:
+                bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=mid,
+                    media=telebot.types.InputMediaDocument(buf, caption=txt),
+                    reply_markup=kb
+                )
+                return
+            except Exception as e:
+                log_error(f"backup_window_for_owner: edit_message_media failed: {e}")
+                try:
+                    bot.delete_message(chat_id, mid)
+                except Exception:
+                    pass
+
+        # Если не получилось отредактировать — создаём новое сообщение
+        sent = bot.send_document(
+            chat_id,
+            buf,
+            caption=txt,
+            reply_markup=kb
+        )
+        set_active_window_id(chat_id, day_key, sent.message_id)
+    except Exception as e:
+        log_error(f"backup_window_for_owner({chat_id}, {day_key}): {e}")
+        
 def force_new_day_window(chat_id: int, day_key: str):
     old_mid = get_active_window_id(chat_id, day_key)
     txt, _ = render_day_window(chat_id, day_key)
@@ -2695,7 +2593,6 @@ def handle_text(msg):
             update_record_in_chat(chat_id, rid, amount, note)
             schedule_finalize(chat_id, day_key)
             refresh_total_message_if_any(chat_id)
-            
             if OWNER_ID and str(chat_id) != str(OWNER_ID):
                 try:
                     refresh_total_message_if_any(int(OWNER_ID))
@@ -2748,8 +2645,6 @@ def reset_chat_data(chat_id: int):
         export_global_csv(data)
         send_backup_to_channel(chat_id)
         send_backup_to_chat(chat_id)
-        upload_to_mega(chat_json_file(chat_id))
-        upload_to_mega(chat_csv_file(chat_id))
         day_key = store.get("current_view_day", today_key())
         update_or_send_day_window(chat_id, day_key)
         try:
@@ -3060,10 +2955,6 @@ def set_webhook():
 def main():
     global data
     restored = restore_from_gdrive_if_needed()
-    # 🔄 Попытка восстановить из MEGA
-    restored_m = restore_from_mega_if_needed()
-    # хотя бы один источник дал восстановление
-    restored = restored_g or restored_m
     data = load_data()
     data["forward_rules"] = load_forward_rules()
     log_info(f"Данные загружены. Версия бота: {VERSION}")
