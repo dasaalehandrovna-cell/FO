@@ -1189,6 +1189,42 @@ def apply_forward_mode(A: int, B: int, mode: str):
     elif mode == "del":
         remove_forward_link(A, B)
         remove_forward_link(B, A)
+
+@bot.callback_query_handler(func=lambda c: c.data=="fw_back_root")
+def cb_fw_back_root(call):
+    bot.answer_callback_query(call.id)
+    try:
+        send_and_auto_delete(call.message.chat.id, "⚠️ Кнопка 'fw_back_root' пока без логики, но обработчик активен")
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data=="fw_back_src")
+def cb_fw_back_src(call):
+    bot.answer_callback_query(call.id)
+    try:
+        send_and_auto_delete(call.message.chat.id, "⚠️ Кнопка 'fw_back_src' пока без логики, но обработчик активен")
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data=="fw_open")
+def cb_fw_open(call):
+    bot.answer_callback_query(call.id)
+    try:
+        send_and_auto_delete(call.message.chat.id, "⚠️ Кнопка 'fw_open' пока без логики, но обработчик активен")
+    except Exception:
+        pass
+
+
+@bot.callback_query_handler(func=lambda c: c.data=="none")
+def cb_none(call):
+    bot.answer_callback_query(call.id)
+    try:
+        send_and_auto_delete(call.message.chat.id, "⚠️ Кнопка 'none' пока без логики, но обработчик активен")
+    except Exception:
+        pass
+
 @bot.callback_query_handler(func=lambda c: True)
 def on_callback(call):
     """
