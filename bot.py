@@ -895,7 +895,7 @@ def render_day_window(chat_id: int, day_key: str):
     tm = (t + timedelta(days=1)).strftime("%Y-%m-%d")
     tag = "сегодня" if day_key == td else "вчера" if day_key == yd else "завтра" if day_key == tm else ""
     label = f"{day_key} ({tag}, {wd})" if tag else f"{day_key} ({wd})"
-    lines.append(f"📅 <b>{label}</b>")
+    lines.append(f"📅 {label}")
     lines.append("")
     total_income = 0.0
     total_expense = 0.0
@@ -908,7 +908,7 @@ def render_day_window(chat_id: int, day_key: str):
             total_expense += -amt
         note = html.escape(r.get("note", ""))
         sid = r.get("short_id", f"R{r['id']}")
-        lines.append(f"{sid} {fmt_num(amt)}" + (f" {note}" if note else ""))
+        lines.append(f"{sid} {fmt_num(amt)} <i>{note}</i>")
     if not recs_sorted:
         lines.append("Нет записей за этот день.")
     lines.append("")
@@ -1425,7 +1425,7 @@ def on_callback(call):
 
             # Обычный чат (не владелец)
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
-                text = f"💰 <b>Общий итог по этому чату:</b> {fmt_num(chat_bal)}"
+                text = f"💰 Общий итог по этому чату: {fmt_num(chat_bal)}"
                 if total_msg_id:
                     try:
                         bot.edit_message_text(
@@ -1447,9 +1447,9 @@ def on_callback(call):
             lines = []
             info = store.get("info", {})
             title = info.get("title") or f"Чат {chat_id}"
-            lines.append("💰 <b>Общий итог (для владельца)</b>")
+            lines.append("💰 Общий итог (для владельца)")
             lines.append("")
-            lines.append(f"• Этот чат ({title}): <b>{fmt_num(chat_bal)}</b>")
+            lines.append(f"• Этот чат ({title}): {fmt_num(chat_bal)}")
 
             all_chats = data.get("chats", {})
             total_all = 0
@@ -1471,7 +1471,7 @@ def on_callback(call):
                 lines.append("• Другие чаты:")
                 lines.extend(other_lines)
             lines.append("")
-            lines.append(f"• Всего по всем чатам: <b>{fmt_num(total_all)}</b>")
+            lines.append(f"• Всего по всем чатам: {fmt_num(total_all)}")
 
             text = "\n".join(lines)
             if total_msg_id:
@@ -1862,14 +1862,14 @@ def refresh_total_message_if_any(chat_id: int):
     try:
         chat_bal = store.get("balance", 0)
         if not OWNER_ID or str(chat_id) != str(OWNER_ID):
-            text = f"💰 <b>Общий итог по этому чату:</b> {fmt_num(chat_bal)}"
+            text = f"💰 Общий итог по этому чату:</b> {fmt_num(chat_bal)}"
         else:
             lines = []
             info = store.get("info", {})
             title = info.get("title") or f"Чат {chat_id}"
-            lines.append("💰 <b>Общий итог (для владельца)</b>")
+            lines.append("💰 Общий итог (для владельца)")
             lines.append("")
-            lines.append(f"• Этот чат ({title}): <b>{fmt_num(chat_bal)}</b>")
+            lines.append(f"• Этот чат ({title}): {fmt_num(chat_bal)}")
             all_chats = data.get("chats", {})
             total_all = 0
             other_lines = []
@@ -1890,7 +1890,7 @@ def refresh_total_message_if_any(chat_id: int):
                 lines.append("• Другие чаты:")
                 lines.extend(other_lines)
             lines.append("")
-            lines.append(f"• Всего по всем чатам: <b>{fmt_num(total_all)}</b>")
+            lines.append(f"• Всего по всем чатам: {fmt_num(total_all)}")
             text = "\n".join(lines)
         bot.edit_message_text(
             text,
