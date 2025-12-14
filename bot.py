@@ -906,9 +906,9 @@ def render_day_window(chat_id: int, day_key: str):
             total_income += amt
         else:
             total_expense += -amt
-        note = html.escape(r.get("note", ""))
+        note = html.escape(r.get("note", "")).strip()
         sid = r.get("short_id", f"R{r['id']}")
-        lines.append(f"{sid} {fmt_num(amt)} {note}")
+        lines.append(f"{sid} {fmt_num(amt)}" + (f" {note}" if note else ""))
     if not recs_sorted:
         lines.append("Нет записей за этот день.")
     lines.append("")
@@ -1189,42 +1189,6 @@ def apply_forward_mode(A: int, B: int, mode: str):
     elif mode == "del":
         remove_forward_link(A, B)
         remove_forward_link(B, A)
-
-@bot.callback_query_handler(func=lambda c: c.data=="fw_back_root")
-def cb_fw_back_root(call):
-    bot.answer_callback_query(call.id)
-    try:
-        send_and_auto_delete(call.message.chat.id, "⚠️ Кнопка 'fw_back_root' пока без логики, но обработчик активен")
-    except Exception:
-        pass
-
-
-@bot.callback_query_handler(func=lambda c: c.data=="fw_back_src")
-def cb_fw_back_src(call):
-    bot.answer_callback_query(call.id)
-    try:
-        send_and_auto_delete(call.message.chat.id, "⚠️ Кнопка 'fw_back_src' пока без логики, но обработчик активен")
-    except Exception:
-        pass
-
-
-@bot.callback_query_handler(func=lambda c: c.data=="fw_open")
-def cb_fw_open(call):
-    bot.answer_callback_query(call.id)
-    try:
-        send_and_auto_delete(call.message.chat.id, "⚠️ Кнопка 'fw_open' пока без логики, но обработчик активен")
-    except Exception:
-        pass
-
-
-@bot.callback_query_handler(func=lambda c: c.data=="none")
-def cb_none(call):
-    bot.answer_callback_query(call.id)
-    try:
-        send_and_auto_delete(call.message.chat.id, "⚠️ Кнопка 'none' пока без логики, но обработчик активен")
-    except Exception:
-        pass
-
 @bot.callback_query_handler(func=lambda c: True)
 def on_callback(call):
     """
@@ -1235,6 +1199,12 @@ def on_callback(call):
     """
     try:
         data_str = call.data or ""
+        try:
+            bot.answer_callback_query(call.id)
+        except Exception:
+            pass
+        if data_str == "none":
+            return
         chat_id = call.message.chat.id
         if data_str.startswith("fw_"):
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
@@ -1527,10 +1497,6 @@ def on_callback(call):
             save_data(data)
             return
         if cmd == "info":
-            try:
-                bot.answer_callback_query(call.id)
-            except Exception:
-                pass
             info_text = (
                 f"ℹ️ Финансовый бот — версия {VERSION}\n\n"
                 "Команды:\n"
