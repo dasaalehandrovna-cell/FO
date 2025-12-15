@@ -908,8 +908,7 @@ def render_day_window(chat_id: int, day_key: str):
             total_expense += -amt
         note = html.escape(r.get("note", ""))
         sid = r.get("short_id", f"R{r['id']}")
-        note=(note or "").strip()
-        lines.append(f"{sid} {fmt_num(amt)}"+(f" {note}" if note else ""))
+        lines.append(f"{sid} {fmt_num(amt)} <i>{note}</i>")
     if not recs_sorted:
         lines.append("Нет записей за этот день.")
     lines.append("")
@@ -1190,40 +1189,15 @@ def apply_forward_mode(A: int, B: int, mode: str):
     elif mode == "del":
         remove_forward_link(A, B)
         remove_forward_link(B, A)
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("d:"))
-def cb_day_actions(call):
-    bot.answer_callback_query(call.id)
-    try:
-        _, day_key, action = call.data.split(":", 2)
-    except ValueError:
-        return
-    if action=="add": return start_add_record(call.message.chat.id, day_key)
-    if action=="edit_menu": return show_edit_menu(call.message.chat.id, day_key)
-    if action=="edit_list": return show_edit_list(call.message.chat.id, day_key)
-    if action=="prev": return open_day(call.message.chat.id, shift_day(day_key,-1))
-    if action=="next": return open_day(call.message.chat.id, shift_day(day_key,1))
-    if action=="today": return open_day(call.message.chat.id, today_key())
-    if action=="calendar": return show_calendar(call.message.chat.id, day_key)
-    if action=="report": return show_report(call.message.chat.id, day_key)
-    if action=="info": return show_info(call.message.chat.id, day_key)
-    if action=="total": return show_total(call.message.chat.id)
-    if action=="csv_all": return send_csv_all(call.message.chat.id)
-    if action=="forward_menu": return show_forward_menu(call.message.chat.id, day_key)
-    if action=="forward_old": return open_forward_legacy(call.message.chat.id, day_key)
-
-
 @bot.callback_query_handler(func=lambda c: True)
 def on_callback(call):
-    """
-    Универсальный обработчик всех callback_data:
-      • fw_*  — новое меню пересылки A ↔ B (только для владельца)
-      • c:*   — календарь
-      • d:*   — команды окна дня, редактирование, старое меню пересылки
-    """
-    try:
-        data_str = call.data or ""
-        chat_id = call.message.chat.id
+     try:
+         bot.answer_callback_query(call.id)
+     except Exception:
+         pass
+     try:
+         data_str = call.data or ""
+         chat_id = call.message.chat.id
         if data_str.startswith("fw_"):
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
                 try:
