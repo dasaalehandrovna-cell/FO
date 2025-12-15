@@ -1647,24 +1647,46 @@ def on_callback(call):
                     callback_data=f"d:{day_key}:edit_menu"
                 )
             )
-            bot.edit_message_text(
-                "Меню пересылки:\nВыберите режим:",
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                reply_markup=kb
-            )
+            try:
+                bot.edit_message_text(
+                    "Меню пересылки:\nВыберите режим:",
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    reply_markup=kb
+                )
+            except Exception:
+                try:
+                    bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=call.message.message_id,
+                        caption="Меню пересылки:\nВыберите режим:",
+                        reply_markup=kb
+                    )
+                except Exception:
+                    bot.send_message(chat_id, "Меню пересылки:\nВыберите режим:", reply_markup=kb)
             return
         if cmd == "forward_old":
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
                 bot.send_message(chat_id, "Меню доступно только владельцу.")
                 return
             kb = build_forward_chat_list(day_key, chat_id)
-            bot.edit_message_text(
-                "Выберите чат, для которого хотите настроить пересылку:",
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                reply_markup=kb
-            )
+            try:
+                bot.edit_message_text(
+                    "Выберите чат, для которого хотите настроить пересылку:",
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    reply_markup=kb
+                )
+            except Exception:
+                try:
+                    bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=call.message.message_id,
+                        caption="Выберите чат, для которого хотите настроить пересылку:",
+                        reply_markup=kb
+                    )
+                except Exception:
+                    bot.send_message(chat_id, "Выберите чат, для которого хотите настроить пересылку:", reply_markup=kb)
             return
         if cmd.startswith("fw_cfg_"):
             tgt = int(cmd.split("_")[-1])
