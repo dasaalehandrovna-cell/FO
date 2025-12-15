@@ -1209,6 +1209,8 @@ def cb_day_actions(call):
     if action=="info": return show_info(call.message.chat.id, day_key)
     if action=="total": return show_total(call.message.chat.id)
     if action=="csv_all": return send_csv_all(call.message.chat.id)
+    if action=="forward_menu": return show_forward_menu(call.message.chat.id, day_key)
+    if action=="forward_old": return open_forward_legacy(call.message.chat.id, day_key)
 
 
 @bot.callback_query_handler(func=lambda c: True)
