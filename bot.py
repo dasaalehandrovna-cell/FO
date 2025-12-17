@@ -1297,144 +1297,23 @@ def apply_forward_mode(A: int, B: int, mode: str):
     elif mode == "del":
         remove_forward_link(A, B)
         remove_forward_link(B, A)
+        
 @bot.callback_query_handler(func=lambda c: True)
 def on_callback(call):
     try:
         data_str = call.data or ""
         chat_id = call.message.chat.id
 
-        # ---- не наши callback ----
-        if not data_str.startswith("d:"):
-            return
-
-        _, day_key, cmd = data_str.split(":", 2)
-
-        if cmd == "pick_date":
-            bot.send_message(
-                chat_id,
-                "Введите дату:\n/view YYYY-MM-DD"
-            )
-            return
-
-        # остальные cmd идут ниже...
-
-    except Exception as e:
-        log_error(f"on_callback error: {e}")
-    
-        # -----------------------------
-        # 📊 Расходы по статьям (OWNER + обычные чаты)
-        # -----------------------------
-        def _cat_safe_edit(text: str, reply_markup=None):
-            # безопасный fallback для owner-окон (document+caption)
-            try:
-                bot.edit_message_text(
-                    text,
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=reply_markup
-                )
-                return True
-            except Exception:
-                try:
-                    bot.edit_message_caption(
-                        chat_id=chat_id,
-                        message_id=call.message.message_id,
-                        caption=text,
-                        reply_markup=reply_markup
-                    )
-                    return True
-                except Exception:
-                    bot.send_message(chat_id, text, reply_markup=reply_markup)
-                    return False
-
-        if data_str == "cat_back_weeks":
-            kb = build_category_week_keyboard(date.today())
-            _cat_safe_edit("📊 Расходы по статьям\n\nВыберите неделю:", kb)
-            return
-
-        if data_str == "cat_pick_month":
-            kb = build_category_month_keyboard(date.today())
-            _cat_safe_edit("📅 Выберите месяц:", kb)
-            return
-
-        if data_str == "cat_back_edit":
-            day_key = get_chat_store(chat_id).get("current_view_day", today_key())
-            kb = build_edit_menu_keyboard(day_key, chat_id)
-            _cat_safe_edit(f"Меню редактирования для {day_key}:", kb)
-            return
-
-        if data_str.startswith("catchat:"):
-            if not OWNER_ID or str(chat_id) != str(OWNER_ID):
-                return
-            try:
-                target_chat = int(data_str.split(":", 1)[1])
-            except Exception:
-                return
-            owner_store = get_chat_store(chat_id)
-            owner_store["category_view_chat"] = target_chat
-            save_data(data)
-            title = get_chat_store(target_chat).get("info", {}).get("title") or str(target_chat)
-            kb = build_category_week_keyboard(date.today())
-            _cat_safe_edit(f"📊 Расходы по статьям\nЧат: {title}\n\nВыберите неделю:", kb)
-            return
-
-        if data_str.startswith("catm:"):
-            try:
-                month_start = date.fromisoformat(data_str.split(":", 1)[1])
-            except Exception:
-                return
-            kb = build_category_weeks_of_month(month_start)
-            _cat_safe_edit(f"📅 {month_start.strftime('%B %Y')}\nВыберите неделю:", kb)
-            return
-
-        if data_str.startswith("catw:"):
-            try:
-                week_start = date.fromisoformat(data_str.split(":", 1)[1])
-            except Exception:
-                return
-            week_end = week_start + timedelta(days=6)
-
-            view_chat = chat_id
-            if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                view_chat = get_chat_store(chat_id).get("category_view_chat", chat_id)
-
-            totals = calc_week_categories(view_chat, week_start, week_end)
-
-            lines = []
-            lines.append("📊 Расходы по статьям")
-            lines.append(f"🗓 Неделя: {week_start.strftime('%d.%m')} — {week_end.strftime('%d.%m')}")
-            if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                title = get_chat_store(view_chat).get("info", {}).get("title") or str(view_chat)
-                lines.append(f"Чат: {title}")
-            lines.append("")
-            total_sum = 0
-            if totals:
-                for cat, amount in sorted(totals.items()):
-                    lines.append(f"{cat}: {fmt_num(amount)}")
-                    total_sum += amount
-            else:
-                lines.append("Нет расходов за эту неделю.")
-            lines.append("")
-            lines.append("━━━━━━━━━━━━")
-            lines.append(f"💸 Всего расход: {fmt_num(total_sum)}")
-
-            kb = types.InlineKeyboardMarkup(row_width=1)
-            kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="cat_back_weeks"))
-            _cat_safe_edit("\n".join(lines), kb)
-            return
-
-
+        # ========== FW_* (пересылка A ↔ B, только OWNER) ==========
         if data_str.startswith("fw_"):
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
-                try:
-                    bot.answer_callback_query(
-                        call.id,
-                        "Меню пересылки доступно только владельцу.",
-                        show_alert=True
-                    )
-                except Exception:
-                    pass
+                bot.answer_callback_query(
+                    call.id,
+                    "Меню пересылки доступно только владельцу.",
+                    show_alert=True
+                )
                 return
+
             if data_str == "fw_open":
                 kb = build_forward_source_menu()
                 bot.edit_message_text(
@@ -1444,51 +1323,20 @@ def on_callback(call):
                     reply_markup=kb
                 )
                 return
+
             if data_str == "fw_back_root":
-                owner_store = get_chat_store(int(OWNER_ID))
-                day_key = owner_store.get("current_view_day", today_key())
+                day_key = get_chat_store(chat_id).get("current_view_day", today_key())
                 kb = build_edit_menu_keyboard(day_key, chat_id)
-                try:
-                    bot.edit_message_text(
-                        f"Меню редактирования для {day_key}:",
-                        chat_id=chat_id,
-                        message_id=call.message.message_id,
-                        reply_markup=kb
-                    )
-                except Exception:
-                    bot.send_message(
-                        chat_id,
-                        f"Меню редактирования для {day_key}:",
-                        reply_markup=kb
-                    )
-                return
-            if data_str == "fw_back_src":
-                kb = build_forward_source_menu()
                 bot.edit_message_text(
-                    "Выберите чат A:",
+                    f"Меню редактирования для {day_key}:",
                     chat_id=chat_id,
                     message_id=call.message.message_id,
                     reply_markup=kb
                 )
                 return
-            if data_str.startswith("fw_back_tgt:"):
-                try:
-                    A = int(data_str.split(":", 1)[1])
-                except Exception:
-                    return
-                kb = build_forward_target_menu(A)
-                bot.edit_message_text(
-                    f"Источник пересылки: {A}\nВыберите чат B:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
-                return
+
             if data_str.startswith("fw_src:"):
-                try:
-                    A = int(data_str.split(":", 1)[1])
-                except Exception:
-                    return
+                A = int(data_str.split(":", 1)[1])
                 kb = build_forward_target_menu(A)
                 bot.edit_message_text(
                     f"Источник пересылки: {A}\nВыберите чат B:",
@@ -1497,17 +1345,10 @@ def on_callback(call):
                     reply_markup=kb
                 )
                 return
+
             if data_str.startswith("fw_tgt:"):
-                parts = data_str.split(":")
-                if len(parts) != 3:
-                    return
-                _, A_str, B_str = parts
-                try:
-                    A = int(A_str)
-                    B = int(B_str)
-                except Exception:
-                    return
-                kb = build_forward_mode_menu(A, B)
+                _, A, B = data_str.split(":")
+                kb = build_forward_mode_menu(int(A), int(B))
                 bot.edit_message_text(
                     f"Настройка пересылки: {A} ⇄ {B}",
                     chat_id=chat_id,
@@ -1515,17 +1356,10 @@ def on_callback(call):
                     reply_markup=kb
                 )
                 return
+
             if data_str.startswith("fw_mode:"):
-                parts = data_str.split(":")
-                if len(parts) != 4:
-                    return
-                _, A_str, B_str, mode = parts
-                try:
-                    A = int(A_str)
-                    B = int(B_str)
-                except Exception:
-                    return
-                apply_forward_mode(A, B, mode)
+                _, A, B, mode = data_str.split(":")
+                apply_forward_mode(int(A), int(B), mode)
                 kb = build_forward_source_menu()
                 bot.edit_message_text(
                     "Маршрут обновлён.\nВыберите чат A:",
@@ -1534,25 +1368,110 @@ def on_callback(call):
                     reply_markup=kb
                 )
                 return
+
             return
-        if data_str.startswith("c:"):
-            center = data_str[2:]
-            try:
-                center_dt = datetime.strptime(center, "%Y-%m-%d")
-            except ValueError:
+
+        # ========== CAT_* (расходы по статьям) ==========
+        if data_str.startswith("cat_") or data_str.startswith("catw") or data_str.startswith("catm") or data_str.startswith("catchat"):
+            from datetime import date, timedelta
+
+            def safe_edit(text, kb=None):
+                try:
+                    bot.edit_message_text(
+                        text,
+                        chat_id=chat_id,
+                        message_id=call.message.message_id,
+                        reply_markup=kb
+                    )
+                except Exception:
+                    try:
+                        bot.edit_message_caption(
+                            chat_id=chat_id,
+                            message_id=call.message.message_id,
+                            caption=text,
+                            reply_markup=kb
+                        )
+                    except Exception:
+                        bot.send_message(chat_id, text, reply_markup=kb)
+
+            if data_str == "cat_back_edit":
+                day_key = get_chat_store(chat_id).get("current_view_day", today_key())
+                kb = build_edit_menu_keyboard(day_key, chat_id)
+                safe_edit("Меню редактирования:", kb)
                 return
-            kb = build_calendar_keyboard(center_dt, chat_id)
-            try:
-                bot.edit_message_reply_markup(
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
-            except Exception:
-                pass
+
+            if data_str.startswith("catchat:"):
+                target = int(data_str.split(":")[1])
+                get_chat_store(chat_id)["category_view_chat"] = target
+                kb = build_category_week_keyboard(date.today())
+                safe_edit("📊 Расходы по статьям\n\nВыберите неделю:", kb)
+                return
+
+            if data_str.startswith("catw:"):
+                week_start = date.fromisoformat(data_str.split(":")[1])
+                week_end = week_start + timedelta(days=6)
+
+                view_chat = chat_id
+                if OWNER_ID and str(chat_id) == str(OWNER_ID):
+                    view_chat = get_chat_store(chat_id).get("category_view_chat", chat_id)
+
+                totals = calc_week_categories(view_chat, week_start, week_end)
+
+                lines = [
+                    "📊 Расходы по статьям",
+                    f"🗓 {week_start.strftime('%d.%m')} — {week_end.strftime('%d.%m')}",
+                    ""
+                ]
+                total = 0
+                for cat, amt in sorted(totals.items()):
+                    lines.append(f"{cat}: {fmt_num(amt)}")
+                    total += amt
+
+                lines.append("")
+                lines.append(f"💸 Всего: {fmt_num(total)}")
+
+                kb = types.InlineKeyboardMarkup()
+                kb.add(types.InlineKeyboardButton("🔙 Назад", callback_data="cat_back_weeks"))
+                safe_edit("\n".join(lines), kb)
+                return
+
             return
+
+        # ========== D:* (основные кнопки дня) ==========
         if not data_str.startswith("d:"):
             return
+
+        _, day_key, cmd = data_str.split(":", 2)
+        store = get_chat_store(chat_id)
+        store["current_view_day"] = day_key
+
+        if cmd == "edit_menu":
+            kb = build_edit_menu_keyboard(day_key, chat_id)
+            bot.edit_message_reply_markup(
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                reply_markup=kb
+            )
+            return
+
+        if cmd == "back_main":
+            txt, _ = render_day_window(chat_id, day_key)
+            kb = build_main_keyboard(day_key, chat_id)
+            bot.edit_message_text(
+                txt,
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+            return
+
+        if cmd == "pick_date":
+            bot.send_message(chat_id, "Введите дату:\n/view YYYY-MM-DD")
+            return
+
+    except Exception as e:
+        log_error(f"on_callback error: {e}")
         _, day_key, cmd = data_str.split(":", 2)
         store = get_chat_store(chat_id)
         if cmd == "open":
