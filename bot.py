@@ -1082,29 +1082,36 @@ def build_calendar_keyboard(center_day: datetime, chat_id=None):
     return kb
 def build_edit_menu_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=2)
+
     kb.row(
         types.InlineKeyboardButton("📝 Редактировать запись", callback_data=f"d:{day_key}:edit_list"),
         types.InlineKeyboardButton("📂 Общий CSV", callback_data=f"d:{day_key}:csv_all")
     )
+
     kb.row(
         types.InlineKeyboardButton("📅 CSV за день", callback_data=f"d:{day_key}:csv_day"),
         types.InlineKeyboardButton("⚙️ Обнулить", callback_data=f"d:{day_key}:reset")
     )
+
+    kb.row(
+        types.InlineKeyboardButton("📊 Расходы по статьям", callback_data=f"d:{day_key}:by_category")
+    )
+
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         kb.row(
             types.InlineKeyboardButton("🔁 Пересылка", callback_data=f"d:{day_key}:forward_menu")
         )
+
     kb.row(
-            kb.row(
-        types.InlineKeyboardButton("📊 Расходы по статьям", callback_data=f"d:{day_key}:by_category")
-    )
-types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
+        types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
         types.InlineKeyboardButton("📆 Выбрать день", callback_data=f"d:{day_key}:pick_date")
     )
+
     kb.row(
         types.InlineKeyboardButton("ℹ️ Инфо", callback_data=f"d:{day_key}:info"),
         types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main")
     )
+
     return kb
 def build_forward_chat_list(day_key: str, chat_id: int):
     """
