@@ -1300,14 +1300,27 @@ def apply_forward_mode(A: int, B: int, mode: str):
 @bot.callback_query_handler(func=lambda c: True)
 def on_callback(call):
     try:
-        bot.answer_callback_query(call.id)
-    except Exception:
-        pass
-
-    try:
         data_str = call.data or ""
         chat_id = call.message.chat.id
 
+        # ---- не наши callback ----
+        if not data_str.startswith("d:"):
+            return
+
+        _, day_key, cmd = data_str.split(":", 2)
+
+        if cmd == "pick_date":
+            bot.send_message(
+                chat_id,
+                "Введите дату:\n/view YYYY-MM-DD"
+            )
+            return
+
+        # остальные cmd идут ниже...
+
+    except Exception as e:
+        log_error(f"on_callback error: {e}")
+    
         # -----------------------------
         # 📊 Расходы по статьям (OWNER + обычные чаты)
         # -----------------------------
