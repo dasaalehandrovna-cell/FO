@@ -1330,7 +1330,7 @@ def on_callback(call):
                     except Exception:
                         bot.send_message(chat_id, text, reply_markup=kb)
 
-if data_str == "fw_open":
+            if data_str == "fw_open":
                 kb = build_forward_source_menu()
                 _fw_safe_edit("Выберите чат A:", kb)
                 return
