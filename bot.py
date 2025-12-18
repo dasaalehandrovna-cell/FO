@@ -1310,48 +1310,54 @@ def on_callback(call):
                 bot.answer_callback_query(call.id, "Только для владельца", show_alert=True)
                 return
 
-            if data_str == "fw_open":
+            
+            def _fw_safe_edit(text, kb):
+                try:
+                    bot.edit_message_text(
+                        text,
+                        chat_id=chat_id,
+                        message_id=call.message.message_id,
+                        reply_markup=kb
+                    )
+                except Exception:
+                    try:
+                        bot.edit_message_caption(
+                            chat_id=chat_id,
+                            message_id=call.message.message_id,
+                            caption=text,
+                            reply_markup=kb
+                        )
+                    except Exception:
+                        bot.send_message(chat_id, text, reply_markup=kb)
+
+if data_str == "fw_open":
                 kb = build_forward_source_menu()
-                bot.edit_message_text(
-                    "Выберите чат A:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
+                _fw_safe_edit("Выберите чат A:", kb)
                 return
+
+            if data_str in ("fw_back_root", "fw_back_src"):
+                kb = build_forward_source_menu()
+                _fw_safe_edit("Выберите чат A:", kb)
+                return
+
 
             if data_str.startswith("fw_src:"):
                 A = int(data_str.split(":", 1)[1])
                 kb = build_forward_target_menu(A)
-                bot.edit_message_text(
-                    f"Источник пересылки: {A}\nВыберите чат B:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
+                _fw_safe_edit(f"Источник пересылки: {A}\nВыберите чат B:", kb)
                 return
 
             if data_str.startswith("fw_tgt:"):
                 _, A, B = data_str.split(":")
                 kb = build_forward_mode_menu(int(A), int(B))
-                bot.edit_message_text(
-                    f"Настройка пересылки: {A} ⇄ {B}",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
+                _fw_safe_edit(f"Настройка пересылки: {A} ⇄ {B}", kb)
                 return
 
             if data_str.startswith("fw_mode:"):
                 _, A, B, mode = data_str.split(":")
                 apply_forward_mode(int(A), int(B), mode)
                 kb = build_forward_source_menu()
-                bot.edit_message_text(
-                    "Маршрут обновлён.\nВыберите чат A:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
+                _fw_safe_edit("Маршрут обновлён.\nВыберите чат A:", kb)
                 return
 
             return
@@ -1370,6 +1376,20 @@ def on_callback(call):
             if data_str == "cat_back_weeks":
                 safe_edit("📊 Расходы по статьям", build_category_week_keyboard(date.today()))
                 return
+
+            if data_str == "cat_pick_month":
+                safe_edit("Выберите месяц:", build_category_month_keyboard(date.today()))
+                return
+
+            if data_str == "cat_back_edit":
+                day_key = get_chat_store(chat_id).get("current_view_day", today_key())
+                kb = build_edit_menu_keyboard(day_key, chat_id)
+                try:
+                    bot.edit_message_reply_markup(chat_id, call.message.message_id, reply_markup=kb)
+                except Exception:
+                    safe_edit("⬅️ Меню редактирования", kb)
+                return
+
 
             if data_str.startswith("catchat:"):
                 tgt = int(data_str.split(":")[1])
