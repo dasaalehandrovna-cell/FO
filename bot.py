@@ -43,7 +43,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_ 022.10🏝️"
+VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
@@ -895,7 +895,7 @@ def render_day_window(chat_id: int, day_key: str):
     tm = (t + timedelta(days=1)).strftime("%Y-%m-%d")
     tag = "сегодня" if day_key == td else "вчера" if day_key == yd else "завтра" if day_key == tm else ""
     label = f"{day_key} ({tag}, {wd})" if tag else f"{day_key} ({wd})"
-    lines.append(f"📅 <b>{label}</b>")
+    lines.append(f"📅 {label}")
     lines.append("")
     total_income = 0.0
     total_expense = 0.0
@@ -908,7 +908,7 @@ def render_day_window(chat_id: int, day_key: str):
             total_expense += -amt
         note = html.escape(r.get("note", ""))
         sid = r.get("short_id", f"R{r['id']}")
-        lines.append(f"{sid} {fmt_num(amt)} <i>{note}</i>")
+        lines.append(f"{sid} {fmt_num(amt)} {note}")
     if not recs_sorted:
         lines.append("Нет записей за этот день.")
     lines.append("")
@@ -1189,17 +1189,45 @@ def apply_forward_mode(A: int, B: int, mode: str):
     elif mode == "del":
         remove_forward_link(A, B)
         remove_forward_link(B, A)
+
+def safe_edit(bot, call, text, reply_markup=None):
+    """Безопасное обновление: edit_text → edit_caption → send_message."""
+    chat_id = call.message.chat.id
+    msg_id = call.message.message_id
+    try:
+        bot.edit_message_text(
+            text,
+            chat_id=chat_id,
+            message_id=msg_id,
+            reply_markup=reply_markup
+        )
+        return
+    except Exception:
+        pass
+    try:
+        bot.edit_message_caption(
+            chat_id=chat_id,
+            message_id=msg_id,
+            caption=text,
+            reply_markup=reply_markup
+        )
+        return
+    except Exception:
+        pass
+    bot.send_message(chat_id, text, reply_markup=reply_markup)
+
+
 @bot.callback_query_handler(func=lambda c: True)
 def on_callback(call):
-    """
-    Универсальный обработчик всех callback_data:
-      • fw_*  — новое меню пересылки A ↔ B (только для владельца)
-      • c:*   — календарь
-      • d:*   — команды окна дня, редактирование, старое меню пересылки
-    """
+    try:
+        bot.answer_callback_query(call.id)
+    except Exception:
+        pass
+
     try:
         data_str = call.data or ""
         chat_id = call.message.chat.id
+
         if data_str.startswith("fw_"):
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
                 try:
@@ -1213,10 +1241,10 @@ def on_callback(call):
                 return
             if data_str == "fw_open":
                 kb = build_forward_source_menu()
-                bot.edit_message_text(
+                safe_edit(
+                    bot,
+                    call,
                     "Выберите чат A:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
                     reply_markup=kb
                 )
                 return
@@ -1224,26 +1252,19 @@ def on_callback(call):
                 owner_store = get_chat_store(int(OWNER_ID))
                 day_key = owner_store.get("current_view_day", today_key())
                 kb = build_edit_menu_keyboard(day_key, chat_id)
-                try:
-                    bot.edit_message_text(
-                        f"Меню редактирования для {day_key}:",
-                        chat_id=chat_id,
-                        message_id=call.message.message_id,
-                        reply_markup=kb
-                    )
-                except Exception:
-                    bot.send_message(
-                        chat_id,
-                        f"Меню редактирования для {day_key}:",
-                        reply_markup=kb
-                    )
+                safe_edit(
+                    bot,
+                    call,
+                    f"Меню редактирования для {day_key}:",
+                    reply_markup=kb
+                )
                 return
             if data_str == "fw_back_src":
                 kb = build_forward_source_menu()
-                bot.edit_message_text(
+                safe_edit(
+                    bot,
+                    call,
                     "Выберите чат A:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
                     reply_markup=kb
                 )
                 return
@@ -1253,10 +1274,10 @@ def on_callback(call):
                 except Exception:
                     return
                 kb = build_forward_target_menu(A)
-                bot.edit_message_text(
+                safe_edit(
+                    bot,
+                    call,
                     f"Источник пересылки: {A}\nВыберите чат B:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
                     reply_markup=kb
                 )
                 return
@@ -1266,10 +1287,10 @@ def on_callback(call):
                 except Exception:
                     return
                 kb = build_forward_target_menu(A)
-                bot.edit_message_text(
+                safe_edit(
+                    bot,
+                    call,
                     f"Источник пересылки: {A}\nВыберите чат B:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
                     reply_markup=kb
                 )
                 return
@@ -1284,10 +1305,10 @@ def on_callback(call):
                 except Exception:
                     return
                 kb = build_forward_mode_menu(A, B)
-                bot.edit_message_text(
+                safe_edit(
+                    bot,
+                    call,
                     f"Настройка пересылки: {A} ⇄ {B}",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
                     reply_markup=kb
                 )
                 return
@@ -1303,10 +1324,10 @@ def on_callback(call):
                     return
                 apply_forward_mode(A, B, mode)
                 kb = build_forward_source_menu()
-                bot.edit_message_text(
+                safe_edit(
+                    bot,
+                    call,
                     "Маршрут обновлён.\nВыберите чат A:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
                     reply_markup=kb
                 )
                 return
@@ -1425,7 +1446,7 @@ def on_callback(call):
 
             # Обычный чат (не владелец)
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
-                text = f"💰 <b>Общий итог по этому чату:</b> {fmt_num(chat_bal)}"
+                text = f"💰 Общий итог по этому чату: {fmt_num(chat_bal)}"
                 if total_msg_id:
                     try:
                         bot.edit_message_text(
@@ -1447,9 +1468,9 @@ def on_callback(call):
             lines = []
             info = store.get("info", {})
             title = info.get("title") or f"Чат {chat_id}"
-            lines.append("💰 <b>Общий итог (для владельца)</b>")
+            lines.append("💰 Общий итог (для владельца)")
             lines.append("")
-            lines.append(f"• Этот чат ({title}): <b>{fmt_num(chat_bal)}</b>")
+            lines.append(f"• Этот чат ({title}): {fmt_num(chat_bal)}")
 
             all_chats = data.get("chats", {})
             total_all = 0
@@ -1471,7 +1492,7 @@ def on_callback(call):
                 lines.append("• Другие чаты:")
                 lines.extend(other_lines)
             lines.append("")
-            lines.append(f"• Всего по всем чатам: <b>{fmt_num(total_all)}</b>")
+            lines.append(f"• Всего по всем чатам: {fmt_num(total_all)}")
 
             text = "\n".join(lines)
             if total_msg_id:
@@ -1647,54 +1668,32 @@ def on_callback(call):
                     callback_data=f"d:{day_key}:edit_menu"
                 )
             )
-            try:
-                bot.edit_message_text(
-                    "Меню пересылки:\nВыберите режим:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
-            except Exception:
-                try:
-                    bot.edit_message_caption(
-                        chat_id=chat_id,
-                        message_id=call.message.message_id,
-                        caption="Меню пересылки:\nВыберите режим:",
-                        reply_markup=kb
-                    )
-                except Exception:
-                    bot.send_message(chat_id, "Меню пересылки:\nВыберите режим:", reply_markup=kb)
+            safe_edit(
+                bot,
+                call,
+                "Меню пересылки:\nВыберите режим:",
+                reply_markup=kb
+            )
             return
         if cmd == "forward_old":
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
                 bot.send_message(chat_id, "Меню доступно только владельцу.")
                 return
             kb = build_forward_chat_list(day_key, chat_id)
-            try:
-                bot.edit_message_text(
-                    "Выберите чат, для которого хотите настроить пересылку:",
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
-            except Exception:
-                try:
-                    bot.edit_message_caption(
-                        chat_id=chat_id,
-                        message_id=call.message.message_id,
-                        caption="Выберите чат, для которого хотите настроить пересылку:",
-                        reply_markup=kb
-                    )
-                except Exception:
-                    bot.send_message(chat_id, "Выберите чат, для которого хотите настроить пересылку:", reply_markup=kb)
+            safe_edit(
+                bot,
+                call,
+                "Выберите чат, для которого хотите настроить пересылку:",
+                reply_markup=kb
+            )
             return
         if cmd.startswith("fw_cfg_"):
             tgt = int(cmd.split("_")[-1])
             kb = build_forward_direction_menu(day_key, chat_id, tgt)
-            bot.edit_message_text(
+            safe_edit(
+                bot,
+                call,
                 f"Настройка пересылки для чата {tgt}:",
-                chat_id=chat_id,
-                message_id=call.message.message_id,
                 reply_markup=kb
             )
             return
@@ -1884,14 +1883,14 @@ def refresh_total_message_if_any(chat_id: int):
     try:
         chat_bal = store.get("balance", 0)
         if not OWNER_ID or str(chat_id) != str(OWNER_ID):
-            text = f"💰 <b>Общий итог по этому чату:</b> {fmt_num(chat_bal)}"
+            text = f"💰 Общий итог по этому чату: {fmt_num(chat_bal)}"
         else:
             lines = []
             info = store.get("info", {})
             title = info.get("title") or f"Чат {chat_id}"
-            lines.append("💰 <b>Общий итог (для владельца)</b>")
+            lines.append("💰 Общий итог (для владельца)")
             lines.append("")
-            lines.append(f"• Этот чат ({title}): <b>{fmt_num(chat_bal)}</b>")
+            lines.append(f"• Этот чат ({title}): {fmt_num(chat_bal)}")
             all_chats = data.get("chats", {})
             total_all = 0
             other_lines = []
@@ -1912,7 +1911,7 @@ def refresh_total_message_if_any(chat_id: int):
                 lines.append("• Другие чаты:")
                 lines.extend(other_lines)
             lines.append("")
-            lines.append(f"• Всего по всем чатам: <b>{fmt_num(total_all)}</b>")
+            lines.append(f"• Всего по всем чатам: {fmt_num(total_all)}")
             text = "\n".join(lines)
         bot.edit_message_text(
             text,
