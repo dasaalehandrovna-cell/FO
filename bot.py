@@ -422,6 +422,42 @@ def split_amount_and_note(text: str):
     note = text.replace(raw_number, " ").strip()
     note = re.sub(r"\s+", " ", note).lower()
     return amount, note
+
+
+# =============================
+# 📦 EXPENSE CATEGORIES (v1)
+# =============================
+EXPENSE_CATEGORIES = {
+    "ПРОДУКТЫ": ["продукты", "шб", "еда"],
+}
+
+def resolve_expense_category(note: str):
+    if not note:
+        return None
+    n = str(note).lower()
+    for cat, keywords in EXPENSE_CATEGORIES.items():
+        for kw in keywords:
+            if kw in n:
+                return cat
+    return None
+
+def calc_categories_for_period(store: dict, start: str, end: str) -> dict:
+    """Считает суммы расходов по статьям (только отрицательные amount) в диапазоне дат включительно."""
+    out = {}
+    daily = store.get("daily_records", {}) or {}
+    for day, records in daily.items():
+        if not (start <= day <= end):
+            continue
+        for r in (records or []):
+            amt = float(r.get("amount", 0) or 0)
+            if amt >= 0:
+                continue
+            cat = resolve_expense_category(r.get("note", ""))
+            if not cat:
+                continue
+            out[cat] = out.get(cat, 0) + (-amt)
+    return out
+
 def looks_like_amount(text):
     try:
         amount, note = split_amount_and_note(text)
@@ -1217,6 +1253,95 @@ def safe_edit(bot, call, text, reply_markup=None):
     bot.send_message(chat_id, text, reply_markup=reply_markup)
 
 
+
+def handle_categories_callback(call, data_str: str) -> bool:
+    """UI: 12 месяцев → 4 недели → отчёт по статьям. Возвращает True если обработано."""
+    chat_id = call.message.chat.id
+
+    if data_str == "cat_months":
+        kb = types.InlineKeyboardMarkup(row_width=3)
+        # 12 месяцев
+        for m in range(1, 13):
+            kb.add(types.InlineKeyboardButton(
+                datetime(2000, m, 1).strftime("%b"),
+                callback_data=f"cat_m:{m}"
+            ))
+        safe_edit(bot, call, "📦 Выберите месяц:", reply_markup=kb)
+        return True
+
+    if data_str.startswith("cat_m:"):
+        try:
+            month = int(data_str.split(":")[1])
+        except Exception:
+            return True
+        year = now_local().year
+
+        # 4 недели месяца (простая разметка 1–7, 8–14, 15–21, 22–31)
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        weeks = [(1, 7), (8, 14), (15, 21), (22, 31)]
+        for a, b in weeks:
+            kb.add(types.InlineKeyboardButton(
+                f"{a:02d}–{b:02d}",
+                callback_data=f"cat_w:{year}:{month}:{a}:{b}"
+            ))
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data="cat_months"))
+        safe_edit(bot, call, "📆 Выберите неделю:", reply_markup=kb)
+        return True
+
+    if data_str.startswith("cat_w:"):
+        try:
+            _, y, m, a, b = data_str.split(":")
+            y, m, a, b = map(int, (y, m, a, b))
+        except Exception:
+            return True
+
+        # нормализация конца месяца (если месяц короче 31)
+        try:
+            # последний день месяца: первый день следующего месяца - 1 день
+            if m == 12:
+                last_day = (datetime(y + 1, 1, 1) - timedelta(days=1)).day
+            else:
+                last_day = (datetime(y, m + 1, 1) - timedelta(days=1)).day
+        except Exception:
+            last_day = 31
+
+        a = max(1, min(a, last_day))
+        b = max(1, min(b, last_day))
+        if b < a:
+            b = a
+
+        start = f"{y}-{m:02d}-{a:02d}"
+        end = f"{y}-{m:02d}-{b:02d}"
+
+        store = get_chat_store(chat_id)
+        cats = calc_categories_for_period(store, start, end)
+
+        lines = [
+            "📦 <b>Расходы по статьям</b>",
+            f"🗓 {start} — {end}",
+            ""
+        ]
+        if not cats:
+            lines.append("Нет данных по статьям за этот период.")
+        else:
+            # Стабильно: сначала ПРОДУКТЫ, затем остальные по алфавиту
+            keys = list(cats.keys())
+            if "ПРОДУКТЫ" in keys:
+                keys.remove("ПРОДУКТЫ")
+                keys = ["ПРОДУКТЫ"] + sorted(keys)
+            else:
+                keys = sorted(keys)
+            for cat in keys:
+                lines.append(f"{cat}: −{fmt_num(cats[cat])}")
+
+        kb = types.InlineKeyboardMarkup()
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
+        safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
+        return True
+
+    return False
+
+
 @bot.callback_query_handler(func=lambda c: True)
 def on_callback(call):
     try:
@@ -1227,6 +1352,10 @@ def on_callback(call):
     try:
         data_str = call.data or ""
         chat_id = call.message.chat.id
+
+        if data_str == "cat_months" or data_str.startswith("cat_"):
+            if handle_categories_callback(call, data_str):
+                return
 
         if data_str.startswith("fw_"):
             if not OWNER_ID or str(chat_id) != str(OWNER_ID):
@@ -1537,7 +1666,9 @@ def on_callback(call):
                 "/autoadd_info — режим авто-добавления по суммам\n"
                 "/help — эта справка\n"
             )
-            bot.send_message(chat_id, info_text)
+            kb = types.InlineKeyboardMarkup()
+            kb.row(types.InlineKeyboardButton("📦 Расходы по статьям", callback_data="cat_months"))
+            bot.send_message(chat_id, info_text, reply_markup=kb)
             return
         if cmd == "edit_menu":
             store["current_view_day"] = day_key
@@ -2998,37 +3129,3 @@ def main():
     app.run(host="0.0.0.0", port=PORT)
 if __name__ == "__main__":
     main()
-
-# =============================
-# 📦 EXPENSE CATEGORIES + UI
-# =============================
-
-EXPENSE_CATEGORIES = {
-    "ПРОДУКТЫ": ["продукты", "шб", "еда"],
-}
-
-def resolve_expense_category(note: str):
-    if not note:
-        return None
-    n = note.lower()
-    for cat, keywords in EXPENSE_CATEGORIES.items():
-        for kw in keywords:
-            if kw in n:
-                return cat
-    return None
-
-def calc_categories_for_period(store: dict, start: str, end: str) -> dict:
-    out = {}
-    daily = store.get("daily_records", {})
-    for day, records in daily.items():
-        if not (start <= day <= end):
-            continue
-        for r in records:
-            amt = r.get("amount", 0)
-            if amt >= 0:
-                continue
-            cat = resolve_expense_category(r.get("note", ""))
-            if not cat:
-                continue
-            out[cat] = out.get(cat, 0) + (-amt)
-    return out
