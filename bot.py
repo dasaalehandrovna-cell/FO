@@ -43,7 +43,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
+VERSION = "Code_022.9.12 ✅FIX-v3"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
@@ -388,6 +388,21 @@ def fmt_num(x):
     else:
         s = int_part
     return f"{sign}{s}"
+
+
+def fmt_num_plain(x):
+    """Европейский формат без знака (+/-)."""
+    try:
+        x = abs(float(x))
+    except Exception:
+        return str(x)
+    s = f"{x:.12f}".rstrip("0").rstrip(".")
+    if "." in s:
+        int_part, dec_part = s.split(".")
+    else:
+        int_part, dec_part = s, ""
+    int_part = f"{int(int_part):,}".replace(",", ".")
+    return f"{int_part},{dec_part}" if dec_part else int_part
 num_re = re.compile(r"[+\-–]?\s*\d[\d\s.,_'’]*")
 def parse_amount(raw: str) -> float:
     """
@@ -1336,13 +1351,13 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                lines.append(f"{cat}: −{fmt_num(cats[cat])}")
+                lines.append(f"{cat}: {fmt_num_plain(cats[cat])}")
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
                         for day_i, amt_i, note_i in items:
                             note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: −{fmt_num(amt_i)} {note_i}")
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {note_i}")
 
         kb = types.InlineKeyboardMarkup()
         try:
@@ -1358,6 +1373,8 @@ def handle_categories_callback(call, data_str: str) -> bool:
         )
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
         safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
+        schedule_delete_aux(chat_id, call.message.message_id, 20)
+        schedule_delete_aux(chat_id, call.message.message_id, 20)
         return True
 
     if data_str == "cat_months":
@@ -1368,7 +1385,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 datetime(2000, m, 1).strftime("%b"),
                 callback_data=f"cat_m:{m}"
             ))
-        safe_edit(bot, call, "📦 Выберите месяц:", reply_markup=kb)
+        msg = send_aux_message(chat_id, "📦 Выберите месяц:", reply_markup=kb, parse_mode=None, delay=20)
         return True
 
     if data_str.startswith("cat_m:"):
@@ -1439,14 +1456,14 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                lines.append(f"{cat}: −{fmt_num(cats[cat])}")
+                lines.append(f"{cat}: {fmt_num_plain(cats[cat])}")
 
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
                         for day_i, amt_i, note_i in items:
                             note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: −{fmt_num(amt_i)} {note_i}")
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {note_i}")
                     else:
                         lines.append("  • нет операций")
 
@@ -2141,11 +2158,10 @@ def send_info(chat_id: int, text: str):
     send_and_auto_delete(chat_id, text, 10)
 @bot.message_handler(commands=["ok"])
 def cmd_enable_finance(msg):
+    # ⚠️ временно заглушено по ТЗ
     chat_id = msg.chat.id
     delete_message_later(chat_id, msg.message_id, 15)
-    set_finance_mode(chat_id, True)
-    save_data(data)
-    send_info(chat_id, "🚀 Финансовый режим включён!\nОтправьте /start")
+    send_info(chat_id, "⚠️ Команда /ok временно отключена.")
     return
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
@@ -2478,6 +2494,37 @@ def delete_message_later(chat_id: int, message_id: int, delay: int = 10):
         threading.Thread(target=_job, daemon=True).start()
     except Exception as e:
         log_error(f"delete_message_later: {e}")
+
+
+_aux_delete_timers = {}
+
+def schedule_delete_aux(chat_id: int, message_id: int, delay: int = 20):
+    """Удаляет вспомогательные окна через delay секунд (с продлением таймера при обновлении)."""
+    key = (int(chat_id), int(message_id))
+    prev = _aux_delete_timers.get(key)
+    if prev and prev.is_alive():
+        try:
+            prev.cancel()
+        except Exception:
+            pass
+    def _job():
+        try:
+            bot.delete_message(chat_id, message_id)
+        except Exception:
+            pass
+    t = threading.Timer(delay, _job)
+    _aux_delete_timers[key] = t
+    t.start()
+
+def send_aux_message(chat_id: int, text: str, reply_markup=None, parse_mode=None, delay: int = 20):
+    """Отправляет вспомогательное окно и планирует авто-удаление."""
+    try:
+        msg = bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+        schedule_delete_aux(chat_id, msg.message_id, delay)
+        return msg
+    except Exception as e:
+        log_error(f"send_aux_message: {e}")
+        return None
 _edit_cancel_timers = {}
 def schedule_cancel_wait(chat_id: int, delay: float = 15.0):
     """
@@ -2738,6 +2785,37 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         set_active_window_id(chat_id, day_key, sent.message_id)
     except Exception as e:
         log_error(f"backup_window_for_owner({chat_id}, {day_key}): {e}")
+
+
+def force_owner_new_day_window(chat_id: int, day_key: str, old_mid: int | None = None):
+    """OWNER: /start должен создавать новое окно (document+caption)"""
+    try:
+        txt, _ = render_day_window(chat_id, day_key)
+        kb = build_main_keyboard(day_key, chat_id)
+        save_chat_json(chat_id)
+        json_path = chat_json_file(chat_id)
+        if not os.path.exists(json_path):
+            log_error(f"force_owner_new_day_window: {json_path} missing")
+            return
+        with open(json_path, "rb") as f:
+            data_bytes = f.read()
+        if not data_bytes:
+            return
+        base = os.path.basename(json_path)
+        name_no_ext, dot, ext = base.partition(".")
+        suffix = get_chat_name_for_filename(chat_id)
+        file_name = (suffix if suffix else name_no_ext) + (f".{ext}" if dot else "")
+        buf = io.BytesIO(data_bytes)
+        buf.name = file_name
+        sent = bot.send_document(chat_id, buf, caption=txt, reply_markup=kb)
+        set_active_window_id(chat_id, day_key, sent.message_id)
+        if old_mid:
+            try:
+                bot.delete_message(chat_id, old_mid)
+            except Exception:
+                pass
+    except Exception as e:
+        log_error(f"force_owner_new_day_window({chat_id},{day_key}): {e}")
         
 def force_new_day_window(chat_id: int, day_key: str):
     old_mid = get_active_window_id(chat_id, day_key)
