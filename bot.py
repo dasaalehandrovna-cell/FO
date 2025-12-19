@@ -43,8 +43,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-#VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
-VERSION = "Code_022.9.12 ✅fix-today-next-categories"
+VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
@@ -1440,8 +1439,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                #lines.append(f"{cat}: −{fmt_num(cats[cat])}")
-                lines.append(f"{cat}: {fmt_num_plain(total)}")
+                lines.append(f"{cat}: −{fmt_num(cats[cat])}")
 
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
@@ -1842,13 +1840,12 @@ def on_callback(call):
             kb_back.row(
                 types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_list")
             )
-            msg = bot.send_message(
-                chat_id,
-                text,
-                reply_markup=kb,
-                parse_mode="HTML"
+            bot.edit_message_text(
+                text_edit,
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                reply_markup=kb_back
             )
-            schedule_aux_delete(chat_id, msg.message_id)
             return
         if cmd.startswith("del_rec_"):
             rid = int(cmd.split("_")[-1])
@@ -2144,21 +2141,12 @@ def send_info(chat_id: int, text: str):
     send_and_auto_delete(chat_id, text, 10)
 @bot.message_handler(commands=["ok"])
 def cmd_enable_finance(msg):
-    send_and_auto_delete(
-        msg.chat.id,
-        "ℹ️ Команда /ok отключена.\nИспользуйте /start",
-        10
-    )
+    chat_id = msg.chat.id
+    delete_message_later(chat_id, msg.message_id, 15)
+    set_finance_mode(chat_id, True)
+    save_data(data)
+    send_info(chat_id, "🚀 Финансовый режим включён!\nОтправьте /start")
     return
-    
-#@bot.message_handler(commands=["ok"])
-#def cmd_enable_finance(msg):
-    #chat_id = msg.chat.id
-    #delete_message_later(chat_id, msg.message_id, 15)
-    #set_finance_mode(chat_id, True)
-    #save_data(data)
-    #send_info(chat_id, "🚀 Финансовый режим включён!\nОтправьте /start")
-    #return
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
     chat_id = msg.chat.id
@@ -2491,14 +2479,6 @@ def delete_message_later(chat_id: int, message_id: int, delay: int = 10):
     except Exception as e:
         log_error(f"delete_message_later: {e}")
 _edit_cancel_timers = {}
-def schedule_aux_delete(chat_id: int, message_id: int, delay: int = 20):
-    def _job():
-        time.sleep(delay)
-        try:
-            bot.delete_message(chat_id, message_id)
-        except Exception:
-            pass
-    threading.Thread(target=_job, daemon=True).start()
 def schedule_cancel_wait(chat_id: int, delay: float = 15.0):
     """
     Через delay секунд:
