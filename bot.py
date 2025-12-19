@@ -429,7 +429,7 @@ def refresh_categories_view_if_any(chat_id: int):
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)}",
+            f"🗓 {start} — {end}",
             ""
         ]
         if not cats:
@@ -1375,6 +1375,70 @@ def safe_edit(bot, call, text, reply_markup=None):
 
 
 
+def safe_edit_markup(bot, call, reply_markup=None):
+    """Безопасно обновляет только клавиатуру сообщения."""
+    try:
+        bot.edit_message_reply_markup(
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            reply_markup=reply_markup
+        )
+        return
+    except Exception:
+        pass
+    # fallback: отправим новое сообщение
+    try:
+        txt = getattr(call.message, "text", None) or getattr(call.message, "caption", None) or ""
+        bot.send_message(call.message.chat.id, txt, reply_markup=reply_markup)
+    except Exception:
+        pass
+
+def _render_category_week_report(call, start: str, end: str) -> bool:
+    """Отчёт по статьям за неделю start..end (YYYY-MM-DD)."""
+    try:
+        chat_id = call.message.chat.id
+        store = get_chat_store(chat_id)
+        cats = calc_categories_for_period(store, start, end) or {}
+        lines = []
+        lines.append("📦 Расходы по статьям")
+        lines.append(f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)}")
+        lines.append("")
+        if not cats:
+            lines.append("Нет расходов за этот период.")
+        else:
+            keys = list(cats.keys())
+            # продукты вверх
+            if "ПРОДУКТЫ" in keys:
+                keys.remove("ПРОДУКТЫ")
+                keys = ["ПРОДУКТЫ"] + sorted(keys)
+            else:
+                keys = sorted(keys)
+            for cat in keys:
+                lines.append(f"{cat}: -{fmt_abs(cats[cat])}")
+                if cat == "ПРОДУКТЫ":
+                    items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
+                    if items:
+                        for day_i, amt_i, note_i in items:
+                            note_i = (note_i or "").strip()
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: -{fmt_abs(amt_i)} {note_i}")
+                    else:
+                        lines.append("  • нет операций")
+
+        prev_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+        next_start = (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
+        kb = types.InlineKeyboardMarkup(row_width=3)
+        kb.row(
+            types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{prev_start}"),
+            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
+            types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
+        )
+        kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
+        safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
+        return True
+    except Exception as e:
+        log_error(f"_render_category_week_report: {e}")
+        return True
+
 def handle_categories_callback(call, data_str: str) -> bool:
     """UI: 12 месяцев → 4 недели → отчёт по статьям. Возвращает True если обработано."""
     chat_id = call.message.chat.id
@@ -1439,7 +1503,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)}",
+            f"🗓 {start} — {end}",
             ""
         ]
 
@@ -1467,19 +1531,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                         lines.append("  • нет операций")
 
         kb = types.InlineKeyboardMarkup()
-        try:
-            prev_start_dt = datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)
-            next_start_dt = datetime.strptime(start, "%Y-%m-%d") + timedelta(days=7)
-            prev_start = prev_start_dt.strftime("%Y-%m-%d")
-            next_start = next_start_dt.strftime("%Y-%m-%d")
-        except Exception:
-            prev_start = start
-            next_start = start
-        kb.row(
-            types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_w:{prev_start}"),
-            types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"),
-            types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_w:{next_start}")
-        )
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
         safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
         return True
 
@@ -1613,11 +1665,7 @@ def on_callback(call):
                 return
             kb = build_calendar_keyboard(center_dt, chat_id)
             try:
-                bot.edit_message_reply_markup(
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
+                safe_edit_markup(bot, call, reply_markup=kb)
             except Exception:
                 pass
             return
@@ -1676,14 +1724,7 @@ def on_callback(call):
             except Exception:
                 cdt = now_local()
             kb = build_calendar_keyboard(cdt, chat_id)
-            try:
-                bot.edit_message_reply_markup(
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
-            except Exception:
-                bot.send_message(chat_id, "📅 Календарь:", reply_markup=kb)
+            safe_edit_markup(bot, call, reply_markup=kb)
             return
         if cmd == "report":
             lines = ["📊 Отчёт:"]
@@ -1795,11 +1836,7 @@ def on_callback(call):
             kb = build_edit_menu_keyboard(day_key, chat_id)
             # Пытаемся обновить только клавиатуру (важно для owner-окон с документом)
             try:
-                bot.edit_message_reply_markup(
-                    chat_id=chat_id,
-                    message_id=call.message.message_id,
-                    reply_markup=kb
-                )
+                safe_edit_markup(bot, call, reply_markup=kb)
             except Exception:
                 # Если не получилось — просто отправляем отдельное меню
                 bot.send_message(chat_id, f"Меню редактирования для {day_key}:", reply_markup=kb)
