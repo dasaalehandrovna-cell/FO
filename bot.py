@@ -458,6 +458,24 @@ def calc_categories_for_period(store: dict, start: str, end: str) -> dict:
             out[cat] = out.get(cat, 0) + (-amt)
     return out
 
+
+def collect_items_for_category(store: dict, start: str, end: str, category: str):
+    """Возвращает список (day, amount, note) для указанной статьи и периода."""
+    items = []
+    daily = store.get("daily_records", {}) or {}
+    for day, records in daily.items():
+        if not (start <= day <= end):
+            continue
+        for r in (records or []):
+            amt = float(r.get("amount", 0) or 0)
+            if amt >= 0:
+                continue
+            note = r.get("note", "")
+            if resolve_expense_category(note) == category:
+                items.append((day, -amt, note))
+    return items
+
+
 def looks_like_amount(text):
     try:
         amount, note = split_amount_and_note(text)
@@ -1321,6 +1339,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
             f"🗓 {start} — {end}",
             ""
         ]
+
         if not cats:
             lines.append("Нет данных по статьям за этот период.")
         else:
@@ -1331,8 +1350,18 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = ["ПРОДУКТЫ"] + sorted(keys)
             else:
                 keys = sorted(keys)
+
             for cat in keys:
                 lines.append(f"{cat}: −{fmt_num(cats[cat])}")
+
+                if cat == "ПРОДУКТЫ":
+                    items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
+                    if items:
+                        for day_i, amt_i, note_i in items:
+                            note_i = (note_i or "").strip()
+                            lines.append(f"  • {day_i}: −{fmt_num(amt_i)} {note_i}")
+                    else:
+                        lines.append("  • нет операций")
 
         kb = types.InlineKeyboardMarkup()
         kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
