@@ -2998,3 +2998,36 @@ def main():
     app.run(host="0.0.0.0", port=PORT)
 if __name__ == "__main__":
     main()
+
+# =============================
+# 🔹 EXPENSE CATEGORIES (v1)
+# =============================
+EXPENSE_CATEGORIES = {
+    "ПРОДУКТЫ": ["продукты", "шб", "еда"],
+}
+
+def resolve_expense_category(note: str):
+    if not note:
+        return None
+    n = note.lower()
+    for cat, keywords in EXPENSE_CATEGORIES.items():
+        for kw in keywords:
+            if kw in n:
+                return cat
+    return None
+
+def calc_categories_for_period(store: dict, start: str, end: str) -> dict:
+    out = {}
+    daily = store.get("daily_records", {})
+    for day, records in daily.items():
+        if not (start <= day <= end):
+            continue
+        for r in records:
+            amt = r.get("amount", 0)
+            if amt >= 0:
+                continue
+            cat = resolve_expense_category(r.get("note", ""))
+            if not cat:
+                continue
+            out[cat] = out.get(cat, 0) + (-amt)
+    return out
