@@ -77,6 +77,25 @@ def now_local():
     return datetime.now(get_tz())
 def today_key() -> str:
     return now_local().strftime("%Y-%m-%d")
+
+def fmt_date_ddmmyy(day_key: str) -> str:
+    """YYYY-MM-DD -> DD.MM.YY"""
+    try:
+        d = datetime.strptime(day_key, "%Y-%m-%d")
+        return d.strftime("%d.%m.%y")
+    except Exception:
+        return str(day_key)
+
+def week_bounds_from_day(day_key: str):
+    """Возвращает (start,end) недели ПН-ВС для day_key YYYY-MM-DD"""
+    try:
+        d = datetime.strptime(day_key, "%Y-%m-%d").date()
+    except Exception:
+        d = now_local().date()
+    start = d - timedelta(days=d.weekday())
+    end = start + timedelta(days=6)
+    return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+
 def _load_json(path: str, default):
     if not os.path.exists(path):
         return default
@@ -410,7 +429,7 @@ def refresh_categories_view_if_any(chat_id: int):
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {start} — {end}",
+            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)}",
             ""
         ]
         if not cats:
@@ -1031,7 +1050,8 @@ def render_day_window(chat_id: int, day_key: str):
     yd = (t - timedelta(days=1)).strftime("%Y-%m-%d")
     tm = (t + timedelta(days=1)).strftime("%Y-%m-%d")
     tag = "сегодня" if day_key == td else "вчера" if day_key == yd else "завтра" if day_key == tm else ""
-    label = f"{day_key} ({tag}, {wd})" if tag else f"{day_key} ({wd})"
+    dk = fmt_date_ddmmyy(day_key)
+    label = f"{dk} ({tag}, {wd})" if tag else f"{dk} ({wd})"
     lines.append(f"📅 {label}")
     lines.append("")
     total_income = 0.0
@@ -1419,7 +1439,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {start} — {end}",
+            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)}",
             ""
         ]
 
@@ -1447,7 +1467,19 @@ def handle_categories_callback(call, data_str: str) -> bool:
                         lines.append("  • нет операций")
 
         kb = types.InlineKeyboardMarkup()
-        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
+        try:
+            prev_start_dt = datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)
+            next_start_dt = datetime.strptime(start, "%Y-%m-%d") + timedelta(days=7)
+            prev_start = prev_start_dt.strftime("%Y-%m-%d")
+            next_start = next_start_dt.strftime("%Y-%m-%d")
+        except Exception:
+            prev_start = start
+            next_start = start
+        kb.row(
+            types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_w:{prev_start}"),
+            types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"),
+            types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_w:{next_start}")
+        )
         safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
         return True
 
@@ -1644,11 +1676,14 @@ def on_callback(call):
             except Exception:
                 cdt = now_local()
             kb = build_calendar_keyboard(cdt, chat_id)
-            bot.edit_message_reply_markup(
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                reply_markup=kb
-            )
+            try:
+                bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    reply_markup=kb
+                )
+            except Exception:
+                bot.send_message(chat_id, "📅 Календарь:", reply_markup=kb)
             return
         if cmd == "report":
             lines = ["📊 Отчёт:"]
@@ -1820,12 +1855,7 @@ def on_callback(call):
             kb2.row(
                 types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_menu")
             )
-            bot.edit_message_text(
-                "Выберите действие:",
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                reply_markup=kb2
-            )
+            safe_edit(bot, call, "Выберите действие:", reply_markup=kb2)
             return
         if cmd.startswith("edit_rec_"):
             rid = int(cmd.split("_")[-1])
