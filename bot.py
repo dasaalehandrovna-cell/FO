@@ -31,7 +31,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-#VERSION = "Code_022.3-C"
+#VERSION = "Code_022.9.12 ✅fix-today-next-categories"
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -43,7 +43,8 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
+#VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
+VERSION = "Code_022.9.12 ✅fix-today-next-categories"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
@@ -1306,7 +1307,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
     chat_id = call.message.chat.id
 
     # Быстрый переход: текущая неделя (сегодня)
-    if data_str == "cat_today":
+    if data_str == "cat_today_cat":
         start = week_start_monday(today_key())
         return handle_categories_callback(call, f"cat_wk:{start}")
 
@@ -1353,7 +1354,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
             next_start = start
         kb.row(
             types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{prev_start}"),
-            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
+            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today_cat"),
             types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
         )
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
@@ -1387,7 +1388,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 callback_data=f"cat_w:{year}:{month}:{a}:{b}"
             ))
         kb.row(
-            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
+            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today_cat"),
             types.InlineKeyboardButton("🔙 Назад", callback_data="cat_months")
         )
         safe_edit(bot, call, "📆 Выберите неделю:", reply_markup=kb)
@@ -1600,7 +1601,7 @@ def on_callback(call):
         if cmd == "open":
             store["current_view_day"] = day_key
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, day_key, call.message.message_id)
+                safe_owner_window_update(chat_id, day_key, call)
             else:
                 txt, _ = render_day_window(chat_id, day_key)
                 kb = build_main_keyboard(day_key, chat_id)
@@ -1612,7 +1613,7 @@ def on_callback(call):
             nd = d.strftime("%Y-%m-%d")
             store["current_view_day"] = nd
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, nd, call.message.message_id)
+                safe_owner_window_update(chat_id, nd, call)
             else:
                 txt, _ = render_day_window(chat_id, nd)
                 kb = build_main_keyboard(nd, chat_id)
@@ -1624,7 +1625,7 @@ def on_callback(call):
             nd = d.strftime("%Y-%m-%d")
             store["current_view_day"] = nd
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, nd, call.message.message_id)
+                safe_owner_window_update(chat_id, nd, call)
             else:
                 txt, _ = render_day_window(chat_id, nd)
                 kb = build_main_keyboard(nd, chat_id)
@@ -1635,7 +1636,7 @@ def on_callback(call):
             nd = today_key()
             store["current_view_day"] = nd
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, nd, call.message.message_id)
+                safe_owner_window_update(chat_id, nd, call)
             else:
                 txt, _ = render_day_window(chat_id, nd)
                 kb = build_main_keyboard(nd, chat_id)
@@ -1771,7 +1772,7 @@ def on_callback(call):
         if cmd == "back_main":
             store["current_view_day"] = day_key
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, day_key, call.message.message_id)
+                safe_owner_window_update(chat_id, day_key, call)
             else:
                 txt, _ = render_day_window(chat_id, day_key)
                 kb = build_main_keyboard(day_key, chat_id)
@@ -2155,7 +2156,7 @@ def cmd_start(msg):
         return
     day_key = today_key()
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        safe_owner_window_update(chat_id, day_key, call)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
@@ -2230,7 +2231,7 @@ def cmd_view(msg):
         send_info(chat_id, "❌ Неверная дата. Формат: YYYY-MM-DD")
         return
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        safe_owner_window_update(chat_id, day_key, call)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
@@ -2245,7 +2246,7 @@ def cmd_prev(msg):
     d = datetime.strptime(today_key(), "%Y-%m-%d") - timedelta(days=1)
     day_key = d.strftime("%Y-%m-%d")
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        safe_owner_window_update(chat_id, day_key, call)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
@@ -2260,7 +2261,7 @@ def cmd_next(msg):
     d = datetime.strptime(today_key(), "%Y-%m-%d") + timedelta(days=1)
     day_key = d.strftime("%Y-%m-%d")
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        safe_owner_window_update(chat_id, day_key, call)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
@@ -2553,7 +2554,7 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
 
                 # 2️⃣ Окно дня + бэкап для OWNER_ID / обычный режим для остальных
         if OWNER_ID and str(chat_id) == str(OWNER_ID):
-            _safe("owner_backup_window", lambda: backup_window_for_owner(chat_id, day_key, call.message.message_id))
+            _safe("owner_backup_window", lambda: safe_owner_window_update(chat_id, day_key, call))
         else:
             _safe("force_new_day_window", lambda: force_new_day_window(chat_id, day_key))
             _safe("backup_to_chat", lambda: force_backup_to_chat(chat_id))
@@ -2648,6 +2649,26 @@ def force_backup_to_chat(chat_id: int):
         _save_chat_backup_meta(meta)
     except Exception as e:
         log_error(f"force_backup_to_chat({chat_id}): {e}")
+
+def safe_owner_window_update(chat_id: int, day_key: str, call):
+    """Безопасно обновляет owner-окно (document+caption) по текущему message_id из callback."""
+    try:
+        mid = getattr(getattr(call, "message", None), "message_id", None)
+        backup_window_for_owner(chat_id, day_key, mid)
+        return True
+    except Exception as e:
+        try:
+            bot.answer_callback_query(call.id, f"❌ Ошибка: {e}", show_alert=True)
+        except Exception:
+            pass
+        try:
+            txt, _ = render_day_window(chat_id, day_key)
+            kb = build_main_keyboard(day_key, chat_id)
+            bot.send_message(chat_id, txt, reply_markup=kb)
+        except Exception:
+            pass
+        return False
+
 def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int | None = None):
     """
     Для OWNER_ID: одно сообщение, в котором:
@@ -2689,7 +2710,7 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         buf = io.BytesIO(data_bytes)
         buf.name = file_name
 
-        mid = get_active_window_id(chat_id, day_key)
+        mid = (message_id_override or get_active_window_id(chat_id, day_key))
 
         # Пытаемся обновить старое окно, если оно есть
         if mid:
