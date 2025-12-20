@@ -1204,12 +1204,12 @@ def build_category_months_keyboard(year: int):
 
     kb.row(
         types.InlineKeyboardButton("⬅️ Год назад", callback_data=f"cat_y:{year - 1}"),
-        types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
+        types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
         types.InlineKeyboardButton("➡️ Год вперёд", callback_data=f"cat_y:{year + 1}")
     )
 
     kb.row(
-        types.InlineKeyboardButton("🔙 Назад", callback_data="cat_back_root")
+        types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main"))
     )
 
     return kb
@@ -1401,7 +1401,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
             next_start = start
         kb.row(
             types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{prev_start}"),
-            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today_cat"),
+            types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
             types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
         )
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
