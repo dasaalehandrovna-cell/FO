@@ -31,7 +31,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-#VERSION = "Code_022.9.12 ✅fix-ui"
+#VERSION = "Code_022.3-C"
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -1273,7 +1273,7 @@ def apply_forward_mode(A: int, B: int, mode: str):
         remove_forward_link(A, B)
         remove_forward_link(B, A)
 
-def safe_edit(bot, call, text, reply_markup=None, parse_mode=None):
+def safe_edit(bot, call, text, reply_markup=None):
     """Безопасное обновление: edit_text → edit_caption → send_message."""
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
@@ -1282,8 +1282,7 @@ def safe_edit(bot, call, text, reply_markup=None, parse_mode=None):
             text,
             chat_id=chat_id,
             message_id=msg_id,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
+            reply_markup=reply_markup
         )
         return
     except Exception:
@@ -1293,13 +1292,12 @@ def safe_edit(bot, call, text, reply_markup=None, parse_mode=None):
             chat_id=chat_id,
             message_id=msg_id,
             caption=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
+            reply_markup=reply_markup
         )
         return
     except Exception:
         pass
-    bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+    bot.send_message(chat_id, text, reply_markup=reply_markup)
 
 
 
@@ -2660,12 +2658,11 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
     if not OWNER_ID or str(chat_id) != str(OWNER_ID):
         return
 
-    store = get_chat_store(chat_id)
-    store["current_view_day"] = day_key
-
+    # Текст окна и кнопки
     txt, _ = render_day_window(chat_id, day_key)
     kb = build_main_keyboard(day_key, chat_id)
 
+    # Обновляем JSON-файл
     save_chat_json(chat_id)
     json_path = chat_json_file(chat_id)
     if not os.path.exists(json_path):
@@ -2682,15 +2679,19 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         base = os.path.basename(json_path)
         name_no_ext, dot, ext = base.partition(".")
         suffix = get_chat_name_for_filename(chat_id)
-        file_name = suffix if suffix else name_no_ext
+        if suffix:
+            file_name = suffix
+        else:
+            file_name = name_no_ext
         if dot:
             file_name += f".{ext}"
 
         buf = io.BytesIO(data_bytes)
         buf.name = file_name
 
-        mid = message_id_override or get_active_window_id(chat_id, day_key)
+        mid = get_active_window_id(chat_id, day_key)
 
+        # Пытаемся обновить старое окно, если оно есть
         if mid:
             try:
                 bot.edit_message_media(
@@ -2699,11 +2700,15 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
                     media=telebot.types.InputMediaDocument(buf, caption=txt),
                     reply_markup=kb
                 )
-                set_active_window_id(chat_id, day_key, mid)
                 return
             except Exception as e:
                 log_error(f"backup_window_for_owner: edit_message_media failed: {e}")
+                try:
+                    bot.delete_message(chat_id, mid)
+                except Exception:
+                    pass
 
+        # Если не получилось отредактировать — создаём новое сообщение
         sent = bot.send_document(
             chat_id,
             buf,
