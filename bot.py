@@ -42,7 +42,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
+VERSION = "Code_FINAL_NAVFIX_v1"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
@@ -2692,7 +2692,13 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         buf = io.BytesIO(data_bytes)
         buf.name = file_name
 
-        mid = get_active_window_id(chat_id, day_key)
+        # Если кнопка нажата на конкретном сообщении — редактируем именно его
+        mid = message_id_override or get_active_window_id(chat_id, day_key)
+        if message_id_override:
+            try:
+                set_active_window_id(chat_id, day_key, message_id_override)
+            except Exception:
+                pass
 
         # Пытаемся обновить старое окно, если оно есть
         if mid:
