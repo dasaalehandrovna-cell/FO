@@ -31,7 +31,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-#VERSION = "Code_MENU_FIX_v6"
+#VERSION = "Code_MENU_FIX_v7"
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -1006,7 +1006,7 @@ def build_main_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
         types.InlineKeyboardButton("➕ Добавить", callback_data=f"d:{day_key}:add"),
-        types.InlineKeyboardButton("📋 Меню", callback_data=f"d:{day_key}:edit_menu")
+        types.InlineKeyboardButton("📋 Меню", callback_data=f"d:{day_key}:menu")
     )
     kb.row(
         types.InlineKeyboardButton("⬅️ Вчера", callback_data=f"d:{day_key}:prev"),
