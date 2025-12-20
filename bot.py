@@ -31,7 +31,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-#VERSION = "Code_022.3-C"
+#VERSION = "Code_MENU_FIX_v6"
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -1762,7 +1762,9 @@ def on_callback(call):
             kb.row(types.InlineKeyboardButton("📦 Расходы по статьям", callback_data="cat_months"))
             bot.send_message(chat_id, info_text, reply_markup=kb)
             return
-        if cmd == "edit_menu":
+        if cmd in ("edit_menu", "menu"):
+            # open edit/menu
+
             store["current_view_day"] = day_key
             kb = build_edit_menu_keyboard(day_key, chat_id)
             cur_text = getattr(call.message, "caption", None) or getattr(call.message, "text", None) or ""
