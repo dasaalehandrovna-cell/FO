@@ -2053,10 +2053,10 @@ def delete_active_window_if_exists(chat_id: int, day_key: str):
         del aw[day_key]
     save_data(data)
 def update_or_send_day_window(chat_id: int, day_key: str):
-    """
-    Если окно дня существует — обновляем через edit.
-    Если нет — создаём.
-    """
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        backup_window_for_owner(chat_id, day_key)
+        return
+
     txt, _ = render_day_window(chat_id, day_key)
     kb = build_main_keyboard(day_key, chat_id)
     mid = get_active_window_id(chat_id, day_key)
@@ -2731,6 +2731,10 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         log_error(f"backup_window_for_owner({chat_id}, {day_key}): {e}")
         
 def force_new_day_window(chat_id: int, day_key: str):
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        backup_window_for_owner(chat_id, day_key)
+        return
+
     old_mid = get_active_window_id(chat_id, day_key)
     txt, _ = render_day_window(chat_id, day_key)
     kb = build_main_keyboard(day_key, chat_id)
