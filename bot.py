@@ -31,7 +31,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-
+#VERSION = "Code_022.3-C"
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -43,7 +43,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_20"
+VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
@@ -77,33 +77,6 @@ def now_local():
     return datetime.now(get_tz())
 def today_key() -> str:
     return now_local().strftime("%Y-%m-%d")
-
-
-def fmt_date_ddmmyy(day_key: str) -> str:
-    """YYYY-MM-DD -> DD.MM.YY"""
-    try:
-        d = datetime.strptime(day_key, "%Y-%m-%d")
-        return d.strftime("%d.%m.%y")
-    except Exception:
-        return str(day_key)
-
-def week_start_monday(day_key: str) -> str:
-    """Возвращает YYYY-MM-DD (понедельник недели) для day_key"""
-    try:
-        d = datetime.strptime(day_key, "%Y-%m-%d").date()
-    except Exception:
-        d = now_local().date()
-    start = d - timedelta(days=d.weekday())
-    return start.strftime("%Y-%m-%d")
-
-def week_bounds_from_start(start_key: str):
-    """start_key (YYYY-MM-DD, понедельник) -> (start_key, end_key)"""
-    try:
-        s = datetime.strptime(start_key, "%Y-%m-%d").date()
-    except Exception:
-        s = now_local().date() - timedelta(days=now_local().date().weekday())
-    e = s + timedelta(days=6)
-    return s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")
 def _load_json(path: str, default):
     if not os.path.exists(path):
         return default
@@ -229,7 +202,6 @@ def send_backup_to_chat(chat_id: int) -> None:
                 log_info(f"Chat backup UPDATED in chat {chat_id}")
                 meta[ts_key] = now_local().isoformat(timespec="seconds")
                 _save_chat_backup_meta(meta)
-                set_active_window_id(chat_id, day_key, mid)
                 return
             except Exception as e:
                 log_error(f"send_backup_to_chat edit FAILED in {chat_id}: {e}")
@@ -388,6 +360,89 @@ def fmt_num(x):
     else:
         s = int_part
     return f"{sign}{s}"
+
+
+
+def fmt_abs(x):
+    """Формат числа без знака (для отчётов по статьям)."""
+    try:
+        x = abs(float(x))
+    except Exception:
+        x = 0.0
+    s = f"{x:.12f}".rstrip("0").rstrip(".")
+    if "." in s:
+        int_part, dec_part = s.split(".")
+    else:
+        int_part, dec_part = s, ""
+    int_part = f"{int(int_part):,}".replace(",", ".")
+    if dec_part:
+        return f"{int_part},{dec_part}"
+    return int_part
+
+def safe_edit_by_id(chat_id: int, message_id: int, text: str, reply_markup=None):
+    """Безопасно обновляет существующее сообщение по id: text → caption."""
+    try:
+        bot.edit_message_text(text, chat_id=chat_id, message_id=message_id, reply_markup=reply_markup)
+        return True
+    except Exception:
+        pass
+    try:
+        bot.edit_message_caption(chat_id=chat_id, message_id=message_id, caption=text, reply_markup=reply_markup)
+        return True
+    except Exception:
+        pass
+    return False
+
+def refresh_categories_view_if_any(chat_id: int):
+    """Если открыт отчёт по статьям — обновляет его после любых изменений."""
+    try:
+        store = get_chat_store(chat_id)
+        view = store.get("categories_view")
+        if not view:
+            return
+        mid = view.get("message_id")
+        start = view.get("start")
+        end = view.get("end")
+        if not mid or not start or not end:
+            return
+        cats = calc_categories_for_period(store, start, end)
+        store["categories_view"] = {"message_id": call.message.message_id, "start": start, "end": end}
+
+        lines = [
+            "📦 Расходы по статьям",
+            f"🗓 {start} — {end}",
+            ""
+        ]
+        if not cats:
+            lines.append("Нет данных по статьям за этот период.")
+        else:
+            keys = list(cats.keys())
+            if "ПРОДУКТЫ" in keys:
+                keys.remove("ПРОДУКТЫ")
+                keys = ["ПРОДУКТЫ"] + sorted(keys)
+            else:
+                keys = sorted(keys)
+            for cat in keys:
+                lines.append(f"{cat}: -{fmt_abs(cats[cat])}")
+                if cat == "ПРОДУКТЫ":
+                    items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
+                    if items:
+                        for day_i, amt_i, note_i in items:
+                            note_i = (note_i or "").strip()
+                            lines.append(f"  • {day_i}: -{fmt_abs(amt_i)} {note_i}")
+                    else:
+                        lines.append("  • нет операций")
+        kb = types.InlineKeyboardMarkup()
+        # кнопка назад в месяц
+        try:
+            m = int(start.split("-")[1])
+        except Exception:
+            m = now_local().month
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
+        safe_edit_by_id(chat_id, int(mid), "\n".join(lines), reply_markup=kb)
+    except Exception as e:
+        log_error(f"refresh_categories_view_if_any({chat_id}): {e}")
+
 num_re = re.compile(r"[+\-–]?\s*\d[\d\s.,_'’]*")
 def parse_amount(raw: str) -> float:
     """
@@ -976,8 +1031,7 @@ def render_day_window(chat_id: int, day_key: str):
     yd = (t - timedelta(days=1)).strftime("%Y-%m-%d")
     tm = (t + timedelta(days=1)).strftime("%Y-%m-%d")
     tag = "сегодня" if day_key == td else "вчера" if day_key == yd else "завтра" if day_key == tm else ""
-    dk = fmt_date_ddmmyy(day_key)
-    label = f"{dk} ({tag}, {wd})" if tag else f"{dk} ({wd})"
+    label = f"{day_key} ({tag}, {wd})" if tag else f"{day_key} ({wd})"
     lines.append(f"📅 {label}")
     lines.append("")
     total_income = 0.0
@@ -989,7 +1043,7 @@ def render_day_window(chat_id: int, day_key: str):
             total_income += amt
         else:
             total_expense += -amt
-        note = html.escape(r.get("note", ""))
+        note = str(r.get("note", ""))
         sid = r.get("short_id", f"R{r['id']}")
         lines.append(f"{sid} {fmt_num(amt)} {note}")
     if not recs_sorted:
@@ -1305,61 +1359,6 @@ def handle_categories_callback(call, data_str: str) -> bool:
     """UI: 12 месяцев → 4 недели → отчёт по статьям. Возвращает True если обработано."""
     chat_id = call.message.chat.id
 
-    # Быстрый переход: текущая неделя (сегодня)
-    if data_str == "cat_today":
-        start = week_start_monday(today_key())
-        return handle_categories_callback(call, f"cat_wk:{start}")
-
-    # Навигация по неделям: start=понедельник недели (YYYY-MM-DD)
-    if data_str.startswith("cat_wk:"):
-        start = data_str.split(":", 1)[1].strip()
-        if not start:
-            start = week_start_monday(today_key())
-        start, end = week_bounds_from_start(start)
-        store = get_chat_store(chat_id)
-        cats = calc_categories_for_period(store, start, end)
-
-        lines = [
-            "📦 Расходы по статьям",
-            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)}",
-            ""
-        ]
-
-        if not cats:
-            lines.append("Нет данных по статьям за этот период.")
-        else:
-            keys = list(cats.keys())
-            if "ПРОДУКТЫ" in keys:
-                keys.remove("ПРОДУКТЫ")
-                keys = ["ПРОДУКТЫ"] + sorted(keys)
-            else:
-                keys = sorted(keys)
-
-            for cat in keys:
-                lines.append(f"{cat}: −{fmt_num(cats[cat])}")
-                if cat == "ПРОДУКТЫ":
-                    items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
-                    if items:
-                        for day_i, amt_i, note_i in items:
-                            note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: −{fmt_num(amt_i)} {note_i}")
-
-        kb = types.InlineKeyboardMarkup()
-        try:
-            prev_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
-            next_start = (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
-        except Exception:
-            prev_start = start
-            next_start = start
-        kb.row(
-            types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{prev_start}"),
-            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
-            types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
-        )
-        kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
-        safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
-        return True
-
     if data_str == "cat_months":
         kb = types.InlineKeyboardMarkup(row_width=3)
         # 12 месяцев
@@ -1386,10 +1385,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 f"{a:02d}–{b:02d}",
                 callback_data=f"cat_w:{year}:{month}:{a}:{b}"
             ))
-        kb.row(
-            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
-            types.InlineKeyboardButton("🔙 Назад", callback_data="cat_months")
-        )
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data="cat_months"))
         safe_edit(bot, call, "📆 Выберите неделю:", reply_markup=kb)
         return True
 
@@ -1423,7 +1419,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)}",
+            f"🗓 {start} — {end}",
             ""
         ]
 
@@ -1439,14 +1435,14 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                lines.append(f"{cat}: −{fmt_num(cats[cat])}")
+                lines.append(f"{cat}: -{fmt_abs(cats[cat])}")
 
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
                         for day_i, amt_i, note_i in items:
                             note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: −{fmt_num(amt_i)} {note_i}")
+                            lines.append(f"  • {day_i}: -{fmt_abs(amt_i)} {note_i}")
                     else:
                         lines.append("  • нет операций")
 
@@ -1600,11 +1596,11 @@ def on_callback(call):
         if cmd == "open":
             store["current_view_day"] = day_key
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, day_key, call.message.message_id)
+                backup_window_for_owner(chat_id, day_key)
             else:
                 txt, _ = render_day_window(chat_id, day_key)
                 kb = build_main_keyboard(day_key, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
                 set_active_window_id(chat_id, day_key, call.message.message_id)
             return
         if cmd == "prev":
@@ -1612,11 +1608,11 @@ def on_callback(call):
             nd = d.strftime("%Y-%m-%d")
             store["current_view_day"] = nd
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, nd, call.message.message_id)
+                backup_window_for_owner(chat_id, nd)
             else:
                 txt, _ = render_day_window(chat_id, nd)
                 kb = build_main_keyboard(nd, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
                 set_active_window_id(chat_id, nd, call.message.message_id)
             return
         if cmd == "next":
@@ -1624,22 +1620,22 @@ def on_callback(call):
             nd = d.strftime("%Y-%m-%d")
             store["current_view_day"] = nd
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, nd, call.message.message_id)
+                backup_window_for_owner(chat_id, nd)
             else:
                 txt, _ = render_day_window(chat_id, nd)
                 kb = build_main_keyboard(nd, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
                 set_active_window_id(chat_id, nd, call.message.message_id)
             return
         if cmd == "today":
             nd = today_key()
             store["current_view_day"] = nd
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, nd, call.message.message_id)
+                backup_window_for_owner(chat_id, nd)
             else:
                 txt, _ = render_day_window(chat_id, nd)
                 kb = build_main_keyboard(nd, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
                 set_active_window_id(chat_id, nd, call.message.message_id)
             return
         if cmd == "calendar":
@@ -1673,14 +1669,12 @@ def on_callback(call):
                         bot.edit_message_text(
                             text,
                             chat_id=chat_id,
-                            message_id=total_msg_id,
-                            parse_mode="HTML"
-                        )
+                            message_id=total_msg_id)
                         save_data(data)
                         return
                     except Exception as e:
                         log_error(f"total: edit total_msg_id for chat {chat_id} failed: {e}")
-                sent = bot.send_message(chat_id, text, parse_mode="HTML")
+                sent = bot.send_message(chat_id, text)
                 store["total_msg_id"] = sent.message_id
                 save_data(data)
                 return
@@ -1721,14 +1715,12 @@ def on_callback(call):
                     bot.edit_message_text(
                         text,
                         chat_id=chat_id,
-                        message_id=total_msg_id,
-                        parse_mode="HTML"
-                    )
+                        message_id=total_msg_id)
                     save_data(data)
                     return
                 except Exception as e:
                     log_error(f"total(owner): edit total_msg_id for chat {chat_id} failed: {e}")
-            sent = bot.send_message(chat_id, text, parse_mode="HTML")
+            sent = bot.send_message(chat_id, text)
             store["total_msg_id"] = sent.message_id
             save_data(data)
             return
@@ -1762,20 +1754,30 @@ def on_callback(call):
             kb.row(types.InlineKeyboardButton("📦 Расходы по статьям", callback_data="cat_months"))
             bot.send_message(chat_id, info_text, reply_markup=kb)
             return
+        
         if cmd == "edit_menu":
             store["current_view_day"] = day_key
             kb = build_edit_menu_keyboard(day_key, chat_id)
-            cur_text = getattr(call.message, "caption", None) or getattr(call.message, "text", None) or ""
-            safe_edit(bot, call, cur_text, reply_markup=kb, parse_mode="HTML")
+            # Пытаемся обновить только клавиатуру (важно для owner-окон с документом)
+            try:
+                bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=call.message.message_id,
+                    reply_markup=kb
+                )
+            except Exception:
+                # Если не получилось — просто отправляем отдельное меню
+                bot.send_message(chat_id, f"Меню редактирования для {day_key}:", reply_markup=kb)
             return
+
         if cmd == "back_main":
             store["current_view_day"] = day_key
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, day_key, call.message.message_id)
+                backup_window_for_owner(chat_id, day_key)
             else:
                 txt, _ = render_day_window(chat_id, day_key)
                 kb = build_main_keyboard(day_key, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
             return
         if cmd == "csv_all":
             cmd_csv_all(chat_id)
@@ -1985,6 +1987,7 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
     export_global_csv(data)
     send_backup_to_channel(chat_id)
     send_backup_to_chat(chat_id)
+    refresh_categories_view_if_any(chat_id)
 def delete_record_in_chat(chat_id: int, rid: int):
     store = get_chat_store(chat_id)
     store["records"] = [x for x in store["records"] if x["id"] != rid]
@@ -2003,6 +2006,7 @@ def delete_record_in_chat(chat_id: int, rid: int):
     export_global_csv(data)
     send_backup_to_channel(chat_id)
     send_backup_to_chat(chat_id)
+    refresh_categories_view_if_any(chat_id)
 def renumber_chat_records(chat_id: int):
     """
     Перенумеровывает записи в чате по реальному порядку:
@@ -2036,7 +2040,7 @@ def get_active_window_id(chat_id: int, day_key: str):
     aw = get_or_create_active_windows(chat_id)
     return aw.get(day_key)
 def delete_active_window_if_exists(chat_id: int, day_key: str):
-    mid = message_id_override or get_active_window_id(chat_id, day_key)
+    mid = get_active_window_id(chat_id, day_key)
     if not mid:
         return
     try:
@@ -2061,13 +2065,11 @@ def update_or_send_day_window(chat_id: int, day_key: str):
                 txt,
                 chat_id=chat_id,
                 message_id=mid,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
+                reply_markup=kb)
             return
         except:
             pass
-    sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+    sent = bot.send_message(chat_id, txt, reply_markup=kb)
     set_active_window_id(chat_id, day_key, sent.message_id)
 def is_finance_mode(chat_id: int) -> bool:
     return chat_id in finance_active_chats
@@ -2130,9 +2132,7 @@ def refresh_total_message_if_any(chat_id: int):
         bot.edit_message_text(
             text,
             chat_id=chat_id,
-            message_id=msg_id,
-            parse_mode="HTML"
-        )
+            message_id=msg_id)
     except Exception as e:
         log_error(f"refresh_total_message_if_any({chat_id}): {e}")
         store["total_msg_id"] = None
@@ -2155,11 +2155,11 @@ def cmd_start(msg):
         return
     day_key = today_key()
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        backup_window_for_owner(chat_id, day_key)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
-        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+        sent = bot.send_message(chat_id, txt, reply_markup=kb)
         set_active_window_id(chat_id, day_key, sent.message_id)
         
 @bot.message_handler(commands=["help"])
@@ -2230,11 +2230,11 @@ def cmd_view(msg):
         send_info(chat_id, "❌ Неверная дата. Формат: YYYY-MM-DD")
         return
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        backup_window_for_owner(chat_id, day_key)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
-        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+        sent = bot.send_message(chat_id, txt, reply_markup=kb)
         set_active_window_id(chat_id, day_key, sent.message_id)
 @bot.message_handler(commands=["prev"])
 def cmd_prev(msg):
@@ -2245,11 +2245,11 @@ def cmd_prev(msg):
     d = datetime.strptime(today_key(), "%Y-%m-%d") - timedelta(days=1)
     day_key = d.strftime("%Y-%m-%d")
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        backup_window_for_owner(chat_id, day_key)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
-        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+        sent = bot.send_message(chat_id, txt, reply_markup=kb)
         set_active_window_id(chat_id, day_key, sent.message_id)
 @bot.message_handler(commands=["next"])
 def cmd_next(msg):
@@ -2260,11 +2260,11 @@ def cmd_next(msg):
     d = datetime.strptime(today_key(), "%Y-%m-%d") + timedelta(days=1)
     day_key = d.strftime("%Y-%m-%d")
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        backup_window_for_owner(chat_id, day_key)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
-        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+        sent = bot.send_message(chat_id, txt, reply_markup=kb)
         set_active_window_id(chat_id, day_key, sent.message_id)
         
 @bot.message_handler(commands=["balance"])
@@ -2553,7 +2553,7 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
 
                 # 2️⃣ Окно дня + бэкап для OWNER_ID / обычный режим для остальных
         if OWNER_ID and str(chat_id) == str(OWNER_ID):
-            _safe("owner_backup_window", lambda: backup_window_for_owner(chat_id, day_key, call.message.message_id))
+            _safe("owner_backup_window", lambda: backup_window_for_owner(chat_id, day_key))
         else:
             _safe("force_new_day_window", lambda: force_new_day_window(chat_id, day_key))
             _safe("backup_to_chat", lambda: force_backup_to_chat(chat_id))
@@ -2565,6 +2565,8 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
         _safe("refresh_total_chat", lambda: refresh_total_message_if_any(chat_id))
         if OWNER_ID and str(chat_id) != str(OWNER_ID):
             _safe("refresh_total_owner", lambda: refresh_total_message_if_any(int(OWNER_ID)))
+        _safe("refresh_categories_view", lambda: refresh_categories_view_if_any(chat_id))
+
 
     t_prev = _finalize_timers.get(chat_id)
     if t_prev and t_prev.is_alive():
@@ -2648,7 +2650,7 @@ def force_backup_to_chat(chat_id: int):
         _save_chat_backup_meta(meta)
     except Exception as e:
         log_error(f"force_backup_to_chat({chat_id}): {e}")
-def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int | None = None):
+def backup_window_for_owner(chat_id: int, day_key: str):
     """
     Для OWNER_ID: одно сообщение, в котором:
       • документ JSON (backup)
@@ -2723,7 +2725,7 @@ def force_new_day_window(chat_id: int, day_key: str):
     old_mid = get_active_window_id(chat_id, day_key)
     txt, _ = render_day_window(chat_id, day_key)
     kb = build_main_keyboard(day_key, chat_id)
-    sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+    sent = bot.send_message(chat_id, txt, reply_markup=kb)
     set_active_window_id(chat_id, day_key, sent.message_id)
     if old_mid:
         try:
