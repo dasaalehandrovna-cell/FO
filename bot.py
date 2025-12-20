@@ -31,7 +31,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-#VERSION = "Code_MENU_FIX_v7"
+#VERSION = "Code_MENU_FIX_v8"
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -1282,7 +1282,8 @@ def safe_edit(bot, call, text, reply_markup=None):
             text,
             chat_id=chat_id,
             message_id=msg_id,
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            parse_mode="HTML"
         )
         return
     except Exception:
@@ -1292,12 +1293,13 @@ def safe_edit(bot, call, text, reply_markup=None):
             chat_id=chat_id,
             message_id=msg_id,
             caption=text,
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            parse_mode="HTML"
         )
         return
     except Exception:
         pass
-    bot.send_message(chat_id, text, reply_markup=reply_markup)
+    bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode="HTML")
 
 
 
@@ -1604,7 +1606,7 @@ def on_callback(call):
             else:
                 txt, _ = render_day_window(chat_id, day_key)
                 kb = build_main_keyboard(day_key, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
                 set_active_window_id(chat_id, day_key, call.message.message_id)
             return
         if cmd == "prev":
@@ -1616,7 +1618,7 @@ def on_callback(call):
             else:
                 txt, _ = render_day_window(chat_id, nd)
                 kb = build_main_keyboard(nd, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
                 set_active_window_id(chat_id, nd, call.message.message_id)
             return
         if cmd == "next":
@@ -1628,7 +1630,7 @@ def on_callback(call):
             else:
                 txt, _ = render_day_window(chat_id, nd)
                 kb = build_main_keyboard(nd, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
                 set_active_window_id(chat_id, nd, call.message.message_id)
             return
         if cmd == "today":
@@ -1639,7 +1641,7 @@ def on_callback(call):
             else:
                 txt, _ = render_day_window(chat_id, nd)
                 kb = build_main_keyboard(nd, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
                 set_active_window_id(chat_id, nd, call.message.message_id)
             return
         if cmd == "calendar":
@@ -1768,7 +1770,7 @@ def on_callback(call):
             store["current_view_day"] = day_key
             kb = build_edit_menu_keyboard(day_key, chat_id)
             cur_text = getattr(call.message, "caption", None) or getattr(call.message, "text", None) or ""
-            safe_edit(bot, call, cur_text, reply_markup=kb, parse_mode="HTML")
+            safe_edit(bot, call, cur_text, reply_markup=kb)
             return
         if cmd == "back_main":
             store["current_view_day"] = day_key
@@ -1777,7 +1779,7 @@ def on_callback(call):
             else:
                 txt, _ = render_day_window(chat_id, day_key)
                 kb = build_main_keyboard(day_key, chat_id)
-                safe_edit(bot, call, txt, reply_markup=kb, parse_mode="HTML")
+                safe_edit(bot, call, txt, reply_markup=kb)
             return
         if cmd == "csv_all":
             cmd_csv_all(chat_id)
