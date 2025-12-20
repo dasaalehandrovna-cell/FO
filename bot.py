@@ -2457,7 +2457,7 @@ def cmd_autoadd_info(msg):
     delete_message_later(chat_id, msg.message_id, 15)
     store = get_chat_store(chat_id)
     settings = store.setdefault("settings", {})
-    current = settings.get("auto_add", False)
+    current = settings.get("auto_add", True)
     new_state = not current
     settings["auto_add"] = new_state
     save_chat_json(chat_id)
