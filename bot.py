@@ -309,7 +309,7 @@ def get_chat_store(chat_id: int) -> dict:
             "edit_target": None,
             "current_view_day": today_key(),
             "settings": {
-                "auto_add": False
+                "auto_add": True
             },
         }
     )
@@ -2848,7 +2848,7 @@ def handle_text(msg):
             forward_text_anon(chat_id, msg, targets)
         store = get_chat_store(chat_id)
         wait = store.get("edit_wait")
-        auto_add_enabled = store.get("settings", {}).get("auto_add", False)
+        auto_add_enabled = store.get("settings", {}).get("auto_add", True)
         should_add = False
         if wait and wait.get("type") == "add" and looks_like_amount(text):
                 should_add = True
