@@ -1210,9 +1210,8 @@ def build_category_months_keyboard(year: int):
 
     kb.row(
         types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main"))
-    )
-
     return kb
+    
 def build_forward_source_menu():
     """
     Меню выбора чата A (источник пересылки).
