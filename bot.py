@@ -1821,13 +1821,15 @@ def on_callback(call):
             kb2.row(
                 types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_menu")
             )
-            bot.edit_message_text(
+            safe_edit(
+                bot,
+                call,
                 "Выберите действие:",
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                reply_markup=kb2
+                reply_markup=kb2,
+                parse_mode="HTML"
             )
             return
+            
         if cmd.startswith("edit_rec_"):
             rid = int(cmd.split("_")[-1])
             store["edit_wait"] = {
