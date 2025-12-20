@@ -460,7 +460,7 @@ def refresh_categories_view_if_any(chat_id: int):
             m = int(start.split("-")[1])
         except Exception:
             m = now_local().month
-        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{y}:{m}"))
         safe_edit_by_id(chat_id, int(mid), "\n".join(lines), reply_markup=kb)
     except Exception as e:
         log_error(f"refresh_categories_view_if_any({chat_id}): {e}")
@@ -1424,10 +1424,11 @@ def handle_categories_callback(call, data_str: str) -> bool:
 
     if data_str.startswith("cat_m:"):
         try:
-            month = int(data_str.split(":")[1])
+            _, year, month = data_str.split(":")
+            year = int(year)
+            month = int(month)
         except Exception:
             return True
-        year = now_local().year
 
         # 4 недели месяца (простая разметка 1–7, 8–14, 15–21, 22–31)
         kb = types.InlineKeyboardMarkup(row_width=2)
@@ -1499,7 +1500,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                         lines.append("  • нет операций")
 
         kb = types.InlineKeyboardMarkup()
-        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{y}:{m}"))
         safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
         return True
 
