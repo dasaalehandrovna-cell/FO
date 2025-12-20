@@ -31,7 +31,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-#VERSION = "Code_022.3-C"
+
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -43,12 +43,18 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
+VERSION = "Code_ 022 🎈20"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
+MONTHS_RU = [
+    "Январь", "Февраль", "Март",
+    "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь",
+    "Октябрь", "Ноябрь", "Декабрь"
+]
 backup_flags = {
     "drive": True,
     "channel": True,
@@ -361,7 +367,23 @@ def fmt_num(x):
         s = int_part
     return f"{sign}{s}"
 
+def fmt_num_plain(x):
+    """
+    Формат числа БЕЗ знаков +/−
+    """
+    try:
+        x = abs(float(x))
+    except Exception:
+        return str(x)
 
+    s = f"{x:.12f}".rstrip("0").rstrip(".")
+    if "." in s:
+        int_part, dec_part = s.split(".")
+    else:
+        int_part, dec_part = s, ""
+
+    int_part = f"{int(int_part):,}".replace(",", ".")
+    return f"{int_part},{dec_part}" if dec_part else int_part
 
 def fmt_abs(x):
     """Формат числа без знака (для отчётов по статьям)."""
@@ -423,7 +445,7 @@ def refresh_categories_view_if_any(chat_id: int):
             else:
                 keys = sorted(keys)
             for cat in keys:
-                lines.append(f"{cat}: -{fmt_abs(cats[cat])}")
+                lines.append(f"{cat}: {fmt_abs(cats[cat])}")
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
@@ -1056,6 +1078,35 @@ def render_day_window(chat_id: int, day_key: str):
     lines.append(f"🏦 Остаток по чату: {fmt_num(bal_chat)}")
     total = total_income - total_expense
     return "\n".join(lines), total
+    
+def build_category_months_keyboard(year: int):
+    kb = types.InlineKeyboardMarkup(row_width=3)
+
+    buttons = []
+    for m in range(1, 13):
+        buttons.append(
+            types.InlineKeyboardButton(
+                MONTHS_RU[m - 1],
+                callback_data=f"cat_m:{year}:{m}"
+            )
+        )
+
+    # 3 × 4
+    for i in range(0, 12, 3):
+        kb.row(*buttons[i:i + 3])
+
+    kb.row(
+        types.InlineKeyboardButton("⬅️ Год назад", callback_data=f"cat_y:{year - 1}"),
+        types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
+        types.InlineKeyboardButton("➡️ Год вперёд", callback_data=f"cat_y:{year + 1}")
+    )
+
+    kb.row(
+        types.InlineKeyboardButton("🔙 Назад", callback_data="cat_back_root")
+    )
+
+    return kb
+
 def build_main_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
@@ -1360,14 +1411,15 @@ def handle_categories_callback(call, data_str: str) -> bool:
     chat_id = call.message.chat.id
 
     if data_str == "cat_months":
-        kb = types.InlineKeyboardMarkup(row_width=3)
-        # 12 месяцев
-        for m in range(1, 13):
-            kb.add(types.InlineKeyboardButton(
-                datetime(2000, m, 1).strftime("%b"),
-                callback_data=f"cat_m:{m}"
-            ))
-        safe_edit(bot, call, "📦 Выберите месяц:", reply_markup=kb)
+        year = now_local().year
+        kb = build_category_months_keyboard(year)
+        send_aux_message(
+            chat_id,
+            "📦 Выберите месяц:",
+            reply_markup=kb,
+            parse_mode=None,
+            delay=20
+        )
         return True
 
     if data_str.startswith("cat_m:"):
@@ -1435,7 +1487,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                lines.append(f"{cat}: -{fmt_abs(cats[cat])}")
+                lines.append(f"{cat}: {fmt_abs(cats[cat])}")
 
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
