@@ -1,3 +1,4 @@
+# даты/оновл цифр/нов окно вост/обновл везде/с .json в окне
 import os
 import io
 import json
@@ -30,7 +31,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-
+#VERSION = "Code_022.3-C"
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -42,18 +43,12 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_ 022 🎈20"
+VERSION = "Code_ 022.9.11 🎈с4-15/18/20"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
-MONTHS_RU = [
-    "Январь", "Февраль", "Март",
-    "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь",
-    "Октябрь", "Ноябрь", "Декабрь"
-]
 backup_flags = {
     "drive": True,
     "channel": True,
@@ -82,21 +77,6 @@ def now_local():
     return datetime.now(get_tz())
 def today_key() -> str:
     return now_local().strftime("%Y-%m-%d")
-def fmt_day_key_ru(day_key: str) -> str:
-    """YYYY-MM-DD -> DD.MM.YY (для отображения)."""
-    try:
-        d = datetime.strptime(day_key, "%Y-%m-%d")
-        return d.strftime("%d.%m.%y")
-    except Exception:
-        return day_key
-
-def day_key_from_ru(s: str) -> str:
-    """DD.MM.YY -> YYYY-MM-DD (если понадобится позже)."""
-    try:
-        d = datetime.strptime(s, "%d.%m.%y")
-        return d.strftime("%Y-%m-%d")
-    except Exception:
-        return s
 def _load_json(path: str, default):
     if not os.path.exists(path):
         return default
@@ -381,23 +361,7 @@ def fmt_num(x):
         s = int_part
     return f"{sign}{s}"
 
-def fmt_num_plain(x):
-    """
-    Формат числа БЕЗ знаков +/−
-    """
-    try:
-        x = abs(float(x))
-    except Exception:
-        return str(x)
 
-    s = f"{x:.12f}".rstrip("0").rstrip(".")
-    if "." in s:
-        int_part, dec_part = s.split(".")
-    else:
-        int_part, dec_part = s, ""
-
-    int_part = f"{int(int_part):,}".replace(",", ".")
-    return f"{int_part},{dec_part}" if dec_part else int_part
 
 def fmt_abs(x):
     """Формат числа без знака (для отчётов по статьям)."""
@@ -436,24 +400,19 @@ def refresh_categories_view_if_any(chat_id: int):
         view = store.get("categories_view")
         if not view:
             return
-
         mid = view.get("message_id")
         start = view.get("start")
         end = view.get("end")
-        y = int(view.get("year") or now_local().year)
-        m = int(view.get("month") or now_local().month)
-
         if not mid or not start or not end:
             return
-
         cats = calc_categories_for_period(store, start, end)
+        store["categories_view"] = {"message_id": call.message.message_id, "start": start, "end": end}
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {fmt_day_key_ru(start)} — {fmt_day_key_ru(end)}",
+            f"🗓 {start} — {end}",
             ""
         ]
-
         if not cats:
             lines.append("Нет данных по статьям за этот период.")
         else:
@@ -463,24 +422,26 @@ def refresh_categories_view_if_any(chat_id: int):
                 keys = ["ПРОДУКТЫ"] + sorted(keys)
             else:
                 keys = sorted(keys)
-
             for cat in keys:
-                lines.append(f"{cat}: {fmt_abs(cats[cat])}")
+                lines.append(f"{cat}: -{fmt_abs(cats[cat])}")
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
                         for day_i, amt_i, note_i in items:
                             note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_day_key_ru(day_i)}: -{fmt_abs(amt_i)} {note_i}")
+                            lines.append(f"  • {day_i}: -{fmt_abs(amt_i)} {note_i}")
                     else:
                         lines.append("  • нет операций")
-
         kb = types.InlineKeyboardMarkup()
-        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{y}:{m}"))
+        # кнопка назад в месяц
+        try:
+            m = int(start.split("-")[1])
+        except Exception:
+            m = now_local().month
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
         safe_edit_by_id(chat_id, int(mid), "\n".join(lines), reply_markup=kb)
     except Exception as e:
         log_error(f"refresh_categories_view_if_any({chat_id}): {e}")
-        
 
 num_re = re.compile(r"[+\-–]?\s*\d[\d\s.,_'’]*")
 def parse_amount(raw: str) -> float:
@@ -1095,35 +1056,6 @@ def render_day_window(chat_id: int, day_key: str):
     lines.append(f"🏦 Остаток по чату: {fmt_num(bal_chat)}")
     total = total_income - total_expense
     return "\n".join(lines), total
-    
-def build_category_months_keyboard(year: int):
-    kb = types.InlineKeyboardMarkup(row_width=3)
-
-    buttons = []
-    for m in range(1, 13):
-        buttons.append(
-            types.InlineKeyboardButton(
-                MONTHS_RU[m - 1],
-                callback_data=f"cat_m:{year}:{m}"
-            )
-        )
-
-    # 3 × 4
-    for i in range(0, 12, 3):
-        kb.row(*buttons[i:i + 3])
-
-    kb.row(
-        types.InlineKeyboardButton("⬅️ Год назад", callback_data=f"cat_y:{year - 1}"),
-        types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
-        types.InlineKeyboardButton("➡️ Год вперёд", callback_data=f"cat_y:{year + 1}")
-    )
-
-    kb.row(
-        types.InlineKeyboardButton("🔙 Назад", callback_data="cat_back_root")
-    )
-
-    return kb
-
 def build_main_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
@@ -1421,25 +1353,31 @@ def safe_edit(bot, call, text, reply_markup=None):
         pass
     bot.send_message(chat_id, text, reply_markup=reply_markup)
 
+
+
 def handle_categories_callback(call, data_str: str) -> bool:
     """UI: 12 месяцев → 4 недели → отчёт по статьям. Возвращает True если обработано."""
     chat_id = call.message.chat.id
-    store = get_chat_store(chat_id)
 
     if data_str == "cat_months":
-        year = now_local().year
-        kb = build_category_months_keyboard(year)
+        kb = types.InlineKeyboardMarkup(row_width=3)
+        # 12 месяцев
+        for m in range(1, 13):
+            kb.add(types.InlineKeyboardButton(
+                datetime(2000, m, 1).strftime("%b"),
+                callback_data=f"cat_m:{m}"
+            ))
         safe_edit(bot, call, "📦 Выберите месяц:", reply_markup=kb)
         return True
 
     if data_str.startswith("cat_m:"):
         try:
-            _, year, month = data_str.split(":")
-            year = int(year)
-            month = int(month)
+            month = int(data_str.split(":")[1])
         except Exception:
             return True
+        year = now_local().year
 
+        # 4 недели месяца (простая разметка 1–7, 8–14, 15–21, 22–31)
         kb = types.InlineKeyboardMarkup(row_width=2)
         weeks = [(1, 7), (8, 14), (15, 21), (22, 31)]
         for a, b in weeks:
@@ -1458,7 +1396,9 @@ def handle_categories_callback(call, data_str: str) -> bool:
         except Exception:
             return True
 
+        # нормализация конца месяца (если месяц короче 31)
         try:
+            # последний день месяца: первый день следующего месяца - 1 день
             if m == 12:
                 last_day = (datetime(y + 1, 1, 1) - timedelta(days=1)).day
             else:
@@ -1474,17 +1414,19 @@ def handle_categories_callback(call, data_str: str) -> bool:
         start = f"{y}-{m:02d}-{a:02d}"
         end = f"{y}-{m:02d}-{b:02d}"
 
+        store = get_chat_store(chat_id)
         cats = calc_categories_for_period(store, start, end)
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {fmt_day_key_ru(start)} — {fmt_day_key_ru(end)}",
+            f"🗓 {start} — {end}",
             ""
         ]
 
         if not cats:
             lines.append("Нет данных по статьям за этот период.")
         else:
+            # Стабильно: сначала ПРОДУКТЫ, затем остальные по алфавиту
             keys = list(cats.keys())
             if "ПРОДУКТЫ" in keys:
                 keys.remove("ПРОДУКТЫ")
@@ -1493,29 +1435,20 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                lines.append(f"{cat}: {fmt_abs(cats[cat])}")
+                lines.append(f"{cat}: -{fmt_abs(cats[cat])}")
+
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
                         for day_i, amt_i, note_i in items:
                             note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_day_key_ru(day_i)}: -{fmt_abs(amt_i)} {note_i}")
+                            lines.append(f"  • {day_i}: -{fmt_abs(amt_i)} {note_i}")
                     else:
                         lines.append("  • нет операций")
 
         kb = types.InlineKeyboardMarkup()
-        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{y}:{m}"))
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
         safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
-
-        # важно: запоминаем, что “отчёт по статьям” открыт, чтобы авто-обновлялся
-        store["categories_view"] = {
-            "message_id": call.message.message_id,
-            "start": start,
-            "end": end,
-            "year": y,
-            "month": m
-        }
-        save_data(data)
         return True
 
     return False
@@ -2864,41 +2797,22 @@ def handle_text(msg):
             rid = wait.get("rid")
             day_key = wait.get("day_key", store.get("current_view_day", today_key()))
             lines = [ln.strip() for ln in text.split("\n") if ln.strip()]
-
-            target = next((r for r in store.get("records", []) if r.get("id") == rid), None)
+            target = None
+            for r in store.get("records", []):
+                if r["id"] == rid:
+                    target = r
+                    break
             if not target:
                 send_and_auto_delete(chat_id, "❌ Запись не найдена.")
                 store["edit_wait"] = None
-                save_data(data)
                 return
-
-            # ✅ если одна строка — это НАСТОЯЩЕЕ редактирование записи
-            if len(lines) == 1:
-                try:
-                    new_amount, new_note = split_amount_and_note(lines[0])
-                except Exception:
-                    send_and_auto_delete(chat_id, f"❌ Ошибка суммы: {lines[0]}")
-                    return
-
-                update_record_in_chat(chat_id, rid, new_amount, new_note)
-                update_or_send_day_window(chat_id, day_key)
-                schedule_finalize(chat_id, day_key)
-
-                store["edit_wait"] = None
-                save_data(data)
-                return
-
-            # ✅ если несколько строк — заменяем запись на несколько (удаляем старую и вставляем новые)
             delete_record_in_chat(chat_id, rid)
-
-            added_any = False
             for line in lines:
                 try:
                     amount, note = split_amount_and_note(line)
-                except Exception:
-                    send_and_auto_delete(chat_id, f"❌ Ошибка суммы: {line}\nПродолжаю…")
+                except:
+                    bot.send_message(chat_id, f"❌ Ошибка суммы: {line}")
                     continue
-
                 rid2 = store.get("next_id", 1)
                 new_rec = {
                     "id": rid2,
@@ -2913,21 +2827,36 @@ def handle_text(msg):
                 store.setdefault("records", []).append(new_rec)
                 store.setdefault("daily_records", {}).setdefault(day_key, []).append(new_rec)
                 store["next_id"] = rid2 + 1
-                added_any = True
-
-            if added_any:
-                renumber_chat_records(chat_id)
-                save_data(data)
-                save_chat_json(chat_id)
-                update_or_send_day_window(chat_id, day_key)
-                schedule_finalize(chat_id, day_key)
-
+            update_record_in_chat(chat_id, rid, amount, note)
+            schedule_finalize(chat_id, day_key)
+            refresh_total_message_if_any(chat_id)
+            if OWNER_ID and str(chat_id) != str(OWNER_ID):
+                try:
+                    refresh_total_message_if_any(int(OWNER_ID))
+                except Exception:
+                    pass
             store["edit_wait"] = None
             save_data(data)
             return
+        if text.upper() == "ДА":
+            reset_flag = store.get("reset_wait", False)
+            reset_time = store.get("reset_time", 0)
+            now_t = time.time()
+            if reset_flag and (now_t - reset_time <= 15):
+                reset_chat_data(chat_id)
+                send_and_auto_delete(chat_id, "🔄 Данные чата обнулены.", 15)
+            else:
+                send_and_auto_delete(chat_id, "Нет активного запроса на обнуление.", 15)
+            store["reset_wait"] = False
+            store["reset_time"] = 0
+            save_data(data)
+            return
+        if store.get("reset_wait", False):
+            store["reset_wait"] = False
+            store["reset_time"] = 0
+            save_data(data)
     except Exception as e:
         log_error(f"handle_text: {e}")
-        
 def reset_chat_data(chat_id: int):
     """
     Полное обнуление данных чата:
