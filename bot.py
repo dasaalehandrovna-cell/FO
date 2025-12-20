@@ -1,4 +1,3 @@
-# даты/оновл цифр/нов окно вост/обновл везде/с .json в окне
 import os
 import io
 import json
@@ -1273,7 +1272,7 @@ def apply_forward_mode(A: int, B: int, mode: str):
         remove_forward_link(A, B)
         remove_forward_link(B, A)
 
-def safe_edit(bot, call, text, reply_markup=None):
+def safe_edit(bot, call, text, reply_markup=None, parse_mode=None):
     """Безопасное обновление: edit_text → edit_caption → send_message."""
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
@@ -1282,7 +1281,8 @@ def safe_edit(bot, call, text, reply_markup=None):
             text,
             chat_id=chat_id,
             message_id=msg_id,
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
         )
         return
     except Exception:
@@ -1292,12 +1292,13 @@ def safe_edit(bot, call, text, reply_markup=None):
             chat_id=chat_id,
             message_id=msg_id,
             caption=text,
-            reply_markup=reply_markup
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
         )
         return
     except Exception:
         pass
-    bot.send_message(chat_id, text, reply_markup=reply_markup)
+    bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
 
 
 
