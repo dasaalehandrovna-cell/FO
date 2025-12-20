@@ -26,16 +26,16 @@ from google.oauth2 import service_account
 # -----------------------------
 # ⚙️ Конфигурация (жёстко прописанные значения для Render)
 # -----------------------------
-BOT_TOKEN = "8353050321:AAHS5p9JAZpqfesrScSOgSbGw8_FADEX8l8"
-OWNER_ID = "8592220081"
+BOT_TOKEN = os.getenv("B_T")
+#OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-#VERSION = "Code_MENU_FIX_v7"
+
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-#OWNER_ID = os.getenv("OWNER_ID", "").strip()
+OWNER_ID = os.getenv("ID", "").strip()
 #BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
