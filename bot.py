@@ -1826,7 +1826,7 @@ def on_callback(call):
                 call,
                 "Выберите действие:",
                 reply_markup=kb2,
-                parse_mode="HTML"
+                #parse_mode="HTML"
             )
             return
             
