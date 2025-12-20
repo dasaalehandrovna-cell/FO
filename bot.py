@@ -1204,7 +1204,7 @@ def build_category_months_keyboard(year: int):
 
     kb.row(
         types.InlineKeyboardButton("⬅️ Год назад", callback_data=f"cat_y:{year - 1}"),
-        types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
+        #types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
         types.InlineKeyboardButton("➡️ Год вперёд", callback_data=f"cat_y:{year + 1}")
     )
 
@@ -1400,7 +1400,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
             next_start = start
         kb.row(
             types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{prev_start}"),
-            types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
+            #types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
             types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
         )
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
@@ -1438,7 +1438,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 callback_data=f"cat_w:{year}:{month}:{a}:{b}"
             ))
         kb.row(
-            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today_cat"),
+            #types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today_cat"),
             types.InlineKeyboardButton("🔙 Назад", callback_data="cat_months")
         )
         safe_edit(bot, call, "📆 Выберите неделю:", reply_markup=kb)
