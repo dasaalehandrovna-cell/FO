@@ -2715,67 +2715,44 @@ def safe_owner_window_update(chat_id: int, day_key: str, call):
             pass
         return False
 
-def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int | None = None):
-    """
-    Для OWNER_ID: одно сообщение, в котором:
-      • документ JSON (backup)
-      • caption = окно дня (render_day_window)
-      • те же кнопки (build_main_keyboard)
-    """
-    if not OWNER_ID or str(chat_id) != str(OWNER_ID):
-        return
-
-    # Текст окна и кнопки
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-
-    # Обновляем JSON-файл
-    save_chat_json(chat_id)
-    json_path = chat_json_file(chat_id)
-    if not os.path.exists(json_path):
-        log_error(f"backup_window_for_owner: {json_path} missing")
-        return
-
+def backup_window_for_owner(chat_id, day_key, message_id=None):
     try:
+        txt, _ = render_day_window(chat_id, day_key)
+        kb = build_main_keyboard(day_key, chat_id)
+
+        save_chat_json(chat_id)
+        json_path = chat_json_file(chat_id)
+        if not os.path.exists(json_path):
+            return
+
         with open(json_path, "rb") as f:
             data_bytes = f.read()
         if not data_bytes:
-            log_error("backup_window_for_owner: empty JSON")
             return
 
         base = os.path.basename(json_path)
         name_no_ext, dot, ext = base.partition(".")
         suffix = get_chat_name_for_filename(chat_id)
-        if suffix:
-            file_name = suffix
-        else:
-            file_name = name_no_ext
-        if dot:
-            file_name += f".{ext}"
+        file_name = (suffix if suffix else name_no_ext) + (f".{ext}" if dot else "")
 
         buf = io.BytesIO(data_bytes)
         buf.name = file_name
 
-        mid = (message_id_override or get_active_window_id(chat_id, day_key))
-
-        # Пытаемся обновить старое окно, если оно есть
-        if mid:
+        # 🔁 если есть message_id → ОБНОВЛЯЕМ ЭТО ЖЕ СООБЩЕНИЕ
+        if message_id:
             try:
                 bot.edit_message_media(
+                    media=types.InputMediaDocument(buf, caption=txt),
                     chat_id=chat_id,
-                    message_id=mid,
-                    media=telebot.types.InputMediaDocument(buf, caption=txt),
+                    message_id=message_id,
                     reply_markup=kb
                 )
+                set_active_window_id(chat_id, day_key, message_id)
                 return
-            except Exception as e:
-                log_error(f"backup_window_for_owner: edit_message_media failed: {e}")
-                try:
-                    bot.delete_message(chat_id, mid)
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
-        # Если не получилось отредактировать — создаём новое сообщение
+        # 🆕 иначе создаём новое основное окно СРАЗУ С BACKUP
         sent = bot.send_document(
             chat_id,
             buf,
@@ -2783,8 +2760,10 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
             reply_markup=kb
         )
         set_active_window_id(chat_id, day_key, sent.message_id)
+
     except Exception as e:
-        log_error(f"backup_window_for_owner({chat_id}, {day_key}): {e}")
+        log_error(f"backup_window_for_owner({chat_id},{day_key}): {e}")
+        
 
 
 def force_owner_new_day_window(chat_id: int, day_key: str, old_mid: int | None = None):
