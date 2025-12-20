@@ -2925,6 +2925,9 @@ def handle_text(msg):
             store["edit_wait"] = None
             save_data(data)
             return
+    except Exception as e:
+        log_error(f"handle_text: {e}")
+        
 def reset_chat_data(chat_id: int):
     """
     Полное обнуление данных чата:
