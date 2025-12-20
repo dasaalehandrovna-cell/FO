@@ -1006,7 +1006,7 @@ def build_main_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
         types.InlineKeyboardButton("➕ Добавить", callback_data=f"d:{day_key}:add"),
-        types.InlineKeyboardButton("📝 Редактировать", callback_data=f"d:{day_key}:edit_menu")
+        types.InlineKeyboardButton("📋 Меню", callback_data=f"d:{day_key}:edit_menu")
     )
     kb.row(
         types.InlineKeyboardButton("⬅️ Вчера", callback_data=f"d:{day_key}:prev"),
