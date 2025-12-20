@@ -31,7 +31,7 @@ OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
-#VERSION = "Code_022.9.12 ✅fix-today-next-categories"
+#VERSION = "Code_022.9.13 🔧EDIT+MONTHS"
 BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
@@ -43,18 +43,12 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_022.9.12 ✅FIX-v3"
+VERSION = "Code_022.9.13 🔧EDIT+MONTHS"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
-MONTHS_RU = [
-    "Январь", "Февраль", "Март",
-    "Апрель", "Май", "Июнь",
-    "Июль", "Август", "Сентябрь",
-    "Октябрь", "Ноябрь", "Декабрь"
-]
 backup_flags = {
     "drive": True,
     "channel": True,
@@ -315,7 +309,7 @@ def get_chat_store(chat_id: int) -> dict:
             "edit_target": None,
             "current_view_day": today_key(),
             "settings": {
-                "auto_add": True
+                "auto_add": False
             },
         }
     )
@@ -1186,32 +1180,6 @@ def build_forward_direction_menu(day_key: str, owner_chat: int, target_chat: int
         )
     )
     return kb
-def build_category_months_keyboard(year: int):
-    kb = types.InlineKeyboardMarkup(row_width=3)
-
-    buttons = []
-    for m in range(1, 13):
-        buttons.append(
-            types.InlineKeyboardButton(
-                MONTHS_RU[m - 1],
-                callback_data=f"cat_m:{year}:{m}"
-            )
-        )
-
-    # 3 × 4
-    for i in range(0, 12, 3):
-        kb.row(*buttons[i:i + 3])
-
-    kb.row(
-        types.InlineKeyboardButton("⬅️ Год назад", callback_data=f"cat_y:{year - 1}"),
-        types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
-        types.InlineKeyboardButton("➡️ Год вперёд", callback_data=f"cat_y:{year + 1}")
-    )
-
-    kb.row(
-        types.InlineKeyboardButton("🔙 Назад", callback_data="cat_back_root"))
-    return kb
-    
 def build_forward_source_menu():
     """
     Меню выбора чата A (источник пересылки).
@@ -1320,7 +1288,7 @@ def apply_forward_mode(A: int, B: int, mode: str):
         remove_forward_link(A, B)
         remove_forward_link(B, A)
 
-def safe_edit(bot, call, text, reply_markup=None, parse_mode=None):
+def safe_edit(bot, call, text, reply_markup=None):
     """Безопасное обновление: edit_text → edit_caption → send_message."""
     chat_id = call.message.chat.id
     msg_id = call.message.message_id
@@ -1329,8 +1297,7 @@ def safe_edit(bot, call, text, reply_markup=None, parse_mode=None):
             text,
             chat_id=chat_id,
             message_id=msg_id,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
+            reply_markup=reply_markup
         )
         return
     except Exception:
@@ -1340,13 +1307,13 @@ def safe_edit(bot, call, text, reply_markup=None, parse_mode=None):
             chat_id=chat_id,
             message_id=msg_id,
             caption=text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
+            reply_markup=reply_markup
         )
         return
     except Exception:
         pass
-    bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+    bot.send_message(chat_id, text, reply_markup=reply_markup)
+
 
 
 def handle_categories_callback(call, data_str: str) -> bool:
@@ -1401,7 +1368,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
             next_start = start
         kb.row(
             types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{prev_start}"),
-            types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
+            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today_cat"),
             types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
         )
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
@@ -1410,17 +1377,15 @@ def handle_categories_callback(call, data_str: str) -> bool:
         schedule_delete_aux(chat_id, call.message.message_id, 20)
         return True
 
-
     if data_str == "cat_months":
-        year = now_local().year
-        kb = build_category_months_keyboard(year)
-        send_aux_message(
-            chat_id,
-            "📦 Выберите месяц:",
-            reply_markup=kb,
-            parse_mode=None,
-            delay=20
-        )
+        kb = types.InlineKeyboardMarkup(row_width=3)
+        # 12 месяцев
+        for m in range(1, 13):
+            kb.add(types.InlineKeyboardButton(
+                datetime(2000, m, 1).strftime("%b"),
+                callback_data=f"cat_m:{m}"
+            ))
+        msg = send_aux_message(chat_id, "📦 Выберите месяц:", reply_markup=kb, parse_mode=None, delay=20)
         return True
 
     if data_str.startswith("cat_m:"):
@@ -1870,7 +1835,12 @@ def on_callback(call):
             kb2.row(
                 types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_menu")
             )
-            safe_edit(bot, call, "Выберите действие:", reply_markup=kb2, parse_mode="HTML")
+            bot.edit_message_text(
+                "Выберите действие:",
+                chat_id=chat_id,
+                message_id=call.message.message_id,
+                reply_markup=kb2
+            )
             return
         if cmd.startswith("edit_rec_"):
             rid = int(cmd.split("_")[-1])
@@ -2193,30 +2163,21 @@ def cmd_enable_finance(msg):
     delete_message_later(chat_id, msg.message_id, 15)
     send_info(chat_id, "⚠️ Команда /ok временно отключена.")
     return
-    
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
     chat_id = msg.chat.id
     delete_message_later(chat_id, msg.message_id, 15)
     if not require_finance(chat_id):
         return
-
     day_key = today_key()
-
-    # 🔥 УДАЛЯЕМ старое окно за сегодня, если было
-    old_mid = get_active_window_id(chat_id, day_key)
-    if old_mid:
-        try:
-            bot.delete_message(chat_id, old_mid)
-        except Exception:
-            pass
-
-    # 🆕 СОЗДАЁМ НОВОЕ окно
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-    sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
-    set_active_window_id(chat_id, day_key, sent.message_id)
-            
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        safe_owner_window_update(chat_id, day_key, call)
+    else:
+        txt, _ = render_day_window(chat_id, day_key)
+        kb = build_main_keyboard(day_key, chat_id)
+        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+        set_active_window_id(chat_id, day_key, sent.message_id)
+        
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
     chat_id = msg.chat.id
@@ -2496,7 +2457,7 @@ def cmd_autoadd_info(msg):
     delete_message_later(chat_id, msg.message_id, 15)
     store = get_chat_store(chat_id)
     settings = store.setdefault("settings", {})
-    current = settings.get("auto_add", True)
+    current = settings.get("auto_add", False)
     new_state = not current
     settings["auto_add"] = new_state
     save_chat_json(chat_id)
@@ -2878,7 +2839,7 @@ def handle_text(msg):
             forward_text_anon(chat_id, msg, targets)
         store = get_chat_store(chat_id)
         wait = store.get("edit_wait")
-        auto_add_enabled = store.get("settings", {}).get("auto_add", True)
+        auto_add_enabled = store.get("settings", {}).get("auto_add", False)
         should_add = False
         if wait and wait.get("type") == "add" and looks_like_amount(text):
                 should_add = True
