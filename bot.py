@@ -49,6 +49,12 @@ KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
+MONTHS_RU = [
+    "Январь", "Февраль", "Март",
+    "Апрель", "Май", "Июнь",
+    "Июль", "Август", "Сентябрь",
+    "Октябрь", "Ноябрь", "Декабрь"
+]
 backup_flags = {
     "drive": True,
     "channel": True,
@@ -1180,6 +1186,33 @@ def build_forward_direction_menu(day_key: str, owner_chat: int, target_chat: int
         )
     )
     return kb
+def build_category_months_keyboard(year: int):
+    kb = types.InlineKeyboardMarkup(row_width=3)
+
+    buttons = []
+    for m in range(1, 13):
+        buttons.append(
+            types.InlineKeyboardButton(
+                MONTHS_RU[m - 1],
+                callback_data=f"cat_m:{year}:{m}"
+            )
+        )
+
+    # 3 × 4
+    for i in range(0, 12, 3):
+        kb.row(*buttons[i:i + 3])
+
+    kb.row(
+        types.InlineKeyboardButton("⬅️ Год назад", callback_data=f"cat_y:{year - 1}"),
+        types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
+        types.InlineKeyboardButton("➡️ Год вперёд", callback_data=f"cat_y:{year + 1}")
+    )
+
+    kb.row(
+        types.InlineKeyboardButton("🔙 Назад", callback_data="cat_back_root")
+    )
+
+    return kb
 def build_forward_source_menu():
     """
     Меню выбора чата A (источник пересылки).
@@ -1377,15 +1410,17 @@ def handle_categories_callback(call, data_str: str) -> bool:
         schedule_delete_aux(chat_id, call.message.message_id, 20)
         return True
 
+
     if data_str == "cat_months":
-        kb = types.InlineKeyboardMarkup(row_width=3)
-        # 12 месяцев
-        for m in range(1, 13):
-            kb.add(types.InlineKeyboardButton(
-                datetime(2000, m, 1).strftime("%b"),
-                callback_data=f"cat_m:{m}"
-            ))
-        msg = send_aux_message(chat_id, "📦 Выберите месяц:", reply_markup=kb, parse_mode=None, delay=20)
+        year = now_local().year
+        kb = build_category_months_keyboard(year)
+        send_aux_message(
+            chat_id,
+            "📦 Выберите месяц:",
+            reply_markup=kb,
+            parse_mode=None,
+            delay=20
+        )
         return True
 
     if data_str.startswith("cat_m:"):
