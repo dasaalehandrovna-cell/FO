@@ -1967,7 +1967,7 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     save_chat_json(chat_id)
     export_global_csv(data)
     send_backup_to_channel(chat_id)
-def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str):
+def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str, skip_chat_backup: bool = False):
     store = get_chat_store(chat_id)
     found = None
     for r in store.get("records", []):
@@ -3114,6 +3114,7 @@ def handle_edited_message(msg):
     if restore_mode:
         log_info("EDITED: игнор, restore_mode=True")
         return
+    skip_chat_backup = True
     update_chat_info_from_message(msg)
     store = get_chat_store(chat_id)
     day_key = today_key()
@@ -3138,7 +3139,7 @@ def handle_edited_message(msg):
         return
     rid = target["id"]
     log_info(f"EDITED: обновляем запись ID={rid}, amount={new_amount}, note='{new_note}'")
-    update_record_in_chat(chat_id, rid, new_amount, new_note)
+    update_record_in_chat(chat_id, rid, new_amount, new_note, skip_chat_backup=skip_chat_backup)
     update_or_send_day_window(chat_id, day_key)
     log_info(f"EDITED: окно дня {day_key} обновлено для чата {chat_id}")
     try:
