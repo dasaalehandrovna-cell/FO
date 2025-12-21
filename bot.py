@@ -1967,6 +1967,7 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
     save_chat_json(chat_id)
     export_global_csv(data)
     send_backup_to_channel(chat_id)
+    
 def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str, skip_chat_backup: bool = False):
     store = get_chat_store(chat_id)
     found = None
@@ -1978,18 +1979,24 @@ def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str
             break
     if not found:
         return
+
     for day, arr in store.get("daily_records", {}).items():
         for r in arr:
             if r["id"] == rid:
                 r.update(found)
+
     store["balance"] = sum(x["amount"] for x in store["records"])
     data["records"] = [x if x["id"] != rid else found for x in data["records"]]
     data["overall_balance"] = sum(x["amount"] for x in data["records"])
+
     save_data(data)
     save_chat_json(chat_id)
     export_global_csv(data)
     send_backup_to_channel(chat_id)
-    send_backup_to_chat(chat_id)
+
+    if not skip_chat_backup:
+        send_backup_to_chat(chat_id)
+        
 def delete_record_in_chat(chat_id: int, rid: int):
     store = get_chat_store(chat_id)
     store["records"] = [x for x in store["records"] if x["id"] != rid]
