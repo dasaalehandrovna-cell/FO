@@ -48,6 +48,8 @@ KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
+forward_map = {}
+# (src_chat_id, src_msg_id) -> [(dst_chat_id, dst_msg_id)]
 backup_flags = {
     "drive": True,
     "channel": True,
@@ -899,18 +901,23 @@ def clear_forward_all():
     data["forward_rules"] = {}
     persist_forward_rules_to_owner()
     save_data(data)
+    
 def forward_text_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
     """Анонимная пересылка текста."""
     for dst, mode in targets:
         try:
-            bot.copy_message(dst, source_chat_id, msg.message_id)
+            sent = bot.copy_message(dst, source_chat_id, msg.message_id)
+            key = (source_chat_id, msg.message_id)
+            forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
             log_error(f"forward_text_anon to {dst}: {e}")
 def forward_media_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
     """Анонимная пересылка любых медиа."""
     for dst, mode in targets:
         try:
-            bot.copy_message(dst, source_chat_id, msg.message_id)
+            sent = bot.copy_message(dst, source_chat_id, msg.message_id)
+            key = (source_chat_id, msg.message_id)
+            forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
             log_error(f"forward_media_anon to {dst}: {e}")
 _media_group_cache = {}
@@ -955,7 +962,9 @@ def forward_media_group_anon(source_chat_id: int, messages: list, targets: list[
         else:
             for dst, mode in targets:
                 try:
-                    bot.copy_message(dst, source_chat_id, msg.message_id)
+                    sent = bot.copy_message(dst, source_chat_id, msg.message_id)
+                    key = (source_chat_id, msg.message_id)
+                    forward_map.setdefault(key, []).append((dst, sent.message_id))
                 except:
                     pass
             return
@@ -2944,7 +2953,9 @@ def handle_media_forward(msg):
             return
         for dst, mode in targets:
             try:
-                bot.copy_message(dst, chat_id, msg.message_id)
+                sent = bot.copy_message(dst, source_chat_id, msg.message_id)
+                key = (source_chat_id, msg.message_id)
+                forward_map.setdefault(key, []).append((dst, sent.message_id))
             except Exception as e:
                 log_error(f"handle_media_forward to {dst}: {e}")
     except Exception as e:
@@ -2968,11 +2979,14 @@ def handle_special_forward(msg):
             return
         for dst, mode in targets:
             try:
-                bot.copy_message(dst, chat_id, msg.message_id)
+                sent = bot.copy_message(dst, source_chat_id, msg.message_id)
+                key = (source_chat_id, msg.message_id)
+                forward_map.setdefault(key, []).append((dst, sent.message_id))
             except Exception as e:
                 log_error(f"handle_special_forward to {dst}: {e}")
     except Exception as e:
         log_error(f"handle_special_forward error: {e}")
+##
 @bot.message_handler(content_types=["document"])
 def handle_document(msg):
     """
