@@ -42,7 +42,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_FINAL_FORWARD_SYNC_FIXED_v3"
+VERSION = "Code_FINAL_NAVFIX_v1"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
@@ -902,6 +902,7 @@ def clear_forward_all():
     persist_forward_rules_to_owner()
     save_data(data)
     
+
 def forward_text_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
     """Анонимная пересылка текста."""
     for dst, mode in targets:
@@ -911,8 +912,10 @@ def forward_text_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
             forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
             log_error(f"forward_text_anon to {dst}: {e}")
+
+
 def forward_media_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
-    """Анонимная пересылка любых медиа."""
+    """Анонимная пересылка одиночных медиа."""
     for dst, mode in targets:
         try:
             sent = bot.copy_message(dst, source_chat_id, msg.message_id)
@@ -920,7 +923,7 @@ def forward_media_anon(source_chat_id: int, msg, targets: list[tuple[int, str]])
             forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
             log_error(f"forward_media_anon to {dst}: {e}")
-_media_group_cache = {}
+
 def collect_media_group(chat_id: int, msg):
     """
     Собирает альбом (media_group) в кэш пока все элементы не пришли.
@@ -937,42 +940,25 @@ def collect_media_group(chat_id: int, msg):
     return complete
 
 def forward_media_group_anon(source_chat_id: int, messages: list, targets: list[tuple[int, str]]):
-    """
-    Пересылка собранного альбома анонимно.
-    """
+    """Пересылка альбома анонимно."""
     if not messages:
         return
     media_list = []
     for msg in messages:
         if msg.content_type == "photo":
-            file_id = msg.photo[-1].file_id
-            caption = msg.caption or None
-            media_list.append(InputMediaPhoto(file_id, caption=caption))
+            media_list.append(InputMediaPhoto(msg.photo[-1].file_id, caption=msg.caption))
         elif msg.content_type == "video":
-            file_id = msg.video.file_id
-            caption = msg.caption or None
-            media_list.append(InputMediaVideo(file_id, caption=caption))
+            media_list.append(InputMediaVideo(msg.video.file_id, caption=msg.caption))
         elif msg.content_type == "document":
-            file_id = msg.document.file_id
-            caption = msg.caption or None
-            media_list.append(InputMediaDocument(file_id, caption=caption))
+            media_list.append(InputMediaDocument(msg.document.file_id, caption=msg.caption))
         elif msg.content_type == "audio":
-            file_id = msg.audio.file_id
-            caption = msg.caption or None
-            media_list.append(InputMediaAudio(file_id, caption=caption))
-        else:
-            for dst, mode in targets:
-                try:
-                    sent = bot.copy_message(dst, source_chat_id, msg.message_id)
-                    key = (source_chat_id, msg.message_id)
-                    forward_map.setdefault(key, []).append((dst, sent.message_id))
-                except Exception as e:
-                    log_error(f"forward_media_group_anon(copy) to {dst}: {e}")
-            return
-
+            media_list.append(InputMediaAudio(msg.audio.file_id, caption=msg.caption))
     for dst, mode in targets:
         try:
-            bot.send_media_group(dst, media_list)
+            sent_msgs = bot.send_media_group(dst, media_list)
+            for src_msg, sent in zip(messages, sent_msgs):
+                key = (source_chat_id, src_msg.message_id)
+                forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
             log_error(f"forward_media_group_anon to {dst}: {e}")
 
@@ -1868,18 +1854,6 @@ def on_callback(call):
             rid = int(cmd.split("_")[-1])
             delete_record_in_chat(chat_id, rid)
             update_or_send_day_window(chat_id, day_key)
-    # sync forwarded edits
-    try:
-        for dst_chat, dst_msg_id in forward_map.get((chat_id, message_id), []):
-            try:
-                bot.edit_message_text(new_text, dst_chat, dst_msg_id)
-            except Exception:
-                try:
-                    bot.edit_message_caption(dst_chat, dst_msg_id, new_text)
-                except Exception:
-                    pass
-    except Exception:
-        pass
             refresh_total_message_if_any(chat_id)
             if OWNER_ID and str(chat_id) != str(OWNER_ID):
                 try:
@@ -2826,18 +2800,6 @@ def handle_text(msg):
                         added_any = True
                 if added_any:
                         update_or_send_day_window(chat_id, day_key)
-    # sync forwarded edits
-    try:
-        for dst_chat, dst_msg_id in forward_map.get((chat_id, message_id), []):
-            try:
-                bot.edit_message_text(new_text, dst_chat, dst_msg_id)
-            except Exception:
-                try:
-                    bot.edit_message_caption(dst_chat, dst_msg_id, new_text)
-                except Exception:
-                    pass
-    except Exception:
-        pass
                         schedule_finalize(chat_id, day_key)
                 store["balance"] = sum(x["amount"] for x in store["records"])
                 data["records"] = []
@@ -2940,33 +2902,9 @@ def reset_chat_data(chat_id: int):
         send_backup_to_chat(chat_id)
         day_key = store.get("current_view_day", today_key())
         update_or_send_day_window(chat_id, day_key)
-    # sync forwarded edits
-    try:
-        for dst_chat, dst_msg_id in forward_map.get((chat_id, message_id), []):
-            try:
-                bot.edit_message_text(new_text, dst_chat, dst_msg_id)
-            except Exception:
-                try:
-                    bot.edit_message_caption(dst_chat, dst_msg_id, new_text)
-                except Exception:
-                    pass
-    except Exception:
-        pass
         try:
             day_key = get_chat_store(chat_id).get("current_view_day", today_key())
             update_or_send_day_window(chat_id, day_key)
-    # sync forwarded edits
-    try:
-        for dst_chat, dst_msg_id in forward_map.get((chat_id, message_id), []):
-            try:
-                bot.edit_message_text(new_text, dst_chat, dst_msg_id)
-            except Exception:
-                try:
-                    bot.edit_message_caption(dst_chat, dst_msg_id, new_text)
-                except Exception:
-                    pass
-    except Exception:
-        pass
         except Exception:
             pass
         refresh_total_message_if_any(chat_id)
@@ -2983,29 +2921,32 @@ def reset_chat_data(chat_id: int):
         "video_note", "sticker", "animation"
     ]
 )
-
 def handle_media_forward(msg):
     try:
         chat_id = msg.chat.id
         update_chat_info_from_message(msg)
         try:
             BOT_ID = bot.get_me().id
-        except Exception:
+        except:
             BOT_ID = None
         if BOT_ID and msg.from_user and msg.from_user.id == BOT_ID:
             return
-
         targets = resolve_forward_targets(chat_id)
         if not targets:
             return
-
         group_msgs = collect_media_group(chat_id, msg)
-        if group_msgs and len(group_msgs) > 1:
+        if not group_msgs:
+            return
+        if len(group_msgs) > 1:
             forward_media_group_anon(chat_id, group_msgs, targets)
             return
-
-        forward_media_anon(chat_id, msg, targets)
-
+        for dst, mode in targets:
+            try:
+                sent = bot.copy_message(dst, source_chat_id, msg.message_id)
+                key = (source_chat_id, msg.message_id)
+                forward_map.setdefault(key, []).append((dst, sent.message_id))
+            except Exception as e:
+                log_error(f"handle_media_forward to {dst}: {e}")
     except Exception as e:
         log_error(f"handle_media_forward error: {e}")
 @bot.message_handler(content_types=["location", "contact", "poll", "venue"])
@@ -3027,11 +2968,7 @@ def handle_special_forward(msg):
             return
         for dst, mode in targets:
             try:
-                sent = sent = bot.copy_message(dst, source_chat_id, msg.message_id)
-        try:
-            forward_map.setdefault((source_chat_id, msg.message_id), []).append((dst, sent.message_id))
-        except Exception:
-            pass
+                sent = bot.copy_message(dst, source_chat_id, msg.message_id)
                 key = (source_chat_id, msg.message_id)
                 forward_map.setdefault(key, []).append((dst, sent.message_id))
             except Exception as e:
@@ -3214,18 +3151,6 @@ def handle_edited_message(msg):
     log_info(f"EDITED: обновляем запись ID={rid}, amount={new_amount}, note='{new_note}'")
     update_record_in_chat(chat_id, rid, new_amount, new_note, skip_chat_backup=skip_chat_backup)
     update_or_send_day_window(chat_id, day_key)
-    # sync forwarded edits
-    try:
-        for dst_chat, dst_msg_id in forward_map.get((chat_id, message_id), []):
-            try:
-                bot.edit_message_text(new_text, dst_chat, dst_msg_id)
-            except Exception:
-                try:
-                    bot.edit_message_caption(dst_chat, dst_msg_id, new_text)
-                except Exception:
-                    pass
-    except Exception:
-        pass
     log_info(f"EDITED: окно дня {day_key} обновлено для чата {chat_id}")
     try:
         refresh_total_message_if_any(chat_id)
