@@ -911,16 +911,11 @@ def forward_text_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
             forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
             log_error(f"forward_text_anon to {dst}: {e}")
-            
 def forward_media_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
     """Анонимная пересылка любых медиа."""
     for dst, mode in targets:
         try:
-            sent = sent = bot.copy_message(dst, source_chat_id, msg.message_id)
-        try:
-            forward_map.setdefault((source_chat_id, msg.message_id), []).append((dst, sent.message_id))
-        except Exception:
-            pass
+            sent = bot.copy_message(dst, source_chat_id, msg.message_id)
             key = (source_chat_id, msg.message_id)
             forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
@@ -940,6 +935,7 @@ def collect_media_group(chat_id: int, msg):
         time.sleep(0.2)
     complete = group.pop(gid, arr)
     return complete
+
 def forward_media_group_anon(source_chat_id: int, messages: list, targets: list[tuple[int, str]]):
     """
     Пересылка собранного альбома анонимно.
@@ -967,21 +963,19 @@ def forward_media_group_anon(source_chat_id: int, messages: list, targets: list[
         else:
             for dst, mode in targets:
                 try:
-                    sent = sent = bot.copy_message(dst, source_chat_id, msg.message_id)
-        try:
-            forward_map.setdefault((source_chat_id, msg.message_id), []).append((dst, sent.message_id))
-        except Exception:
-            pass
+                    sent = bot.copy_message(dst, source_chat_id, msg.message_id)
                     key = (source_chat_id, msg.message_id)
                     forward_map.setdefault(key, []).append((dst, sent.message_id))
-                except:
-                    pass
+                except Exception as e:
+                    log_error(f"forward_media_group_anon(copy) to {dst}: {e}")
             return
+
     for dst, mode in targets:
         try:
             bot.send_media_group(dst, media_list)
         except Exception as e:
             log_error(f"forward_media_group_anon to {dst}: {e}")
+
 def render_day_window(chat_id: int, day_key: str):
     store = get_chat_store(chat_id)
     recs = store.get("daily_records", {}).get(day_key, [])
@@ -2989,36 +2983,29 @@ def reset_chat_data(chat_id: int):
         "video_note", "sticker", "animation"
     ]
 )
+
 def handle_media_forward(msg):
     try:
         chat_id = msg.chat.id
         update_chat_info_from_message(msg)
         try:
             BOT_ID = bot.get_me().id
-        except:
+        except Exception:
             BOT_ID = None
         if BOT_ID and msg.from_user and msg.from_user.id == BOT_ID:
             return
+
         targets = resolve_forward_targets(chat_id)
         if not targets:
             return
+
         group_msgs = collect_media_group(chat_id, msg)
-        if not group_msgs:
-            return
-        if len(group_msgs) > 1:
+        if group_msgs and len(group_msgs) > 1:
             forward_media_group_anon(chat_id, group_msgs, targets)
             return
-        for dst, mode in targets:
-            try:
-                sent = sent = bot.copy_message(dst, source_chat_id, msg.message_id)
-        try:
-            forward_map.setdefault((source_chat_id, msg.message_id), []).append((dst, sent.message_id))
-        except Exception:
-            pass
-                key = (source_chat_id, msg.message_id)
-                forward_map.setdefault(key, []).append((dst, sent.message_id))
-            except Exception as e:
-                log_error(f"handle_media_forward to {dst}: {e}")
+
+        forward_media_anon(chat_id, msg, targets)
+
     except Exception as e:
         log_error(f"handle_media_forward error: {e}")
 @bot.message_handler(content_types=["location", "contact", "poll", "venue"])
