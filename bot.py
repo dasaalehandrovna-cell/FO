@@ -42,7 +42,7 @@ GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
 #PORT = int(os.getenv("PORT", "8443"))
 if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN is not set")
-VERSION = "Code_FINAL_NAVFIX_v1"
+VERSION = "Code_FINAL_FORWARD_SYNC_v1"
 DEFAULT_TZ = "America/Argentina/Buenos_Aires"
 KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
@@ -3131,6 +3131,20 @@ def handle_edited_message(msg):
     log_info(f"EDITED: пришёл edited_message в чате {chat_id}, msg_id={message_id}, text='{new_text}'")
     if not is_finance_mode(chat_id):
         log_info(f"EDITED: игнор, finance_mode=OFF для чата {chat_id}")
+    # Forwarded copies edit sync
+    try:
+        key = (chat_id, message_id)
+        for dst_chat, dst_msg_id in forward_map.get(key, []):
+            try:
+                bot.edit_message_text(new_text, chat_id=dst_chat, message_id=dst_msg_id, parse_mode="HTML")
+            except Exception:
+                try:
+                    bot.edit_message_caption(chat_id=dst_chat, message_id=dst_msg_id, caption=new_text, parse_mode="HTML")
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
         return
     if restore_mode:
         log_info("EDITED: игнор, restore_mode=True")
