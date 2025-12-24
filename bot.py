@@ -11,9 +11,6 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import requests
 import telebot
-
-# --- Forward map: original -> forwarded ---
-forward_map = {}
 from telebot import types
 from telebot.types import (
     InputMediaPhoto,
@@ -910,14 +907,26 @@ def clear_forward_all():
 # ===============================
 # UNIVERSAL SAFE FORWARD (ALL TYPES)
 # ===============================
-def _forward_copy_any(source_chat_id, msg, targets):
+def _forward_copy_any(chat_id, msg, targets):
+    """Safe universal forward using copy_message for any content type."""
+    for dst, mode in targets:
+        try:
+            sent = bot.copy_message(dst, chat_id, msg.message_id)
+            key = (chat_id, msg.message_id)
+            forward_map.setdefault(key, []).append((dst, sent.message_id))
+        except Exception as e:
+            try:
+                log_error(f"forward_copy_any to {dst}: {e}")
+            except Exception:
+                pass
+    """Анонимная пересылка текста."""
     for dst, mode in targets:
         try:
             sent = bot.copy_message(dst, source_chat_id, msg.message_id)
             key = (source_chat_id, msg.message_id)
             forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
-            log_error(f"forward_copy_any to {dst}: {e}")
+            log_error(f"forward_text_anon to {dst}: {e}")
 def forward_media_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
     """Анонимная пересылка любых медиа."""
     for dst, mode in targets:
@@ -3127,31 +3136,6 @@ def handle_document(msg):
                 log_error(f"handle_document forward to {dst}: {e}")
     except Exception as e:
         log_error(f"handle_document error: {e}")
-@bot.edited_message_handler(content_types=["text"])
-def handle_edited_message(msg):
-    """
-    1) Если это финансовая запись (msg_id совпал с записью) — обновляем запись и окна.
-    2) Если это сообщение пересылки (есть mapping в forward_map) — синхронизируем текст в целевых чатах.
-    ВАЖНО: Telegram не присылает событий удаления сообщений пользователем, поэтому "удаление" можно
-    реализовать только через специальный текст/команду или через редактирование на "точку" (если захотите).
-    """
-    chat_id = msg.chat.id
-    message_id = msg.message_id
-    new_text = (msg.text or "").strip()
-
-    # --- синхронизация пересылки (работает независимо от finance_mode) ---
-    try:
-        mapped = forward_map.get((chat_id, message_id), []) or []
-        if mapped:
-            for dst_chat, dst_msg_id in mapped:
-                # Стараемся редактировать как текст, иначе как caption
-                try:
-                    bot.edit_message_text(new_text, dst_chat, dst_msg_id)
-                except Exception:
-                    try:
-                        bot.edit_message_caption(dst_chat, dst_msg_id, new_text)
-                    except Exception:
-                        pass
     except Exception as e:
         log_error(f"EDITED: forward sync error: {e}")
 
@@ -3216,26 +3200,6 @@ def handle_edited_message(msg):
                 pass
     except Exception as e:
         log_error(f"EDITED: refresh_total_message_if_any error: {e}")
-@bot.edited_message_handler(content_types=["photo", "video", "document", "audio"])
-def handle_edited_media_caption(msg):
-    chat_id = msg.chat.id
-    message_id = msg.message_id
-    new_caption = msg.caption or ""
-
-    # если нет пересланных копий — выходим
-    targets = forward_map.get((chat_id, message_id))
-    if not targets:
-        return
-
-    for dst_chat_id, dst_msg_id in targets:
-        try:
-            bot.edit_message_caption(
-                chat_id=dst_chat_id,
-                message_id=dst_msg_id,
-                caption=new_caption
-            )
-        except Exception:
-            pass
 @bot.message_handler(content_types=["deleted_message"])
 def handle_deleted_message(msg):
     try:
@@ -3313,7 +3277,32 @@ def main():
     app.run(host="0.0.0.0", port=PORT)
 if __name__ == "__main__":
     main()
-@bot.message_handler(content_types=["location","contact","venue","poll","video_note","voice","animation","sticker"])
+@bot.edited_message_handler(content_types=["text"])
+def handle_edited_text(msg):
+    chat_id = msg.chat.id
+    mid = msg.message_id
+    new_text = msg.text or ""
+    for dst_chat, dst_mid in forward_map.get((chat_id, mid), []):
+        try:
+            bot.edit_message_text(new_text, dst_chat, dst_mid)
+        except Exception:
+            try:
+                bot.edit_message_caption(dst_chat, dst_mid, new_text)
+            except Exception:
+                pass
+
+@bot.edited_message_handler(content_types=["photo","video","document","audio","animation","voice","video_note"])
+def handle_edited_media_caption(msg):
+    chat_id = msg.chat.id
+    mid = msg.message_id
+    caption = msg.caption or ""
+    for dst_chat, dst_mid in forward_map.get((chat_id, mid), []):
+        try:
+            bot.edit_message_caption(chat_id=dst_chat, message_id=dst_mid, caption=caption)
+        except Exception:
+            pass
+
+@bot.message_handler(content_types=["location","contact","venue","poll","sticker"])
 def handle_special_content(msg):
     chat_id = msg.chat.id
     targets = resolve_forward_targets(chat_id)
