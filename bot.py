@@ -3209,7 +3209,26 @@ def handle_edited_message(msg):
                 pass
     except Exception as e:
         log_error(f"EDITED: refresh_total_message_if_any error: {e}")
+@bot.edited_message_handler(content_types=["photo", "video", "document", "audio"])
+def handle_edited_media_caption(msg):
+    chat_id = msg.chat.id
+    message_id = msg.message_id
+    new_caption = msg.caption or ""
 
+    # если нет пересланных копий — выходим
+    targets = forward_map.get((chat_id, message_id))
+    if not targets:
+        return
+
+    for dst_chat_id, dst_msg_id in targets:
+        try:
+            bot.edit_message_caption(
+                chat_id=dst_chat_id,
+                message_id=dst_msg_id,
+                caption=new_caption
+            )
+        except Exception:
+            pass
 @bot.message_handler(content_types=["deleted_message"])
 def handle_deleted_message(msg):
     try:
