@@ -11,6 +11,9 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 import requests
 import telebot
+
+# --- Forward map: original -> forwarded ---
+forward_map = {}
 from telebot import types
 from telebot.types import (
     InputMediaPhoto,
@@ -903,6 +906,18 @@ def clear_forward_all():
     save_data(data)
     
 def forward_text_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
+
+# ===============================
+# UNIVERSAL SAFE FORWARD (ALL TYPES)
+# ===============================
+def _forward_copy_any(source_chat_id, msg, targets):
+    for dst, mode in targets:
+        try:
+            sent = bot.copy_message(dst, source_chat_id, msg.message_id)
+            key = (source_chat_id, msg.message_id)
+            forward_map.setdefault(key, []).append((dst, sent.message_id))
+        except Exception as e:
+            log_error(f"forward_copy_any to {dst}: {e}")
     """Анонимная пересылка текста."""
     for dst, mode in targets:
         try:
@@ -3306,15 +3321,10 @@ def main():
     app.run(host="0.0.0.0", port=PORT)
 if __name__ == "__main__":
     main()
-
-# ===============================
-# UNIVERSAL SAFE FORWARD (ALL TYPES)
-# ===============================
-def _forward_copy_any(source_chat_id, msg, targets):
-    for dst, mode in targets:
-        try:
-            sent = bot.copy_message(dst, source_chat_id, msg.message_id)
-            key = (source_chat_id, msg.message_id)
-            forward_map.setdefault(key, []).append((dst, sent.message_id))
-        except Exception as e:
-            log_error(f"forward_copy_any to {dst}: {e}")
+@bot.message_handler(content_types=["location","contact","venue","poll","video_note","voice","animation","sticker"])
+def handle_special_content(msg):
+    chat_id = msg.chat.id
+    targets = resolve_forward_targets(chat_id)
+    if not targets:
+        return
+    _forward_copy_any(chat_id, msg, targets)
