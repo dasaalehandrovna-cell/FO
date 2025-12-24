@@ -48,9 +48,6 @@ KEEP_ALIVE_INTERVAL_SECONDS = 60
 DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
-forward_links = {}  
-# key: (src_chat_id, src_msg_id)
-# value: (dst_chat_id, dst_msg_id)
 forward_map = {}
 # (src_chat_id, src_msg_id) -> [(dst_chat_id, dst_msg_id)]
 backup_flags = {
@@ -905,49 +902,25 @@ def clear_forward_all():
     persist_forward_rules_to_owner()
     save_data(data)
     
-
 def forward_text_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
-    """Анонимная пересылка текста с поддержкой редактирования."""
+    """Анонимная пересылка текста."""
     for dst, mode in targets:
         try:
-            sent = bot.send_message(
-                dst,
-                msg.text,
-                parse_mode="HTML"
-            )
+            sent = bot.copy_message(dst, source_chat_id, msg.message_id)
             key = (source_chat_id, msg.message_id)
             forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
             log_error(f"forward_text_anon to {dst}: {e}")
-
 def forward_media_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
-    """Анонимная пересылка одиночных медиа с поддержкой редактирования."""
+    """Анонимная пересылка любых медиа."""
     for dst, mode in targets:
         try:
-            if msg.content_type == "photo":
-                sent = bot.send_photo(
-                    dst,
-                    msg.photo[-1].file_id,
-                    caption=msg.caption or "",
-                    parse_mode="HTML"
-                )
-
-            elif msg.content_type == "document":
-                sent = bot.send_document(
-                    dst,
-                    msg.document.file_id,
-                    caption=msg.caption or "",
-                    parse_mode="HTML"
-                )
-
-            else:
-                continue
-
+            sent = bot.copy_message(dst, source_chat_id, msg.message_id)
             key = (source_chat_id, msg.message_id)
             forward_map.setdefault(key, []).append((dst, sent.message_id))
-
         except Exception as e:
             log_error(f"forward_media_anon to {dst}: {e}")
+_media_group_cache = {}
 def collect_media_group(chat_id: int, msg):
     """
     Собирает альбом (media_group) в кэш пока все элементы не пришли.
@@ -962,30 +935,44 @@ def collect_media_group(chat_id: int, msg):
         time.sleep(0.2)
     complete = group.pop(gid, arr)
     return complete
-
 def forward_media_group_anon(source_chat_id: int, messages: list, targets: list[tuple[int, str]]):
-    """Пересылка альбома анонимно."""
+    """
+    Пересылка собранного альбома анонимно.
+    """
     if not messages:
         return
     media_list = []
     for msg in messages:
         if msg.content_type == "photo":
-            media_list.append(InputMediaPhoto(msg.photo[-1].file_id, caption=msg.caption))
+            file_id = msg.photo[-1].file_id
+            caption = msg.caption or None
+            media_list.append(InputMediaPhoto(file_id, caption=caption))
         elif msg.content_type == "video":
-            media_list.append(InputMediaVideo(msg.video.file_id, caption=msg.caption))
+            file_id = msg.video.file_id
+            caption = msg.caption or None
+            media_list.append(InputMediaVideo(file_id, caption=caption))
         elif msg.content_type == "document":
-            media_list.append(InputMediaDocument(msg.document.file_id, caption=msg.caption))
+            file_id = msg.document.file_id
+            caption = msg.caption or None
+            media_list.append(InputMediaDocument(file_id, caption=caption))
         elif msg.content_type == "audio":
-            media_list.append(InputMediaAudio(msg.audio.file_id, caption=msg.caption))
+            file_id = msg.audio.file_id
+            caption = msg.caption or None
+            media_list.append(InputMediaAudio(file_id, caption=caption))
+        else:
+            for dst, mode in targets:
+                try:
+                    sent = bot.copy_message(dst, source_chat_id, msg.message_id)
+                    key = (source_chat_id, msg.message_id)
+                    forward_map.setdefault(key, []).append((dst, sent.message_id))
+                except:
+                    pass
+            return
     for dst, mode in targets:
         try:
-            sent_msgs = bot.send_media_group(dst, media_list)
-            for src_msg, sent in zip(messages, sent_msgs):
-                key = (source_chat_id, src_msg.message_id)
-                forward_map.setdefault(key, []).append((dst, sent.message_id))
+            bot.send_media_group(dst, media_list)
         except Exception as e:
             log_error(f"forward_media_group_anon to {dst}: {e}")
-
 def render_day_window(chat_id: int, day_key: str):
     store = get_chat_store(chat_id)
     recs = store.get("daily_records", {}).get(day_key, [])
@@ -2486,41 +2473,6 @@ def cmd_autoadd_info(msg):
         f"- ВКЛ → каждое сообщение с суммой записывается автоматически\n"
         f"- ВЫКЛ → работает только через кнопку «Добавить»"
     )
-def send_via_bot_and_link(src_msg, dst_chat_id):
-    try:
-        if src_msg.content_type == "text":
-            m = bot.send_message(
-                dst_chat_id,
-                src_msg.text,
-                parse_mode="HTML"
-            )
-
-        elif src_msg.content_type == "document":
-            m = bot.send_document(
-                dst_chat_id,
-                src_msg.document.file_id,
-                caption=src_msg.caption or "",
-                parse_mode="HTML"
-            )
-
-        elif src_msg.content_type == "photo":
-            m = bot.send_photo(
-                dst_chat_id,
-                src_msg.photo[-1].file_id,
-                caption=src_msg.caption or "",
-                parse_mode="HTML"
-            )
-
-        else:
-            return
-
-        forward_links[(src_msg.chat.id, src_msg.message_id)] = (
-            dst_chat_id,
-            m.message_id
-        )
-
-    except Exception as e:
-        log_error(f"send_via_bot failed: {e}")
 def send_and_auto_delete(chat_id: int, text: str, delay: int = 10):
     try:
         msg = bot.send_message(chat_id, text)
@@ -2934,10 +2886,6 @@ def handle_text(msg):
             save_data(data)
     except Exception as e:
         log_error(f"handle_text: {e}")
-def cleanup_forward_links(chat_id):
-    for k in list(forward_links.keys()):
-        if k[0] == chat_id:
-            del forward_links[k]
 def reset_chat_data(chat_id: int):
     """
     Полное обнуление данных чата:
@@ -3175,55 +3123,93 @@ def handle_document(msg):
 @bot.edited_message_handler(content_types=["text"])
 def handle_edited_message(msg):
     """
-    Редактирование записи через редактирование сообщения.
+    1) Если это финансовая запись (msg_id совпал с записью) — обновляем запись и окна.
+    2) Если это сообщение пересылки (есть mapping в forward_map) — синхронизируем текст в целевых чатах.
+    ВАЖНО: Telegram не присылает событий удаления сообщений пользователем, поэтому "удаление" можно
+    реализовать только через специальный текст/команду или через редактирование на "точку" (если захотите).
     """
     chat_id = msg.chat.id
     message_id = msg.message_id
     new_text = (msg.text or "").strip()
-    log_info(f"EDITED: пришёл edited_message в чате {chat_id}, msg_id={message_id}, text='{new_text}'")
+
+    # --- синхронизация пересылки (работает независимо от finance_mode) ---
+    try:
+        mapped = forward_map.get((chat_id, message_id), []) or []
+        if mapped:
+            for dst_chat, dst_msg_id in mapped:
+                # Стараемся редактировать как текст, иначе как caption
+                try:
+                    bot.edit_message_text(new_text, dst_chat, dst_msg_id)
+                except Exception:
+                    try:
+                        bot.edit_message_caption(dst_chat, dst_msg_id, new_text)
+                    except Exception:
+                        pass
+    except Exception as e:
+        log_error(f"EDITED: forward sync error: {e}")
+
+    # --- финансовое редактирование записи ---
     if not is_finance_mode(chat_id):
-        log_info(f"EDITED: игнор, finance_mode=OFF для чата {chat_id}")
         return
     if restore_mode:
-        log_info("EDITED: игнор, restore_mode=True")
         return
+
+    # чтобы при редактировании через long-tap не плодились бэкапы в чат
     skip_chat_backup = True
-    update_chat_info_from_message(msg)
+
+    try:
+        update_chat_info_from_message(msg)
+    except Exception:
+        pass
+
     store = get_chat_store(chat_id)
     day_key = today_key()
     target = None
-    for day, recs in store.get("daily_records", {}).items():
-        for r in recs:
-            if r.get("msg_id") == message_id or r.get("origin_msg_id") == message_id:
-                target = r
-                day_key = day
+
+    try:
+        for day, recs in (store.get("daily_records", {}) or {}).items():
+            for r in (recs or []):
+                if r.get("msg_id") == message_id or r.get("origin_msg_id") == message_id:
+                    target = r
+                    day_key = day
+                    break
+            if target:
                 break
-        if target:
-            break
-    if not target:
-        log_info(f"EDITED: запись не найдена по msg_id={message_id} в daily_records чата {chat_id}")
+    except Exception as e:
+        log_error(f"EDITED: scan daily_records error: {e}")
         return
-    log_info(f"EDITED: найдена запись ID={target.get('id')} за день {day_key}")
+
+    if not target:
+        return
+
     try:
         new_amount, new_note = split_amount_and_note(new_text)
     except Exception as e:
-        log_error(f"EDITED: ошибка парсинга суммы: {e}")
-        bot.send_message(chat_id, "❌ Ошибка: не удалось разобрать сумму.")
+        log_error(f"EDITED: parse error: {e}")
+        try:
+            bot.send_message(chat_id, "❌ Ошибка: не удалось разобрать сумму.")
+        except Exception:
+            pass
         return
-    rid = target["id"]
-    log_info(f"EDITED: обновляем запись ID={rid}, amount={new_amount}, note='{new_note}'")
+
+    rid = int(target.get("id"))
     update_record_in_chat(chat_id, rid, new_amount, new_note, skip_chat_backup=skip_chat_backup)
-    update_or_send_day_window(chat_id, day_key)
-    log_info(f"EDITED: окно дня {day_key} обновлено для чата {chat_id}")
+
+    try:
+        update_or_send_day_window(chat_id, day_key)
+    except Exception as e:
+        log_error(f"EDITED: update_or_send_day_window({day_key}) error: {e}")
+
     try:
         refresh_total_message_if_any(chat_id)
         if OWNER_ID and str(chat_id) != str(OWNER_ID):
             try:
                 refresh_total_message_if_any(int(OWNER_ID))
-            except Exception as e:
-                log_error(f"EDITED: refresh_total_message_if_any(owner) error: {e}")
+            except Exception:
+                pass
     except Exception as e:
-        log_error(f"EDITED: refresh_total_message_if_any({chat_id}) error: {e}")
+        log_error(f"EDITED: refresh_total_message_if_any error: {e}")
+
 @bot.message_handler(content_types=["deleted_message"])
 def handle_deleted_message(msg):
     try:
@@ -3236,40 +3222,6 @@ def handle_deleted_message(msg):
     except:
         pass
 KEEP_ALIVE_SEND_TO_OWNER = False
-
-@bot.edited_message_handler(func=lambda m: True)
-def handle_edited_message(msg):
-    key = (msg.chat.id, msg.message_id)
-    if key not in forward_links:
-        return
-
-    dst_chat_id, dst_msg_id = forward_links[key]
-    text = msg.text or msg.caption or ""
-    parse = "HTML"
-
-    try:
-        if msg.content_type == "text":
-            bot.edit_message_text(
-                text,
-                chat_id=dst_chat_id,
-                message_id=dst_msg_id,
-                parse_mode=parse
-            )
-            return
-
-        bot.edit_message_caption(
-            chat_id=dst_chat_id,
-            message_id=dst_msg_id,
-            caption=text,
-            parse_mode=parse
-        )
-        return
-
-    except Exception:
-        try:
-            bot.send_message(dst_chat_id, text, parse_mode=parse)
-        except Exception as e:
-            log_error(f"edit relay failed: {e}")
 def keep_alive_task():
     while True:
         try:
