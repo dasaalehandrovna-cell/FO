@@ -918,14 +918,6 @@ def _forward_copy_any(source_chat_id, msg, targets):
             forward_map.setdefault(key, []).append((dst, sent.message_id))
         except Exception as e:
             log_error(f"forward_copy_any to {dst}: {e}")
-    """Анонимная пересылка текста."""
-    for dst, mode in targets:
-        try:
-            sent = bot.copy_message(dst, source_chat_id, msg.message_id)
-            key = (source_chat_id, msg.message_id)
-            forward_map.setdefault(key, []).append((dst, sent.message_id))
-        except Exception as e:
-            log_error(f"forward_text_anon to {dst}: {e}")
 def forward_media_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
     """Анонимная пересылка любых медиа."""
     for dst, mode in targets:
