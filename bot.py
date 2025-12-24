@@ -905,7 +905,7 @@ def clear_forward_all():
     persist_forward_rules_to_owner()
     save_data(data)
     
-def forward_text_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
+#def forward_text_anon(source_chat_id: int, msg, targets: list[tuple[int, str]]):
 
 # ===============================
 # UNIVERSAL SAFE FORWARD (ALL TYPES)
