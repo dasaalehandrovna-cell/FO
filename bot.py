@@ -1135,11 +1135,13 @@ def clear_forward_all():
     
 
 def forward_any_message(source_chat_id: int, msg):
-    """
-    Универсальная пересылка ЛЮБОГО сообщения.
-    Использует bot.copy_message → поддерживает все типы.
-    """
     try:
+        # 🔥 ВАЖНО: регистрируем чат у OWNER
+        try:
+            update_chat_info_from_message(msg)
+        except Exception:
+            pass
+
         targets = resolve_forward_targets(source_chat_id)
         if not targets:
             return
@@ -3124,53 +3126,6 @@ def handle_document(msg):
         except Exception:
             pass
                 
-@bot.edited_message_handler(
-    content_types=[
-        "text",
-        "photo",
-        "video",
-        "document",
-        "animation",
-        "audio",
-        "voice",
-        "video_note",
-        "sticker",
-        "location",
-        "venue",
-        "contact"
-    ]
-)
-#bot.edited_message_handler(func=lambda m: True)
-def on_edited_message(msg):
-    # 1️⃣ СНАЧАЛА — ФИНАНСЫ
-    try:
-        handle_finance_edited_message(msg)
-    except Exception as e:
-        log_error(f"finance edit failed: {e}")
-
-    # 2️⃣ ПОТОМ — ПЕРЕСЫЛКА
-    key = (msg.chat.id, msg.message_id)
-    links = forward_map.get(key)
-    if not links:
-        return
-
-    for dst_chat_id, dst_msg_id in links:
-        try:
-            if msg.text is not None:
-                bot.edit_message_text(
-                    text=msg.text,
-                    chat_id=dst_chat_id,
-                    message_id=dst_msg_id
-                )
-            elif msg.caption is not None:
-                bot.edit_message_caption(
-                    caption=msg.caption,
-                    chat_id=dst_chat_id,
-                    message_id=dst_msg_id,
-                    parse_mode=None
-                )
-        except Exception as e:
-            log_error(f"sync edit failed {dst_chat_id}:{dst_msg_id}: {e}")
                         
 def cleanup_forward_links(chat_id: int):
     """
