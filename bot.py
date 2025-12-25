@@ -699,7 +699,52 @@ def handle_finance_text(msg):
         update_or_send_day_window(chat_id, day_key)
         schedule_finalize(chat_id, day_key)
         return
-        
+      
+def handle_finance_edit(msg):
+    """
+    Безопасное редактирование финансовой записи через edit сообщения.
+    Работает ТОЛЬКО если сообщение связано с записью.
+    """
+    if msg.content_type != "text":
+        return
+
+    chat_id = msg.chat.id
+    text = (msg.text or "").strip()
+    if not text:
+        return
+
+    store = get_chat_store(chat_id)
+
+    # 1️⃣ ищем запись по origin_msg_id
+    target = None
+    for rec in store.get("records", []):
+        if rec.get("origin_msg_id") == msg.message_id:
+            target = rec
+            break
+
+    if not target:
+        return  # это не финансовое сообщение
+
+    # 2️⃣ парсим сумму и комментарий
+    try:
+        amount, note = split_amount_and_note(text)
+    except Exception:
+        return  # если пользователь отредактировал "в мусор" — игнор
+
+    # 3️⃣ обновляем СУЩЕСТВУЮ запись
+    target["amount"] = amount
+    target["note"] = note
+    target["timestamp"] = now_local().isoformat(timespec="seconds")
+
+    # 4️⃣ пересчёт и сохранение
+    recalc_balance(chat_id)
+    save_data(data)
+    save_chat_json(chat_id)
+
+    day_key = get_chat_store(chat_id).get("current_view_day", today_key())
+    update_or_send_day_window(chat_id, day_key)
+    refresh_total_message_if_any(chat_id)
+    
 def _get_drive_service():
     if not GOOGLE_SERVICE_ACCOUNT_JSON or not GDRIVE_FOLDER_ID:
         return None
