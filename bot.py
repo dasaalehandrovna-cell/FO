@@ -2565,20 +2565,38 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
         _safe("save_data", lambda: save_data(data))
         _safe("export_global_csv", lambda: export_global_csv(data))
 
-                # 2️⃣ Окно дня + бэкап для OWNER_ID / обычный режим для остальных
+        # 2️⃣ Окно дня + бэкап
         if OWNER_ID and str(chat_id) == str(OWNER_ID):
-            _safe("owner_backup_window", lambda: backup_window_for_owner(chat_id, day_key, None)
+            _safe(
+                "owner_backup_window",
+                lambda: backup_window_for_owner(chat_id, day_key, None)
+            )
         else:
-            _safe("force_new_day_window", lambda: force_new_day_window(chat_id, day_key))
-            _safe("backup_to_chat", lambda: force_backup_to_chat(chat_id))
+            _safe(
+                "force_new_day_window",
+                lambda: force_new_day_window(chat_id, day_key)
+            )
+            _safe(
+                "backup_to_chat",
+                lambda: force_backup_to_chat(chat_id)
+            )
 
         # 3️⃣ Бэкап в канал (для всех)
-        _safe("backup_to_channel", lambda: send_backup_to_channel(chat_id))
-        
+        _safe(
+            "backup_to_channel",
+            lambda: send_backup_to_channel(chat_id)
+        )
+
         # 4️⃣ Итоги
-        _safe("refresh_total_chat", lambda: refresh_total_message_if_any(chat_id))
+        _safe(
+            "refresh_total_chat",
+            lambda: refresh_total_message_if_any(chat_id)
+        )
         if OWNER_ID and str(chat_id) != str(OWNER_ID):
-            _safe("refresh_total_owner", lambda: refresh_total_message_if_any(int(OWNER_ID)))
+            _safe(
+                "refresh_total_owner",
+                lambda: refresh_total_message_if_any(int(OWNER_ID))
+            )
 
     t_prev = _finalize_timers.get(chat_id)
     if t_prev and t_prev.is_alive():
