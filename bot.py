@@ -3184,27 +3184,58 @@ def keep_alive_task():
 def on_any_message(msg):
     chat_id = msg.chat.id
 
-    # ✅ важно: копим known_chats у OWNER и info у чатов
-    try:
-        update_chat_info_from_message(msg)
-    except Exception:
-        pass
-
-    # ❌ в режиме восстановления НИЧЕГО не делаем
-    #if restore_mode:
-        #return
     if restore_mode and msg.content_type != "document":
         return
 
-    # 1️⃣ СНАЧАЛА — ФИНАНСЫ
-    try:
-        handle_finance_text(msg)
-    except Exception as e:
-        log_error(f"handle_finance_text error: {e}")
+    # 1️⃣ финансы — ТОЛЬКО новые сообщения
+    if msg.content_type == "text":
+        try:
+            handle_finance_text(msg)
+        except Exception as e:
+            log_error(f"handle_finance_text error: {e}")
 
-    # 2️⃣ ПОТОМ — ПЕРЕСЫЛКА
+    # 2️⃣ пересылка
     forward_any_message(chat_id, msg)
     
+@bot.edited_message_handler(
+    content_types=["text"]
+)
+def on_edited_message(msg):
+    chat_id = msg.chat.id
+
+    # 1️⃣ ФИНАНСЫ (редактирование)
+    try:
+        if is_finance_mode(chat_id):
+            handle_finance_text(msg)
+    except Exception as e:
+        log_error(f"handle_finance_text (edited) error: {e}")
+
+    # 2️⃣ СИНХРОНИЗАЦИЯ ПЕРЕСЫЛКИ
+    key = (msg.chat.id, msg.message_id)
+    links = forward_map.get(key)
+    if not links:
+        return
+
+    text = msg.text
+    caption = msg.caption
+
+    for dst_chat_id, dst_msg_id in links:
+        try:
+            if text:
+                bot.edit_message_text(
+                    text=text,
+                    chat_id=dst_chat_id,
+                    message_id=dst_msg_id
+                )
+            elif caption:
+                bot.edit_message_caption(
+                    caption=caption,
+                    chat_id=dst_chat_id,
+                    message_id=dst_msg_id
+                )
+        except Exception as e:
+            log_error(f"sync edit failed {dst_chat_id}:{dst_msg_id}: {e}")
+
 def start_keep_alive_thread():
     t = threading.Thread(target=keep_alive_task, daemon=True)
     t.start()
