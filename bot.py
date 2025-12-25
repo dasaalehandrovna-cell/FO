@@ -2861,6 +2861,60 @@ def reset_chat_data(chat_id: int):
     except Exception as e:
         log_error(f"reset_chat_data({chat_id}): {e}")
 
+@bot.message_handler(content_types=["document"])
+def handle_document(msg):
+    global restore_mode
+    chat_id = msg.chat.id
+
+    update_chat_info_from_message(msg)
+
+    file = msg.document
+    fname = (file.file_name or "").lower()
+
+    # 🔒 если НЕ в режиме восстановления — обычная пересылка
+    if not restore_mode:
+        forward_any_message(chat_id, msg)
+        return
+
+    # 🔑 режим восстановления
+    if not (fname.endswith(".json") or fname.endswith(".csv")):
+        send_and_auto_delete(chat_id, "⚠️ Это не JSON / CSV файл.")
+        return
+
+    try:
+        file_info = bot.get_file(file.file_id)
+        raw = bot.download_file(file_info.file_path)
+    except Exception as e:
+        send_and_auto_delete(chat_id, f"❌ Ошибка загрузки файла: {e}")
+        return
+
+    tmp_path = f"restore_{chat_id}_{fname}"
+    with open(tmp_path, "wb") as f:
+        f.write(raw)
+
+    try:
+        if fname.endswith(".json"):
+            restore_from_json(chat_id, tmp_path)
+        elif fname.endswith(".csv"):
+            restore_from_csv(chat_id, tmp_path)
+    except Exception as e:
+        send_and_auto_delete(chat_id, f"❌ Ошибка восстановления: {e}")
+        return
+    finally:
+        try:
+            os.remove(tmp_path)
+        except Exception:
+            pass
+
+    restore_mode = False
+    cleanup_forward_links(chat_id)
+
+    send_info(chat_id, "✅ Данные восстановлены. Создаю новое окно…")
+
+    day_key = today_key()
+    update_or_send_day_window(chat_id, day_key)
+    refresh_total_message_if_any(chat_id)
+    
 @bot.edited_message_handler(
     content_types=[
         "text",
@@ -2973,7 +3027,9 @@ def on_any_message(msg):
         pass
 
     # ❌ в режиме восстановления НИЧЕГО не делаем
-    if restore_mode:
+    #if restore_mode:
+        #return
+    if restore_mode and msg.content_type != "document":
         return
 
     # 1️⃣ СНАЧАЛА — ФИНАНСЫ
