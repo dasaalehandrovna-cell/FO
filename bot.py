@@ -1432,6 +1432,11 @@ def on_callback(call):
         data_str = call.data or ""
         chat_id = call.message.chat.id
 
+        try:
+            update_chat_info_from_message(call.message)
+        except Exception:
+            pass
+
         if data_str == "cat_months" or data_str.startswith("cat_"):
             if handle_categories_callback(call, data_str):
                 return
@@ -1563,7 +1568,7 @@ def on_callback(call):
         if cmd == "open":
             store["current_view_day"] = day_key
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, day_key, call.message.message_id)
+                backup_window_for_owner(chat_id, day_key, None)
             else:
                 txt, _ = render_day_window(chat_id, day_key)
                 kb = build_main_keyboard(day_key, chat_id)
@@ -1736,7 +1741,7 @@ def on_callback(call):
         if cmd == "back_main":
             store["current_view_day"] = day_key
             if OWNER_ID and str(chat_id) == str(OWNER_ID):
-                backup_window_for_owner(chat_id, day_key, call.message.message_id)
+                backup_window_for_owner(chat_id, day_key, None)
             else:
                 txt, _ = render_day_window(chat_id, day_key)
                 kb = build_main_keyboard(day_key, chat_id)
@@ -2161,7 +2166,7 @@ def cmd_start(msg):
         return
     day_key = today_key()
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        backup_window_for_owner(chat_id, day_key, None)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
@@ -2238,7 +2243,7 @@ def cmd_view(msg):
         send_info(chat_id, "❌ Неверная дата. Формат: YYYY-MM-DD")
         return
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        backup_window_for_owner(chat_id, day_key, None)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
@@ -2253,7 +2258,7 @@ def cmd_prev(msg):
     d = datetime.strptime(today_key(), "%Y-%m-%d") - timedelta(days=1)
     day_key = d.strftime("%Y-%m-%d")
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        backup_window_for_owner(chat_id, day_key, None)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
@@ -2268,7 +2273,7 @@ def cmd_next(msg):
     d = datetime.strptime(today_key(), "%Y-%m-%d") + timedelta(days=1)
     day_key = d.strftime("%Y-%m-%d")
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, call.message.message_id)
+        backup_window_for_owner(chat_id, day_key, None)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
@@ -2562,7 +2567,7 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
 
                 # 2️⃣ Окно дня + бэкап для OWNER_ID / обычный режим для остальных
         if OWNER_ID and str(chat_id) == str(OWNER_ID):
-            _safe("owner_backup_window", lambda: backup_window_for_owner(chat_id, day_key, call.message.message_id))
+            _safe("owner_backup_window", lambda: backup_window_for_owner(chat_id, day_key, None)
         else:
             _safe("force_new_day_window", lambda: force_new_day_window(chat_id, day_key))
             _safe("backup_to_chat", lambda: force_backup_to_chat(chat_id))
@@ -2624,29 +2629,31 @@ def force_backup_to_chat(chat_id: int):
 
         with open(json_path, "rb") as f:
             data = f.read()
+            if not data:
+                log_error("force_backup_to_chat: empty JSON")
+                return
+            base = os.path.basename(json_path)
+            name_no_ext, dot, ext = base.partition(".")
+            suffix = get_chat_name_for_filename(chat_id)
+            if suffix:
+                file_name = suffix
+            else:
+                file_name = name_no_ext
+            if dot:
+                file_name += f".{ext}"
+            buf = io.BytesIO(data)
+            buf.name = file_name
 
-        if not data:
-            log_error("force_backup_to_chat: empty JSON")
-            return
-
-        base = os.path.basename(json_path)
-        name_no_ext, dot, ext = base.partition(".")
-        suffix = get_chat_name_for_filename(chat_id)
-        file_name = suffix if suffix else name_no_ext
-        if dot:
-            file_name += f".{ext}"
-
-        buf = io.BytesIO(data)
-        buf.name = file_name
+        
+            except Exception as e:
+                log_error(f"force_backup_to_chat: edit failed: {e}")
 
         sent = bot.send_document(chat_id, buf, caption=caption)
         meta[msg_key] = sent.message_id
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_chat_backup_meta(meta)
-
     except Exception as e:
         log_error(f"force_backup_to_chat({chat_id}): {e}")
-        
 def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int | None = None):
     """
     Для OWNER_ID: одно сообщение, в котором:
@@ -2699,14 +2706,34 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         # Пытаемся обновить старое окно, если оно есть
         if mid:
             try:
-                
+                media = types.InputMediaDocument(buf, caption=txt, parse_mode="HTML")
+                bot.edit_message_media(
+                    chat_id=chat_id,
+                    message_id=mid,
+                    media=media,
+                    reply_markup=kb
+                )
+                set_active_window_id(chat_id, day_key, mid)
                 return
             except Exception as e:
                 log_error(f"backup_window_for_owner: edit_message_media failed: {e}")
+                # fallback: пробуем хотя бы caption+кнопки обновить
                 try:
-                    bot.delete_message(chat_id, mid)
-                except Exception:
-                    pass
+                    bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=mid,
+                        caption=txt,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                    set_active_window_id(chat_id, day_key, mid)
+                    return
+                except Exception as e2:
+                    log_error(f"backup_window_for_owner: edit_caption failed: {e2}")
+                    try:
+                        bot.delete_message(chat_id, mid)
+                    except Exception:
+                        pass
 
         # Если не получилось отредактировать — создаём новое сообщение
         sent = bot.send_document(
@@ -2785,30 +2812,11 @@ def reset_chat_data(chat_id: int):
 #@bot.message_handler(content_types=["location", "contact", "poll", "venue"])
 
 #bot.message_handler(content_types=["document"])
-@bot.edited_message_handler(content_types=["text"])
-def handle_edited_text(msg):
-    chat_id = msg.chat.id
-    mid = msg.message_id
-    new_text = msg.text or ""
-    for dst_chat, dst_mid in forward_map.get((chat_id, mid), []):
-        try:
-            bot.edit_message_text(new_text, dst_chat, dst_mid)
-        except Exception:
-            try:
-                bot.edit_message_caption(dst_chat, dst_mid, new_text)
-            except Exception:
-                pass
+#bot.edited_message_handler(content_types=["text"])
 
-@bot.edited_message_handler(content_types=["photo","video","document","audio","animation","voice","video_note"])
-def handle_edited_media_caption(msg):
-    chat_id = msg.chat.id
-    mid = msg.message_id
-    caption = msg.caption or ""
-    for dst_chat, dst_mid in forward_map.get((chat_id, mid), []):
-        try:
-            bot.edit_message_caption(chat_id=dst_chat, message_id=dst_mid, caption=caption)
-        except Exception:
-            pass
+
+#bot.edited_message_handler(content_types=["photo","video","document","audio","animation","voice","video_note"])
+
 
 @bot.edited_message_handler(func=lambda m: True)
 def on_edited_message(msg):
@@ -2897,19 +2905,18 @@ def keep_alive_task():
     ]
 )
 def on_any_message(msg):
-    """
-    ЛОВИТ ВСЕ ОБЫЧНЫЕ СООБЩЕНИЯ.
-    Команды сюда НЕ попадают.
-    """
     chat_id = msg.chat.id
 
-    # ❗️ Если идёт restore — пересылку НЕ делаем
+    # ✅ важно: копим known_chats у OWNER и info у чатов
+    try:
+        update_chat_info_from_message(msg)
+    except Exception:
+        pass
+
     if restore_mode:
         return
 
-    # ⬇⬇⬇ ВОТ ТУТ ПЕРЕСЫЛКА
     forward_any_message(chat_id, msg)
-
 def start_keep_alive_thread():
     t = threading.Thread(target=keep_alive_task, daemon=True)
     t.start()
