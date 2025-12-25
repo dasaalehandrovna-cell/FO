@@ -504,6 +504,76 @@ def looks_like_amount(text):
         return True
     except:
         return False
+        
+def handle_finance_text(msg):
+    """
+    Обработка обычного текстового ввода:
+    - авто-добавление (если включено)
+    - добавление через кнопку "➕ Добавить"
+    - редактирование записи
+    """
+    if msg.content_type != "text":
+        return
+
+    chat_id = msg.chat.id
+    text = (msg.text or "").strip()
+    if not text:
+        return
+
+    # ❌ если фин-режим выключен — выходим
+    if not is_finance_mode(chat_id):
+        return
+
+    store = get_chat_store(chat_id)
+
+    # ✏️ режим редактирования записи
+    wait = store.get("edit_wait")
+    if wait and wait.get("type") == "edit":
+        rid = wait.get("rid")
+        day_key = wait.get("day_key", today_key())
+        try:
+            amount, note = split_amount_and_note(text)
+        except Exception:
+            send_and_auto_delete(chat_id, "❌ Не удалось разобрать сумму.")
+            return
+
+        update_record_in_chat(chat_id, rid, amount, note)
+        store["edit_wait"] = None
+        save_data(data)
+        update_or_send_day_window(chat_id, day_key)
+        schedule_finalize(chat_id, day_key)
+        return
+
+    # ➕ режим добавления через кнопку
+    if wait and wait.get("type") == "add":
+        day_key = wait.get("day_key", today_key())
+        try:
+            amount, note = split_amount_and_note(text)
+        except Exception:
+            send_and_auto_delete(chat_id, "❌ Не удалось разобрать сумму.")
+            return
+
+        add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+        store["edit_wait"] = None
+        save_data(data)
+        update_or_send_day_window(chat_id, day_key)
+        schedule_finalize(chat_id, day_key)
+        return
+
+    # ⚙️ авто-добавление
+    settings = store.get("settings", {})
+    if settings.get("auto_add") and looks_like_amount(text):
+        try:
+            amount, note = split_amount_and_note(text)
+        except Exception:
+            return
+
+        add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+        day_key = store.get("current_view_day", today_key())
+        update_or_send_day_window(chat_id, day_key)
+        schedule_finalize(chat_id, day_key)
+        return
+        
 def _get_drive_service():
     if not GOOGLE_SERVICE_ACCOUNT_JSON or not GDRIVE_FOLDER_ID:
         return None
@@ -2778,21 +2848,6 @@ def reset_chat_data(chat_id: int):
                 pass
     except Exception as e:
         log_error(f"reset_chat_data({chat_id}): {e}")
-@bot.message_handler(
-    content_types=[
-        "photo", "audio", "video", "voice",
-        "video_note", "sticker", "animation"
-    ]
-)
-#def handle_media_forward(msg):
-#@bot.message_handler(content_types=["location", "contact", "poll", "venue"])
-
-#bot.message_handler(content_types=["document"])
-#bot.edited_message_handler(content_types=["text"])
-
-
-#bot.edited_message_handler(content_types=["photo","video","document","audio","animation","voice","video_note"])
-
 
 @bot.edited_message_handler(func=lambda m: True)
 def on_edited_message(msg):
@@ -2889,10 +2944,19 @@ def on_any_message(msg):
     except Exception:
         pass
 
+    # ❌ в режиме восстановления НИЧЕГО не делаем
     if restore_mode:
         return
 
+    # 1️⃣ СНАЧАЛА — ФИНАНСЫ
+    try:
+        handle_finance_text(msg)
+    except Exception as e:
+        log_error(f"handle_finance_text error: {e}")
+
+    # 2️⃣ ПОТОМ — ПЕРЕСЫЛКА
     forward_any_message(chat_id, msg)
+    
 def start_keep_alive_thread():
     t = threading.Thread(target=keep_alive_task, daemon=True)
     t.start()
@@ -2941,5 +3005,3 @@ def main():
     app.run(host="0.0.0.0", port=PORT)
 if __name__ == "__main__":
     main()
-
-#bot.message_handler(content_types=["location","contact","venue","poll","sticker"])
