@@ -700,6 +700,49 @@ def handle_finance_text(msg):
         schedule_finalize(chat_id, day_key)
         return
         
+def handle_finance_edited_message(msg):
+    """
+    Обработка редактирования финансового сообщения.
+    Если сообщение связано с записью — обновляем запись.
+    """
+    if msg.content_type != "text":
+        return
+
+    chat_id = msg.chat.id
+    text = (msg.text or "").strip()
+    if not text:
+        return
+
+    store = get_chat_store(chat_id)
+
+    # ищем запись по origin_msg_id
+    target = None
+    for rec in store.get("records", []):
+        if rec.get("origin_msg_id") == msg.message_id:
+            target = rec
+            break
+
+    if not target:
+        return  # это не финансовое сообщение
+
+    try:
+        amount, note = split_amount_and_note(text)
+    except Exception:
+        return  # не похоже на финансы — игнор
+
+    # обновляем запись
+    target["amount"] = amount
+    target["note"] = note
+    target["timestamp"] = now_local().isoformat(timespec="seconds")
+
+    recalc_balance(chat_id)
+    save_data(data)
+    save_chat_json(chat_id)
+
+    day_key = store.get("current_view_day", today_key())
+    update_or_send_day_window(chat_id, day_key)
+    refresh_total_message_if_any(chat_id)
+        
 def _get_drive_service():
     if not GOOGLE_SERVICE_ACCOUNT_JSON or not GDRIVE_FOLDER_ID:
         return None
@@ -2259,6 +2302,8 @@ def update_or_send_day_window(chat_id: int, day_key: str):
     sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
     set_active_window_id(chat_id, day_key, sent.message_id)
 def is_finance_mode(chat_id: int) -> bool:
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        return True
     return chat_id in finance_active_chats
 def set_finance_mode(chat_id: int, enabled: bool):
     if enabled:
@@ -2332,11 +2377,21 @@ def send_info(chat_id: int, text: str):
 @bot.message_handler(commands=["ok"])
 def cmd_enable_finance(msg):
     chat_id = msg.chat.id
-    delete_message_later(chat_id, msg.message_id, 15)
+
+    # ⛔ только OWNER
+    if not OWNER_ID or str(chat_id) != str(OWNER_ID):
+        send_and_auto_delete(chat_id, "⛔ Команда доступна только владельцу.")
+        return
+
     set_finance_mode(chat_id, True)
     save_data(data)
-    send_info(chat_id, "🚀 Финансовый режим включён!\nОтправьте /start")
-    return
+
+    send_info(
+        chat_id,
+        "🚀 Финансовый режим активен.\n"
+        "Для владельца он всегда включён."
+    )
+    
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
     chat_id = msg.chat.id
@@ -2628,9 +2683,20 @@ def cmd_off_channel(msg):
     save_data(data)
     send_info(chat_id, "📡 Бэкап в канал выключен")
     delete_message_later(chat_id, msg.message_id, 15)
+    
 @bot.message_handler(commands=["autoadd_info", "autoadd.info"])
 def cmd_autoadd_info(msg):
     chat_id = msg.chat.id
+    # 🔒 OWNER всегда ON
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        store = get_chat_store(chat_id)
+        store.setdefault("settings", {})["auto_add"] = True
+        save_chat_json(chat_id)
+        send_and_auto_delete(
+            chat_id,
+            "ℹ️ Для владельца авто-добавление всегда включено."
+        )
+    return
     delete_message_later(chat_id, msg.message_id, 15)
     store = get_chat_store(chat_id)
     settings = store.setdefault("settings", {})
@@ -3095,31 +3161,31 @@ def handle_document(msg):
         "contact"
     ]
 )
+#bot.edited_message_handler(func=lambda m: True)
 def on_edited_message(msg):
-    """
-    Синхронизация редактирования:
-    - text → edit_message_text
-    - caption (photo/video/document) → edit_message_caption
-    """
+    # 1️⃣ СНАЧАЛА — ФИНАНСЫ
+    try:
+        handle_finance_edited_message(msg)
+    except Exception as e:
+        log_error(f"finance edit failed: {e}")
+
+    # 2️⃣ ПОТОМ — ПЕРЕСЫЛКА
     key = (msg.chat.id, msg.message_id)
     links = forward_map.get(key)
     if not links:
         return
 
-    text = msg.text
-    caption = msg.caption
-
     for dst_chat_id, dst_msg_id in links:
         try:
-            if text:
+            if msg.text is not None:
                 bot.edit_message_text(
-                    text=text,
+                    text=msg.text,
                     chat_id=dst_chat_id,
                     message_id=dst_msg_id
                 )
-            elif caption:
+            elif msg.caption is not None:
                 bot.edit_message_caption(
-                    caption=caption,
+                    caption=msg.caption,
                     chat_id=dst_chat_id,
                     message_id=dst_msg_id,
                     parse_mode=None
