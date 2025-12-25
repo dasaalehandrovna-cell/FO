@@ -663,7 +663,13 @@ def handle_finance_text(msg):
             send_and_auto_delete(chat_id, "❌ Не удалось разобрать сумму.")
             return
 
-        update_record_in_chat(chat_id, rid, amount, note)
+        add_record_to_chat(
+            chat_id,
+            amount,
+            note,
+            msg.from_user.id,
+            source_msg=msg
+        )
         store["edit_wait"] = None
         save_data(data)
         update_or_send_day_window(chat_id, day_key)
@@ -679,7 +685,13 @@ def handle_finance_text(msg):
             send_and_auto_delete(chat_id, "❌ Не удалось разобрать сумму.")
             return
 
-        add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+        add_record_to_chat(
+            chat_id,
+            amount,
+            note,
+            msg.from_user.id,
+            source_msg=msg
+        )
         store["edit_wait"] = None
         save_data(data)
         update_or_send_day_window(chat_id, day_key)
@@ -3188,15 +3200,25 @@ def on_edited_message(msg):
                     dst_msg_id
                 )
             # подпись под медиа
+            #elif msg.caption is not None:
             elif msg.caption is not None:
-                bot.edit_message_caption(
-                    msg.caption,
-                    dst_chat_id,
-                    dst_msg_id
+                try:
+                    bot.edit_message_caption(
+                    caption=msg.caption,
+                    chat_id=dst_chat_id,
+                    message_id=dst_msg_id
                 )
-        except Exception as e:
-            log_error(f"sync edit failed {dst_chat_id}:{dst_msg_id}: {e}")
+            except Exception:
+        # fallback: если caption нельзя отредактировать — отправляем новое
+                try:
+                    bot.send_message(
+                        dst_chat_id,
+                        msg.caption
+                    )
+                except Exception as e:
+                    log_error(f"caption fallback failed {dst_chat_id}: {e}")
             
+               
 @bot.message_handler(
     content_types=[
         "text", "photo", "video", "document",
