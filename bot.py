@@ -1136,31 +1136,25 @@ def clear_forward_all():
 
 def forward_any_message(source_chat_id: int, msg):
     try:
-        # 🔥 ВАЖНО: регистрируем чат у OWNER
-        try:
-            update_chat_info_from_message(msg)
-        except Exception:
-            pass
-
         targets = resolve_forward_targets(source_chat_id)
         if not targets:
             return
+
         for dst, mode in targets:
-            try:
-                sent = bot.copy_message(
-                    dst,
-                    source_chat_id,
-                    msg.message_id
-                )
-                key = (source_chat_id, msg.message_id)
-                forward_map.setdefault(key, []).append(
-                    (dst, sent.message_id)
-                )
-            except Exception as e:
-                log_error(f"forward_any_message to {dst}: {e}")
+            sent = bot.copy_message(
+                dst,
+                source_chat_id,
+                msg.message_id
+            )
+
+            key = (source_chat_id, msg.message_id)
+            forward_map.setdefault(key, []).append(
+                (dst, sent.message_id)
+            )
+
     except Exception as e:
         log_error(f"forward_any_message fatal: {e}")
-
+        
 # ===============================
 # UNIVERSAL SAFE FORWARD (ALL TYPES)
 # ===============================
@@ -2380,10 +2374,11 @@ def send_info(chat_id: int, text: str):
 def cmd_enable_finance(msg):
     chat_id = msg.chat.id
     delete_message_later(chat_id, msg.message_id, 15)
+
     set_finance_mode(chat_id, True)
     save_data(data)
+
     send_info(chat_id, "🚀 Финансовый режим включён!\nОтправьте /start")
-    return
 @bot.message_handler(commands=["start"])
 def cmd_start(msg):
     chat_id = msg.chat.id
@@ -3166,33 +3161,18 @@ def keep_alive_task():
             log_error(f"Keep-alive loop error: {e}")
         time.sleep(max(10, KEEP_ALIVE_INTERVAL_SECONDS))
         
-@bot.edited_message_handler(
-    content_types=[
-        "text",
-        "photo",
-        "video",
-        "document",
-        "animation",
-        "audio",
-        "voice",
-        "video_note",
-        "sticker",
-        "location",
-        "venue",
-        "contact"
-    ]
-)
+@bot.edited_message_handler(func=lambda m: True)
 def on_edited_message(msg):
     chat_id = msg.chat.id
 
-    # 1️⃣ ФИНАНСЫ — ТОЛЬКО SAFE EDIT
+    # 1️⃣ ФИНАНСЫ — редактирование записи
     try:
         if is_finance_mode(chat_id):
             handle_finance_edit(msg)
     except Exception as e:
         log_error(f"finance edit failed: {e}")
 
-    # 2️⃣ ПЕРЕСЫЛКА
+    # 2️⃣ ПЕРЕСЫЛКА — синхронизация
     key = (chat_id, msg.message_id)
     links = forward_map.get(key)
     if not links:
@@ -3200,12 +3180,14 @@ def on_edited_message(msg):
 
     for dst_chat_id, dst_msg_id in links:
         try:
+            # обычный текст
             if msg.text is not None:
                 bot.edit_message_text(
                     msg.text,
                     dst_chat_id,
                     dst_msg_id
                 )
+            # подпись под медиа
             elif msg.caption is not None:
                 bot.edit_message_caption(
                     msg.caption,
@@ -3214,7 +3196,41 @@ def on_edited_message(msg):
                 )
         except Exception as e:
             log_error(f"sync edit failed {dst_chat_id}:{dst_msg_id}: {e}")
+            
+@bot.message_handler(
+    content_types=[
+        "text", "photo", "video", "document",
+        "audio", "voice", "video_note",
+        "sticker", "location", "venue", "contact"
+    ]
+)
+def on_any_message(msg):
+    chat_id = msg.chat.id
 
+    # ✅ 1️⃣ ВСЕГДА регистрируем чат
+    try:
+        update_chat_info_from_message(msg)
+    except Exception:
+        pass
+
+    # 🔒 restore_mode — только блокируем финансы, НЕ пересылку
+    if restore_mode:
+        if msg.content_type != "document":
+            # ⚠️ финансы запрещены
+            pass
+        # ❗ НО пересылка РАЗРЕШЕНА
+
+    # 2️⃣ ФИНАНСЫ — ТОЛЬКО если включены
+    if msg.content_type == "text":
+        try:
+            if is_finance_mode(chat_id):
+                handle_finance_text(msg)
+        except Exception as e:
+            log_error(f"handle_finance_text error: {e}")
+
+    # 3️⃣ ПЕРЕСЫЛКА — ВСЕГДА
+    forward_any_message(chat_id, msg)
+    
 def start_keep_alive_thread():
     t = threading.Thread(target=keep_alive_task, daemon=True)
     t.start()
