@@ -3204,35 +3204,58 @@ def on_edited_message(msg):
                 log_error(f"edit text failed {dst_chat_id}: {e}")
 
         # ───── CAPTION (photo / video / doc) ─────
-        if msg.caption is not None:
-            try:
-                bot.edit_message_caption(
-                    chat_id=dst_chat_id,
-                    message_id=dst_msg_id,
+    # ───── CAPTION (photo / video / audio / doc) ─────
+if msg.caption is not None:
+    try:
+        bot.edit_message_caption(
+            chat_id=dst_chat_id,
+            message_id=dst_msg_id,
+            caption=msg.caption
+        )
+        continue
+    except Exception:
+        # ❗ Telegram запретил edit_caption → ПЕРЕСОЗДАЁМ МЕДИА
+        try:
+            bot.delete_message(dst_chat_id, dst_msg_id)
+        except Exception:
+            pass
+
+        try:
+            # повторно отправляем ИСХОДНОЕ медиа с новым caption
+            sent = None
+
+            if msg.photo:
+                sent = bot.send_photo(
+                    dst_chat_id,
+                    msg.photo[-1].file_id,
                     caption=msg.caption
                 )
-                continue
-            except Exception:
-                # ❗ Telegram запретил edit caption — fallback
-                try:
-                    # удаляем старое сообщение
-                    bot.delete_message(dst_chat_id, dst_msg_id)
-                except Exception:
-                    pass
+            elif msg.video:
+                sent = bot.send_video(
+                    dst_chat_id,
+                    msg.video.file_id,
+                    caption=msg.caption
+                )
+            elif msg.audio:
+                sent = bot.send_audio(
+                    dst_chat_id,
+                    msg.audio.file_id,
+                    caption=msg.caption
+                )
+            elif msg.document:
+                sent = bot.send_document(
+                    dst_chat_id,
+                    msg.document.file_id,
+                    caption=msg.caption
+                )
 
-                try:
-                    # отправляем новое сообщение с caption
-                    sent = bot.copy_message(
-                        chat_id=dst_chat_id,
-                        from_chat_id=chat_id,
-                        message_id=msg.message_id
-                    )
-                    # обновляем forward_map
-                    links.remove((dst_chat_id, dst_msg_id))
-                    links.append((dst_chat_id, sent.message_id))
-                except Exception as e:
-                    log_error(f"caption resend failed {dst_chat_id}: {e}")
-                                   
+            if sent:
+                links.remove((dst_chat_id, dst_msg_id))
+                links.append((dst_chat_id, sent.message_id))
+
+        except Exception as e:
+            log_error(f"media resend failed {dst_chat_id}: {e}")
+                                               
 @bot.message_handler(
     content_types=[
         "text", "photo", "video", "document",
