@@ -361,6 +361,132 @@ def save_chat_json(chat_id: int):
         log_info(f"Per-chat files saved for chat {chat_id}")
     except Exception as e:
         log_error(f"save_chat_json({chat_id}): {e}")
+        
+def restore_from_json(chat_id: int, path: str):
+    """
+    Восстановление из JSON.
+    Поддержка:
+      1) data.json (глобальный) — если внутри есть ключ "chats"
+      2) data_<chat_id>.json (пер-чат) — если внутри есть ключи "records"/"daily_records"
+    """
+    global data
+    payload = _load_json(path, None)
+    if not isinstance(payload, dict):
+        raise RuntimeError("JSON повреждён или пустой")
+
+    # 1) Глобальный data.json
+    if "chats" in payload and isinstance(payload.get("chats"), dict):
+        data = payload
+        # гарантируем структуру
+        base = default_data()
+        for k, v in base.items():
+            if k not in data:
+                data[k] = v
+
+        # восстановим finance_active_chats из data (если есть)
+        finance_active_chats.clear()
+        fac = data.get("finance_active_chats") or {}
+        if isinstance(fac, dict):
+            for cid, enabled in fac.items():
+                if enabled:
+                    try:
+                        finance_active_chats.add(int(cid))
+                    except Exception:
+                        pass
+
+        rebuild_global_records()
+        save_data(data)
+
+        # сохраним файлы всех чатов, чтобы синхронизировать data_<id>.json и csv
+        for cid_str in list(data.get("chats", {}).keys()):
+            try:
+                save_chat_json(int(cid_str))
+            except Exception as e:
+                log_error(f"restore_from_json: save_chat_json({cid_str}) failed: {e}")
+
+        export_global_csv(data)
+        log_info("restore_from_json: global data restored")
+        return
+
+    # 2) Пер-чат JSON: data_<chat_id>.json
+    # Ожидаем ключи как в save_chat_json()
+    if "records" in payload or "daily_records" in payload:
+        store = get_chat_store(chat_id)
+
+        store["records"] = payload.get("records", []) or []
+        store["daily_records"] = payload.get("daily_records", {}) or {}
+        store["next_id"] = int(payload.get("next_id", 1) or 1)
+        store["info"] = payload.get("info", store.get("info", {})) or store.get("info", {})
+        store["known_chats"] = payload.get("known_chats", store.get("known_chats", {})) or store.get("known_chats", {})
+
+        # пересобираем records из daily_records, если вдруг records пустой/битый
+        if not store["records"] and store["daily_records"]:
+            all_recs = []
+            for dk in sorted(store["daily_records"].keys()):
+                all_recs.extend(store["daily_records"][dk] or [])
+            store["records"] = all_recs
+
+        renumber_chat_records(chat_id)
+        recalc_balance(chat_id)
+        rebuild_global_records()
+
+        save_data(data)
+        save_chat_json(chat_id)
+        export_global_csv(data)
+
+        log_info(f"restore_from_json: chat {chat_id} restored from per-chat JSON")
+        return
+
+    raise RuntimeError("Неизвестный формат JSON (нет 'chats' и нет 'records/daily_records').")
+
+
+def restore_from_csv(chat_id: int, path: str):
+    """
+    Восстановление из CSV (пер-чат).
+    Ожидает колонки как у тебя в CSV:
+    chat_id,ID,short_id,timestamp,amount,note,owner,day_key
+    """
+    store = get_chat_store(chat_id)
+
+    daily = {}
+    records = []
+
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        r = csv.DictReader(f)
+        for row in r:
+            try:
+                dk = (row.get("day_key") or today_key()).strip()
+                amt = float(row.get("amount") or 0)
+                note = (row.get("note") or "").strip()
+                owner = row.get("owner") or ""
+                ts = (row.get("timestamp") or now_local().isoformat(timespec="seconds")).strip()
+
+                rec = {
+                    "id": int(row.get("ID") or 0) or 0,
+                    "short_id": row.get("short_id") or "",
+                    "timestamp": ts,
+                    "amount": amt,
+                    "note": note,
+                    "owner": owner,
+                }
+                daily.setdefault(dk, []).append(rec)
+                records.append(rec)
+            except Exception as e:
+                log_error(f"restore_from_csv row skip: {e}")
+
+    store["daily_records"] = daily
+    store["records"] = records
+
+    renumber_chat_records(chat_id)
+    recalc_balance(chat_id)
+    rebuild_global_records()
+
+    save_data(data)
+    save_chat_json(chat_id)
+    export_global_csv(data)
+
+    log_info(f"restore_from_csv: chat {chat_id} restored from CSV")
+
 def fmt_num(x):
     """
     Европейский формат вывода с обязательным знаком.
@@ -2863,24 +2989,39 @@ def reset_chat_data(chat_id: int):
 
 @bot.message_handler(content_types=["document"])
 def handle_document(msg):
-    global restore_mode
-    chat_id = msg.chat.id
+    global restore_mode, data
 
+    chat_id = msg.chat.id
     update_chat_info_from_message(msg)
 
     file = msg.document
     fname = (file.file_name or "").lower()
 
-    # 🔒 если НЕ в режиме восстановления — обычная пересылка
+    # ─────────────────────────────
+    # 🟢 НЕ В РЕЖИМЕ RESTORE → обычная пересылка
+    # ─────────────────────────────
     if not restore_mode:
         forward_any_message(chat_id, msg)
         return
 
-    # 🔑 режим восстановления
+    # ─────────────────────────────
+    # 🔒 В РЕЖИМЕ RESTORE — принимаем ТОЛЬКО JSON / CSV
+    # ─────────────────────────────
     if not (fname.endswith(".json") or fname.endswith(".csv")):
-        send_and_auto_delete(chat_id, "⚠️ Это не JSON / CSV файл.")
+        send_and_auto_delete(chat_id, "⚠️ В режиме восстановления принимаются только JSON / CSV.")
         return
 
+    # ─────────────────────────────
+    # 🔐 ГЛОБАЛЬНЫЙ data.json — ТОЛЬКО OWNER
+    # ─────────────────────────────
+    if fname == "data.json":
+        if not OWNER_ID or str(chat_id) != str(OWNER_ID):
+            send_and_auto_delete(chat_id, "⛔ data.json может восстановить только OWNER.")
+            return
+
+    # ─────────────────────────────
+    # ⬇️ СКАЧИВАЕМ ФАЙЛ
+    # ─────────────────────────────
     try:
         file_info = bot.get_file(file.file_id)
         raw = bot.download_file(file_info.file_path)
@@ -2889,14 +3030,23 @@ def handle_document(msg):
         return
 
     tmp_path = f"restore_{chat_id}_{fname}"
-    with open(tmp_path, "wb") as f:
-        f.write(raw)
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(raw)
+    except Exception as e:
+        send_and_auto_delete(chat_id, f"❌ Не удалось сохранить файл: {e}")
+        return
 
+    # ─────────────────────────────
+    # ♻️ ВОССТАНОВЛЕНИЕ
+    # ─────────────────────────────
     try:
         if fname.endswith(".json"):
             restore_from_json(chat_id, tmp_path)
-        elif fname.endswith(".csv"):
+            restored_what = "JSON"
+        else:
             restore_from_csv(chat_id, tmp_path)
+            restored_what = "CSV"
     except Exception as e:
         send_and_auto_delete(chat_id, f"❌ Ошибка восстановления: {e}")
         return
@@ -2906,15 +3056,29 @@ def handle_document(msg):
         except Exception:
             pass
 
+    # ─────────────────────────────
+    # 🧹 ПОСЛЕ ВОССТАНОВЛЕНИЯ
+    # ─────────────────────────────
     restore_mode = False
     cleanup_forward_links(chat_id)
 
-    send_info(chat_id, "✅ Данные восстановлены. Создаю новое окно…")
+    send_info(
+        chat_id,
+        f"✅ Восстановление завершено ({restored_what}).\n"
+        f"Создаю новое окно и пересчитываю итоги…"
+    )
 
     day_key = today_key()
     update_or_send_day_window(chat_id, day_key)
     refresh_total_message_if_any(chat_id)
-    
+
+    # OWNER — обновим ещё и owner-итоги
+    if OWNER_ID and str(chat_id) != str(OWNER_ID):
+        try:
+            refresh_total_message_if_any(int(OWNER_ID))
+        except Exception:
+            pass
+                
 @bot.edited_message_handler(
     content_types=[
         "text",
