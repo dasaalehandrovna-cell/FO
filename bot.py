@@ -17,6 +17,8 @@ from flask import Flask, request
 from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
 from googleapiclient.discovery import build
 from google.oauth2 import service_account
+from telebot.types import InputMediaDocument
+
 # -----------------------------
 # ⚙️ Конфигурация (жёстко прописанные значения для Render)
 # -----------------------------
@@ -2118,38 +2120,7 @@ def refresh_total_message_if_any(chat_id: int):
         save_data(data)
 def send_info(chat_id: int, text: str):
     send_and_auto_delete(chat_id, text, 10)
-    
-@bot.edited_message_handler(func=lambda m: True)
-def on_edited_message(msg):
-    """
-    Синхронизация редактирования текста / caption
-    для всех пересланных копий.
-    """
-    key = (msg.chat.id, msg.message_id)
-    links = forward_map.get(key)
-    if not links:
-        return
-
-    text = msg.text
-    caption = msg.caption
-
-    for dst, dst_msg_id in list(links):
-        try:
-            if text:
-                bot.edit_message_text(
-                    text,
-                    chat_id=dst,
-                    message_id=dst_msg_id
-                )
-            elif caption:
-                bot.edit_message_caption(
-                    caption,
-                    chat_id=dst,
-                    message_id=dst_msg_id
-                )
-        except Exception as e:
-            log_error(f"sync edit failed {dst}:{dst_msg_id}: {e}")
-            
+                
 @bot.message_handler(commands=["ok"])
 def cmd_enable_finance(msg):
     chat_id = msg.chat.id
@@ -2616,6 +2587,7 @@ def rebuild_global_records():
         all_recs.extend(st.get("records", []))
     data["records"] = all_recs
     data["overall_balance"] = sum(r.get("amount", 0) for r in all_recs)
+
 def force_backup_to_chat(chat_id: int):
     try:
         save_chat_json(chat_id)
@@ -2627,17 +2599,6 @@ def force_backup_to_chat(chat_id: int):
         meta = _load_chat_backup_meta()
         msg_key = f"msg_chat_{chat_id}"
         ts_key = f"timestamp_chat_{chat_id}"
-        old_mid = meta.get(msg_key)
-        last_ts = meta.get(ts_key)
-
-        # 🔄 Новый файл после смены дня
-        if old_mid and last_ts:
-            try:
-                prev_dt = datetime.fromisoformat(last_ts)
-                if prev_dt.date() != now_local().date():
-                    old_mid = None
-            except Exception as e:
-                log_error(f"force_backup_to_chat: bad timestamp for chat {chat_id}: {e}")
 
         chat_title = _get_chat_title_for_backup(chat_id)
         caption = (
@@ -2646,32 +2607,29 @@ def force_backup_to_chat(chat_id: int):
         )
 
         with open(json_path, "rb") as f:
-            data = f.read()
-            if not data:
+            data_bytes = f.read()
+            if not data_bytes:
                 log_error("force_backup_to_chat: empty JSON")
                 return
-            base = os.path.basename(json_path)
-            name_no_ext, dot, ext = base.partition(".")
-            suffix = get_chat_name_for_filename(chat_id)
-            if suffix:
-                file_name = suffix
-            else:
-                file_name = name_no_ext
-            if dot:
-                file_name += f".{ext}"
-            buf = io.BytesIO(data)
-            buf.name = file_name
 
-        
-            except Exception as e:
-                log_error(f"force_backup_to_chat: edit failed: {e}")
+        base = os.path.basename(json_path)
+        name_no_ext, dot, ext = base.partition(".")
+        suffix = get_chat_name_for_filename(chat_id)
+        file_name = suffix if suffix else name_no_ext
+        if dot:
+            file_name += f".{ext}"
+
+        buf = io.BytesIO(data_bytes)
+        buf.name = file_name
 
         sent = bot.send_document(chat_id, buf, caption=caption)
         meta[msg_key] = sent.message_id
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_chat_backup_meta(meta)
+
     except Exception as e:
         log_error(f"force_backup_to_chat({chat_id}): {e}")
+
 def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int | None = None):
     """
     Для OWNER_ID: одно сообщение, в котором:
@@ -2724,7 +2682,7 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         # Пытаемся обновить старое окно, если оно есть
         if mid:
             try:
-                media = types.InputMediaDocument(buf, caption=txt, parse_mode="HTML")
+                media = InputMediaDocument(buf, caption=txt, parse_mode="HTML")
                 bot.edit_message_media(
                     chat_id=chat_id,
                     message_id=mid,
