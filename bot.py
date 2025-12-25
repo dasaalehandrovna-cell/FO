@@ -1983,9 +1983,17 @@ def on_callback(call):
             return
     except Exception as e:
         log_error(f"on_callback error: {e}")
-def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
+        
+def add_record_to_chat(
+    chat_id: int,
+    amount: float,
+    note: str,
+    owner: int,
+    source_msg=None
+):
     store = get_chat_store(chat_id)
     rid = store.get("next_id", 1)
+
     rec = {
         "id": rid,
         "short_id": f"R{rid}",
@@ -1993,15 +2001,19 @@ def add_record_to_chat(chat_id: int, amount: int, note: str, owner):
         "amount": amount,
         "note": note,
         "owner": owner,
-        "msg_id": msg.message_id,
-        "origin_msg_id": msg.message_id,
+        "msg_id": source_msg.message_id if source_msg else None,
+        "origin_msg_id": source_msg.message_id if source_msg else None,
     }
-    data.setdefault("records", []).append(rec)
+
     store.setdefault("records", []).append(rec)
     store.setdefault("daily_records", {}).setdefault(today_key(), []).append(rec)
-    renumber_chat_records(chat_id)
-    store["balance"] = sum(x["amount"] for x in store["records"])
-    data["overall_balance"] = sum(x["amount"] for x in data["records"])
+
+    store["next_id"] = rid + 1
+    store["balance"] = sum(r["amount"] for r in store["records"])
+
+    data.setdefault("records", []).append(rec)
+    data["overall_balance"] = sum(r["amount"] for r in data["records"])
+
     save_data(data)
     save_chat_json(chat_id)
     export_global_csv(data)
@@ -2849,12 +2861,27 @@ def reset_chat_data(chat_id: int):
     except Exception as e:
         log_error(f"reset_chat_data({chat_id}): {e}")
 
-@bot.edited_message_handler(func=lambda m: True)
+@bot.edited_message_handler(
+    content_types=[
+        "text",
+        "photo",
+        "video",
+        "document",
+        "animation",
+        "audio",
+        "voice",
+        "video_note",
+        "sticker",
+        "location",
+        "venue",
+        "contact"
+    ]
+)
 def on_edited_message(msg):
     """
-    Синхронизация редактирования.
-    Пользователь отредактировал сообщение →
-    бот редактирует пересланные копии.
+    Синхронизация редактирования:
+    - text → edit_message_text
+    - caption (photo/video/document) → edit_message_caption
     """
     key = (msg.chat.id, msg.message_id)
     links = forward_map.get(key)
@@ -2876,11 +2903,12 @@ def on_edited_message(msg):
                 bot.edit_message_caption(
                     caption=caption,
                     chat_id=dst_chat_id,
-                    message_id=dst_msg_id
+                    message_id=dst_msg_id,
+                    parse_mode=None
                 )
         except Exception as e:
             log_error(f"sync edit failed {dst_chat_id}:{dst_msg_id}: {e}")
-
+            
 def cleanup_forward_links(chat_id: int):
     """
     Удаляет все связи пересылки для чата.
