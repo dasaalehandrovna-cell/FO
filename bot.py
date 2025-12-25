@@ -3211,12 +3211,13 @@ def keep_alive_task():
             log_error(f"Keep-alive loop error: {e}")
         time.sleep(max(10, KEEP_ALIVE_INTERVAL_SECONDS))
         
-@bot.message_handler(
+@bot.edited_message_handler(
     content_types=[
         "text",
         "photo",
         "video",
         "document",
+        "animation",
         "audio",
         "voice",
         "video_note",
@@ -3226,57 +3227,35 @@ def keep_alive_task():
         "contact"
     ]
 )
-def on_any_message(msg):
-    chat_id = msg.chat.id
-
-    if restore_mode and msg.content_type != "document":
-        return
-
-    # 1️⃣ финансы — ТОЛЬКО новые сообщения
-    if msg.content_type == "text":
-        try:
-            handle_finance_text(msg)
-        except Exception as e:
-            log_error(f"handle_finance_text error: {e}")
-
-    # 2️⃣ пересылка
-    forward_any_message(chat_id, msg)
-    
-@bot.edited_message_handler(
-    content_types=["text"]
-)
 def on_edited_message(msg):
     chat_id = msg.chat.id
 
-    # 1️⃣ ФИНАНСЫ (редактирование)
+    # 1️⃣ ФИНАНСЫ — ТОЛЬКО SAFE EDIT
     try:
         if is_finance_mode(chat_id):
-            handle_finance_text(msg)
+            handle_finance_edit(msg)
     except Exception as e:
-        log_error(f"handle_finance_text (edited) error: {e}")
+        log_error(f"finance edit failed: {e}")
 
-    # 2️⃣ СИНХРОНИЗАЦИЯ ПЕРЕСЫЛКИ
-    key = (msg.chat.id, msg.message_id)
+    # 2️⃣ ПЕРЕСЫЛКА
+    key = (chat_id, msg.message_id)
     links = forward_map.get(key)
     if not links:
         return
 
-    text = msg.text
-    caption = msg.caption
-
     for dst_chat_id, dst_msg_id in links:
         try:
-            if text:
+            if msg.text is not None:
                 bot.edit_message_text(
-                    text=text,
-                    chat_id=dst_chat_id,
-                    message_id=dst_msg_id
+                    msg.text,
+                    dst_chat_id,
+                    dst_msg_id
                 )
-            elif caption:
+            elif msg.caption is not None:
                 bot.edit_message_caption(
-                    caption=caption,
-                    chat_id=dst_chat_id,
-                    message_id=dst_msg_id
+                    msg.caption,
+                    dst_chat_id,
+                    dst_msg_id
                 )
         except Exception as e:
             log_error(f"sync edit failed {dst_chat_id}:{dst_msg_id}: {e}")
