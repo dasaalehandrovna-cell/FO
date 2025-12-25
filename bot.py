@@ -3177,48 +3177,62 @@ def keep_alive_task():
 def on_edited_message(msg):
     chat_id = msg.chat.id
 
-    # 1️⃣ ФИНАНСЫ — редактирование записи
+    # 1️⃣ Финансы
     try:
         if is_finance_mode(chat_id):
             handle_finance_edit(msg)
     except Exception as e:
         log_error(f"finance edit failed: {e}")
 
-    # 2️⃣ ПЕРЕСЫЛКА — синхронизация
+    # 2️⃣ Пересылка — синхронизация
     key = (chat_id, msg.message_id)
     links = forward_map.get(key)
     if not links:
         return
 
-    for dst_chat_id, dst_msg_id in links:
-        try:
-            # обычный текст
-            if msg.text is not None:
+    for dst_chat_id, dst_msg_id in list(links):
+        # ───── TEXT ─────
+        if msg.text is not None:
+            try:
                 bot.edit_message_text(
                     msg.text,
                     dst_chat_id,
                     dst_msg_id
                 )
-            # подпись под медиа
-            #elif msg.caption is not None:
-            elif msg.caption is not None:
-                try:
-                    bot.edit_message_caption(
-                    caption=msg.caption,
+                continue
+            except Exception as e:
+                log_error(f"edit text failed {dst_chat_id}: {e}")
+
+        # ───── CAPTION (photo / video / doc) ─────
+        if msg.caption is not None:
+            try:
+                bot.edit_message_caption(
                     chat_id=dst_chat_id,
-                    message_id=dst_msg_id
+                    message_id=dst_msg_id,
+                    caption=msg.caption
                 )
+                continue
             except Exception:
-        # fallback: если caption нельзя отредактировать — отправляем новое
+                # ❗ Telegram запретил edit caption — fallback
                 try:
-                    bot.send_message(
-                        dst_chat_id,
-                        msg.caption
+                    # удаляем старое сообщение
+                    bot.delete_message(dst_chat_id, dst_msg_id)
+                except Exception:
+                    pass
+
+                try:
+                    # отправляем новое сообщение с caption
+                    sent = bot.copy_message(
+                        chat_id=dst_chat_id,
+                        from_chat_id=chat_id,
+                        message_id=msg.message_id
                     )
+                    # обновляем forward_map
+                    links.remove((dst_chat_id, dst_msg_id))
+                    links.append((dst_chat_id, sent.message_id))
                 except Exception as e:
-                    log_error(f"caption fallback failed {dst_chat_id}: {e}")
-            
-               
+                    log_error(f"caption resend failed {dst_chat_id}: {e}")
+                                   
 @bot.message_handler(
     content_types=[
         "text", "photo", "video", "document",
