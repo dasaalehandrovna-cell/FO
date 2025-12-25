@@ -2624,31 +2624,29 @@ def force_backup_to_chat(chat_id: int):
 
         with open(json_path, "rb") as f:
             data = f.read()
-            if not data:
-                log_error("force_backup_to_chat: empty JSON")
-                return
-            base = os.path.basename(json_path)
-            name_no_ext, dot, ext = base.partition(".")
-            suffix = get_chat_name_for_filename(chat_id)
-            if suffix:
-                file_name = suffix
-            else:
-                file_name = name_no_ext
-            if dot:
-                file_name += f".{ext}"
-            buf = io.BytesIO(data)
-            buf.name = file_name
 
-        
-            except Exception as e:
-                log_error(f"force_backup_to_chat: edit failed: {e}")
+        if not data:
+            log_error("force_backup_to_chat: empty JSON")
+            return
+
+        base = os.path.basename(json_path)
+        name_no_ext, dot, ext = base.partition(".")
+        suffix = get_chat_name_for_filename(chat_id)
+        file_name = suffix if suffix else name_no_ext
+        if dot:
+            file_name += f".{ext}"
+
+        buf = io.BytesIO(data)
+        buf.name = file_name
 
         sent = bot.send_document(chat_id, buf, caption=caption)
         meta[msg_key] = sent.message_id
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_chat_backup_meta(meta)
+
     except Exception as e:
         log_error(f"force_backup_to_chat({chat_id}): {e}")
+        
 def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int | None = None):
     """
     Для OWNER_ID: одно сообщение, в котором:
