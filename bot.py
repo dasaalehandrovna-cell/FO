@@ -3255,39 +3255,7 @@ def on_edited_message(msg):
                 except Exception as e:
                     log_error(f"media resend failed {dst_chat_id}: {e}")
                                                                    
-@bot.message_handler(
-    content_types=[
-        "text", "photo", "video", "document",
-        "audio", "voice", "video_note",
-        "sticker", "location", "venue", "contact"
-    ]
-)
-def on_any_message(msg):
-    chat_id = msg.chat.id
 
-    # ✅ 1️⃣ ВСЕГДА регистрируем чат
-    try:
-        update_chat_info_from_message(msg)
-    except Exception:
-        pass
-
-    # 🔒 restore_mode — только блокируем финансы, НЕ пересылку
-    if restore_mode:
-        if msg.content_type != "document":
-            # ⚠️ финансы запрещены
-            pass
-        # ❗ НО пересылка РАЗРЕШЕНА
-
-    # 2️⃣ ФИНАНСЫ — ТОЛЬКО если включены
-    if msg.content_type == "text":
-        try:
-            if is_finance_mode(chat_id):
-                handle_finance_text(msg)
-        except Exception as e:
-            log_error(f"handle_finance_text error: {e}")
-
-    # 3️⃣ ПЕРЕСЫЛКА — ВСЕГДА
-    forward_any_message(chat_id, msg)
     
 def start_keep_alive_thread():
     t = threading.Thread(target=keep_alive_task, daemon=True)
