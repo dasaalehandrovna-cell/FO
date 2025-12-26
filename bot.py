@@ -631,7 +631,7 @@ def looks_like_amount(text):
     except:
         return False
 @bot.message_handler(
-    func=lambda m: not (m.text and m.text.startswith("/"))
+    func=lambda m: not (m.text and m.text.startswith("/")),
     content_types=[
         "text", "photo", "video", "document",
         "audio", "voice", "video_note",
