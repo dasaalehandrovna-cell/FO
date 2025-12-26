@@ -746,8 +746,8 @@ def handle_finance_text(msg):
       
 def handle_finance_edit(msg):
     """
-    Безопасное редактирование финансовой записи через edit сообщения.
-    Работает ТОЛЬКО если сообщение связано с записью.
+    Перехват редактирования финансового сообщения.
+    Если сообщение связано с записью — обновляем сумму и баланс.
     """
     if msg.content_type != "text":
         return
@@ -759,7 +759,6 @@ def handle_finance_edit(msg):
 
     store = get_chat_store(chat_id)
 
-    # 1️⃣ ищем запись по origin_msg_id
     target = None
     for rec in store.get("records", []):
         if rec.get("origin_msg_id") == msg.message_id:
@@ -769,26 +768,24 @@ def handle_finance_edit(msg):
     if not target:
         return  # это не финансовое сообщение
 
-    # 2️⃣ парсим сумму и комментарий
     try:
         amount, note = split_amount_and_note(text)
     except Exception:
-        return  # если пользователь отредактировал "в мусор" — игнор
+        return  # если пользователь отредактировал в мусор — игнор
 
-    # 3️⃣ обновляем СУЩЕСТВУЮ запись
+    # 🔁 обновляем запись
     target["amount"] = amount
     target["note"] = note
     target["timestamp"] = now_local().isoformat(timespec="seconds")
 
-    # 4️⃣ пересчёт и сохранение
+    # 🔄 пересчёт
     recalc_balance(chat_id)
     save_data(data)
     save_chat_json(chat_id)
 
-    day_key = get_chat_store(chat_id).get("current_view_day", today_key())
+    day_key = store.get("current_view_day", today_key())
     update_or_send_day_window(chat_id, day_key)
-    refresh_total_message_if_any(chat_id)
-    
+        
 def _get_drive_service():
     if not GOOGLE_SERVICE_ACCOUNT_JSON or not GDRIVE_FOLDER_ID:
         return None
@@ -3233,6 +3230,12 @@ def on_edited_message(msg):
                     chat_id=dst_chat_id,
                     message_id=dst_msg_id
                 )
+            # 💰 финансы
+            try:
+                if is_finance_mode(chat_id):
+                    handle_finance_edit(msg)
+            #except Exception as e:
+        #log_error(f"finance edit error: {e}")
             except Exception as e:
                 log_error(f"edit forward failed {dst_chat_id}:{dst_msg_id}: {e}")                                          
 
