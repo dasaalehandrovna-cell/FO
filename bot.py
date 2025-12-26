@@ -782,7 +782,7 @@ def handle_finance_edit(msg):
             break
 
     if not target:
-        return  # это не финансовое сообщение
+        return False # это не финансовое сообщение
 
     try:
         amount, note = split_amount_and_note(text)
@@ -801,7 +801,9 @@ def handle_finance_edit(msg):
 
     day_key = store.get("current_view_day", today_key())
     update_or_send_day_window(chat_id, day_key)
-        
+    #update_or_send_day_window(chat_id, day_key)
+    return True
+    
 def _get_drive_service():
     if not GOOGLE_SERVICE_ACCOUNT_JSON or not GDRIVE_FOLDER_ID:
         return None
@@ -2357,7 +2359,10 @@ def update_or_send_day_window(chat_id: int, day_key: str):
     sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
     set_active_window_id(chat_id, day_key, sent.message_id)
 def is_finance_mode(chat_id: int) -> bool:
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        return True
     return chat_id in finance_active_chats
+
 def set_finance_mode(chat_id: int, enabled: bool):
     if enabled:
         finance_active_chats.add(chat_id)
@@ -3248,7 +3253,16 @@ def on_edited_message(msg):
     if not text:
         return
 
-    # 🔁 ПЕРЕСЫЛКА — если есть связи
+    # 💰 ФИНАНСЫ — ПЕРВЫМ ДЕЛОМ
+    try:
+        if is_finance_mode(chat_id):
+            handled = handle_finance_edit(msg)
+            if handled:
+                return
+    except Exception as e:
+        log_error(f"finance edit error: {e}")
+
+    # 🔁 ПЕРЕСЫЛКА — ПОТОМ
     if key in forward_map:
         for dst_chat_id, dst_msg_id in forward_map.get(key, []):
             try:
@@ -3268,14 +3282,7 @@ def on_edited_message(msg):
                     log_error(
                         f"edit forward failed {dst_chat_id}:{dst_msg_id}: {e}"
                     )
-
-    # 💰 ФИНАНСЫ — ОДИН РАЗ
-    try:
-        if is_finance_mode(chat_id):
-            handle_finance_edit(msg)
-    except Exception as e:
-        log_error(f"finance edit error: {e}")
-        
+                            
 def start_keep_alive_thread():
     t = threading.Thread(target=keep_alive_task, daemon=True)
     t.start()
@@ -3299,11 +3306,18 @@ def set_webhook():
     time.sleep(0.5)
     bot.set_webhook(url=wh_url)
     log_info(f"Webhook установлен: {wh_url}")
+    
 def main():
     global data
     restored = restore_from_gdrive_if_needed()
     data = load_data()
     data["forward_rules"] = load_forward_rules()
+    # ✅ OWNER — всегда активен
+    if OWNER_ID:
+        try:
+            finance_active_chats.add(int(OWNER_ID))
+        except Exception:
+            pass
     log_info(f"Данные загружены. Версия бота: {VERSION}")
     set_webhook()
     start_keep_alive_thread()
