@@ -3209,37 +3209,38 @@ def on_edited_message(msg):
     chat_id = msg.chat.id
     key = (chat_id, msg.message_id)
 
-    if key not in forward_map:
-        return
-
     text = msg.text or msg.caption
     if not text:
         return
 
-    for dst_chat_id, dst_msg_id in forward_map.get(key, []):
-        try:
-            bot.edit_message_text(
-                text,
-                chat_id=dst_chat_id,
-                message_id=dst_msg_id
-            )
-        except Exception:
+    # 🔁 ПЕРЕСЫЛКА — если есть связи
+    if key in forward_map:
+        for dst_chat_id, dst_msg_id in forward_map.get(key, []):
             try:
-                bot.edit_message_caption(
-                    caption=text,
+                bot.edit_message_text(
+                    text,
                     chat_id=dst_chat_id,
                     message_id=dst_msg_id
                 )
-            # 💰 финансы
-            try:
-                if is_finance_mode(chat_id):
-                    handle_finance_edit(msg)
-            #except Exception as e:
-        #log_error(f"finance edit error: {e}")
-            except Exception as e:
-                log_error(f"edit forward failed {dst_chat_id}:{dst_msg_id}: {e}")                                          
+            except Exception:
+                try:
+                    bot.edit_message_caption(
+                        caption=text,
+                        chat_id=dst_chat_id,
+                        message_id=dst_msg_id
+                    )
+                except Exception as e:
+                    log_error(
+                        f"edit forward failed {dst_chat_id}:{dst_msg_id}: {e}"
+                    )
 
-    
+    # 💰 ФИНАНСЫ — ОДИН РАЗ
+    try:
+        if is_finance_mode(chat_id):
+            handle_finance_edit(msg)
+    except Exception as e:
+        log_error(f"finance edit error: {e}")
+        
 def start_keep_alive_thread():
     t = threading.Thread(target=keep_alive_task, daemon=True)
     t.start()
