@@ -3205,88 +3205,36 @@ def keep_alive_task():
             log_error(f"Keep-alive loop error: {e}")
         time.sleep(max(10, KEEP_ALIVE_INTERVAL_SECONDS))
         
-@bot.edited_message_handler(func=lambda m: True)
+@bot.edited_message_handler(
+    content_types=["text", "photo", "video", "document", "audio"]
+)
 def on_edited_message(msg):
     chat_id = msg.chat.id
-
-    # 1️⃣ Финансы
-    try:
-        if is_finance_mode(chat_id):
-            handle_finance_edit(msg)
-    except Exception as e:
-        log_error(f"finance edit failed: {e}")
-
-    # 2️⃣ Пересылка — синхронизация
     key = (chat_id, msg.message_id)
-    links = forward_map.get(key)
-    if not links:
+
+    if key not in forward_map:
         return
 
-    for dst_chat_id, dst_msg_id in list(links):
+    text = msg.text or msg.caption
+    if not text:
+        return
 
-        # ───── TEXT ─────
-        if msg.text is not None:
-            try:
-                bot.edit_message_text(
-                    msg.text,
-                    dst_chat_id,
-                    dst_msg_id
-                )
-                continue
-            except Exception as e:
-                log_error(f"edit text failed {dst_chat_id}: {e}")
-
-        # ───── CAPTION (photo / video / audio / doc) ─────
-        if msg.caption is not None:
+    for dst_chat_id, dst_msg_id in forward_map.get(key, []):
+        try:
+            bot.edit_message_text(
+                text,
+                chat_id=dst_chat_id,
+                message_id=dst_msg_id
+            )
+        except Exception:
             try:
                 bot.edit_message_caption(
+                    caption=text,
                     chat_id=dst_chat_id,
-                    message_id=dst_msg_id,
-                    caption=msg.caption
+                    message_id=dst_msg_id
                 )
-                continue
-            except Exception:
-                # ❗ Telegram запретил edit_caption → пересоздаём сообщение
-                try:
-                    bot.delete_message(dst_chat_id, dst_msg_id)
-                except Exception:
-                    pass
-
-                try:
-                    sent = None
-
-                    if msg.photo:
-                        sent = bot.send_photo(
-                            dst_chat_id,
-                            msg.photo[-1].file_id,
-                            caption=msg.caption
-                        )
-                    elif msg.video:
-                        sent = bot.send_video(
-                            dst_chat_id,
-                            msg.video.file_id,
-                            caption=msg.caption
-                        )
-                    elif msg.audio:
-                        sent = bot.send_audio(
-                            dst_chat_id,
-                            msg.audio.file_id,
-                            caption=msg.caption
-                        )
-                    elif msg.document:
-                        sent = bot.send_document(
-                            dst_chat_id,
-                            msg.document.file_id,
-                            caption=msg.caption
-                        )
-
-                    if sent:
-                        links.remove((dst_chat_id, dst_msg_id))
-                        links.append((dst_chat_id, sent.message_id))
-
-                except Exception as e:
-                    log_error(f"media resend failed {dst_chat_id}: {e}")
-                                                                   
+            except Exception as e:
+                log_error(f"edit forward failed {dst_chat_id}:{dst_msg_id}: {e}")                                          
 
     
 def start_keep_alive_thread():
