@@ -307,6 +307,9 @@ def get_chat_store(chat_id: int) -> dict:
             },
         }
     )
+    # ✅ OWNER — авто-добавление всегда включено
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        store["settings"]["auto_add"] = True
     if "known_chats" not in store:
         store["known_chats"] = {}
     return store
@@ -2415,6 +2418,15 @@ def send_info(chat_id: int, text: str):
 @bot.message_handler(commands=["ok"])
 def cmd_enable_finance(msg):
     chat_id = msg.chat.id
+    # ❌ OWNER — команда не нужна
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        delete_message_later(chat_id, msg.message_id, 5)
+        send_and_auto_delete(
+            chat_id,
+            "ℹ️ Для владельца финансовый режим и авто-добавление включены всегда.",
+            10
+        )
+        return
     delete_message_later(chat_id, msg.message_id, 15)
 
     set_finance_mode(chat_id, True)
