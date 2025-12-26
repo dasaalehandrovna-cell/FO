@@ -266,6 +266,14 @@ def load_data():
                 finance_active_chats.add(int(cid))
             except Exception:
                 pass
+
+# ✅ OWNER — финансовый режим всегда включён
+    if OWNER_ID:
+        try:
+            finance_active_chats.add(int(OWNER_ID))
+        except Exception:
+            pass
+
     return d
 def save_data(d):
     fac = {}
@@ -643,6 +651,10 @@ def looks_like_amount(text):
 )
 def on_any_message(msg):
     chat_id = msg.chat.id
+
+    # ✅ OWNER — гарантируем включённый финансовый режим
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        finance_active_chats.add(chat_id)
 
     # ✅ 1️⃣ ВСЕГДА регистрируем чат
     try:
@@ -2349,6 +2361,7 @@ def is_finance_mode(chat_id: int) -> bool:
 def set_finance_mode(chat_id: int, enabled: bool):
     if enabled:
         finance_active_chats.add(chat_id)
+        
     else:
         finance_active_chats.discard(chat_id)
 def require_finance(chat_id: int) -> bool:
@@ -2727,6 +2740,15 @@ def cmd_off_channel(msg):
 @bot.message_handler(commands=["autoadd_info", "autoadd.info"])
 def cmd_autoadd_info(msg):
     chat_id = msg.chat.id
+    # ❌ OWNER — авто-добавление всегда включено
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        send_and_auto_delete(
+            chat_id,
+            "⚙️ Авто-добавление у владельца ВСЕГДА включено.",
+            10
+        )
+    return
+    
     delete_message_later(chat_id, msg.message_id, 15)
     store = get_chat_store(chat_id)
     settings = store.setdefault("settings", {})
