@@ -761,17 +761,13 @@ def handle_finance_text(msg):
         return
       
 def handle_finance_edit(msg):
-    """
-    Перехват редактирования финансового сообщения.
-    Если сообщение связано с записью — обновляем сумму и баланс.
-    """
     if msg.content_type != "text":
-        return
+        return False
 
     chat_id = msg.chat.id
     text = (msg.text or "").strip()
     if not text:
-        return
+        return False
 
     store = get_chat_store(chat_id)
 
@@ -782,26 +778,28 @@ def handle_finance_edit(msg):
             break
 
     if not target:
-        return False # это не финансовое сообщение
+        return False  # ⬅️ важно: ЯВНО False
 
     try:
         amount, note = split_amount_and_note(text)
     except Exception:
-        return  # если пользователь отредактировал в мусор — игнор
+        # ⬇️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
+        # Это было финансовое сообщение, но формат плохой —
+        # значит мы ПЕРЕХВАТИЛИ редактирование, но не обновляем данные
+        log_info("finance edit ignored: bad format")
+        return True
 
-    # 🔁 обновляем запись
     target["amount"] = amount
     target["note"] = note
     target["timestamp"] = now_local().isoformat(timespec="seconds")
 
-    # 🔄 пересчёт
     recalc_balance(chat_id)
     save_data(data)
     save_chat_json(chat_id)
 
     day_key = store.get("current_view_day", today_key())
     update_or_send_day_window(chat_id, day_key)
-    #update_or_send_day_window(chat_id, day_key)
+
     return True
     
 def _get_drive_service():
