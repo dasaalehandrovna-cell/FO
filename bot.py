@@ -782,10 +782,11 @@ def handle_finance_edit(msg):
     try:
         amount, note = split_amount_and_note(text)
 
-# 🔥 ВАЖНО: если исходная запись была расходом — сохраняем знак
+        # 🔥 ВАЖНО: если исходная запись была расходом — сохраняем знак
         if target.get("amount", 0) < 0 and amount > 0:
             amount = -amount
-            except Exception:
+
+    except Exception:
         log_info("[EDIT-FIN] bad format, ignored")
         return True  # edit перехвачен, но данных нет
 
@@ -800,13 +801,14 @@ def handle_finance_edit(msg):
             if r.get("id") == target.get("id"):
                 r.update(target)
 
+    # пересчитываем баланс сразу
+    store["balance"] = sum(r["amount"] for r in store.get("records", []))
+
     log_info(
         f"[EDIT-FIN] updated record R{target['id']} "
         f"amount={amount} note={note}"
     )
-    store["balance"] = sum(r["amount"] for r in store.get("records", []))
     return True
-
 def _get_drive_service():
     if not GOOGLE_SERVICE_ACCOUNT_JSON or not GDRIVE_FOLDER_ID:
         return None
