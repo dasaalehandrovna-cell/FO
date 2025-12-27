@@ -799,7 +799,7 @@ def handle_finance_edit(msg):
     # обновляем ОСНОВНУЮ запись
     target["amount"] = amount
     target["note"] = note
-    target["timestamp"] = now_local().isoformat(timespec="seconds")
+    #target["timestamp"] = now_local().isoformat(timespec="seconds")
 
     # 🔥 ОБЯЗАТЕЛЬНО: обновляем daily_records
     for day, arr in store.get("daily_records", {}).items():
