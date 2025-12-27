@@ -3212,7 +3212,6 @@ def cleanup_forward_links(chat_id: int):
         if key[0] == chat_id:
             del forward_map[key]
             
-@bot.message_handler(content_types=["delet
 KEEP_ALIVE_SEND_TO_OWNER = False
 def keep_alive_task():
     while True:
