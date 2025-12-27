@@ -783,18 +783,25 @@ def handle_finance_edit(msg):
         amount, note = split_amount_and_note(text)
     except Exception:
         log_info("[EDIT-FIN] bad format, ignored")
-        return True  # ⬅️ важно: мы перехватили edit
+        return True  # edit перехвачен, но данных нет
 
+    # обновляем ОСНОВНУЮ запись
     target["amount"] = amount
     target["note"] = note
     target["timestamp"] = now_local().isoformat(timespec="seconds")
+
+    # 🔥 ОБЯЗАТЕЛЬНО: обновляем daily_records
+    for day, arr in store.get("daily_records", {}).items():
+        for r in arr:
+            if r.get("id") == target.get("id"):
+                r.update(target)
 
     log_info(
         f"[EDIT-FIN] updated record R{target['id']} "
         f"amount={amount} note={note}"
     )
     return True
-    
+
 def _get_drive_service():
     if not GOOGLE_SERVICE_ACCOUNT_JSON or not GDRIVE_FOLDER_ID:
         return None
