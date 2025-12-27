@@ -3233,43 +3233,44 @@ def keep_alive_task():
     content_types=["text", "photo", "video", "document", "audio"]
 )
 def on_edited_message(msg):
-    log_info(f"EDIT EVENT: chat={msg.chat.id} mid={msg.message_id} type={msg.content_type}")
     chat_id = msg.chat.id
+
+    # 1️⃣ Финансовое редактирование (ГЛАВНОЕ ИСПРАВЛЕНИЕ)
+    try:
+        if is_finance_mode(chat_id):
+            edited = handle_finance_edit(msg)
+            if edited:
+                day_key = get_day_key_from_message(msg)
+                schedule_finalize(chat_id, day_key)
+    except Exception as e:
+        log_error(f"finance edit failed: {e}")
+
+    # 2️⃣ Пересылка (НЕ ТРОГАЕМ ЛОГИКУ)
     key = (chat_id, msg.message_id)
+    links = forward_map.get(key)
+    if not links:
+        return
 
     text = msg.text or msg.caption
     if not text:
         return
 
-    # 💰 ФИНАНСЫ — ПЕРВЫМ ДЕЛОМ
-    try:
-        if is_finance_mode(chat_id):
-            handled = handle_finance_edit(msg)
-            if handled:
-                return
-    except Exception as e:
-        log_error(f"finance edit error: {e}")
-
-    # 🔁 ПЕРЕСЫЛКА — ПОТОМ
-    if key in forward_map:
-        for dst_chat_id, dst_msg_id in forward_map.get(key, []):
+    for dst_chat_id, dst_msg_id in list(links):
+        try:
+            bot.edit_message_text(
+                text,
+                chat_id=dst_chat_id,
+                message_id=dst_msg_id
+            )
+        except Exception:
             try:
-                bot.edit_message_text(
-                    text,
+                bot.edit_message_caption(
+                    caption=text,
                     chat_id=dst_chat_id,
                     message_id=dst_msg_id
                 )
-            except Exception:
-                try:
-                    bot.edit_message_caption(
-                        caption=text,
-                        chat_id=dst_chat_id,
-                        message_id=dst_msg_id
-                    )
-                except Exception as e:
-                    log_error(
-                        f"edit forward failed {dst_chat_id}:{dst_msg_id}: {e}"
-                    )
+            except Exception as e:
+                log_error(f"edit forward failed {dst_chat_id}:{dst_msg_id}: {e}")
                             
 def start_keep_alive_thread():
     t = threading.Thread(target=keep_alive_task, daemon=True)
