@@ -754,7 +754,8 @@ def handle_finance_text(msg):
         except Exception:
             return
 
-        add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+        #add_record_to_chat(chat_id, amount, note, msg.from_user.id)
+        add_record_to_chat(chat_id, amount, note, msg.from_user.id, source_msg=msg)
         day_key = store.get("current_view_day", today_key())
         update_or_send_day_window(chat_id, day_key)
         schedule_finalize(chat_id, day_key)
