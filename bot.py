@@ -765,7 +765,8 @@ def handle_finance_edit(msg):
         return False
 
     chat_id = msg.chat.id
-    text = (msg.text or "").strip()
+    text = msg.text or msg.caption
+    #text = (msg.text or "").strip()
     if not text:
         return False
 
@@ -3233,17 +3234,30 @@ def keep_alive_task():
     content_types=["text", "photo", "video", "document", "audio"]
 )
 def on_edited_message(msg):
+    log_info(
+        f"[EDIT] chat={msg.chat.id} msg_id={msg.message_id} "
+        f"text={repr(msg.text)} caption={repr(msg.caption)}"
+    )
     chat_id = msg.chat.id
 
     # 1️⃣ Финансовое редактирование (ГЛАВНОЕ ИСПРАВЛЕНИЕ)
+    #try:
+    # 1️⃣ Финансовое редактирование — БЕЗ ЗАВИСИМОСТИ ОТ РЕЖИМА
     try:
-        if is_finance_mode(chat_id):
-            edited = handle_finance_edit(msg)
-            if edited:
-                day_key = get_day_key_from_message(msg)
-                schedule_finalize(chat_id, day_key)
+        edited = handle_finance_edit(msg)
+        if edited:
+            day_key = get_day_key_from_message(msg)
+            log_info(f"[EDIT-FIN] updated record, day_key={day_key}")
+            schedule_finalize(chat_id, day_key)
     except Exception as e:
-        log_error(f"finance edit failed: {e}")
+        log_error(f"[EDIT-FIN] failed: {e}")
+        #if is_finance_mode(chat_id):
+            #edited = handle_finance_edit(msg)
+            #if edited:
+                #day_key = get_day_key_from_message(msg)
+                #schedule_finalize(chat_id, day_key)
+    #except Exception as e:
+        #log_error(f"finance edit failed: {e}")
 
     # 2️⃣ Пересылка (НЕ ТРОГАЕМ ЛОГИКУ)
     key = (chat_id, msg.message_id)
