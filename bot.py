@@ -3212,17 +3212,7 @@ def cleanup_forward_links(chat_id: int):
         if key[0] == chat_id:
             del forward_map[key]
             
-@bot.message_handler(content_types=["deleted_message"])
-def handle_deleted_message(msg):
-    try:
-        chat_id = msg.chat.id
-        store = get_chat_store(chat_id)
-        if store.get("reset_wait", False):
-            store["reset_wait"] = False
-            store["reset_time"] = 0
-            save_data(data)
-    except:
-        pass
+@bot.message_handler(content_types=["delet
 KEEP_ALIVE_SEND_TO_OWNER = False
 def keep_alive_task():
     while True:
@@ -3246,6 +3236,7 @@ def keep_alive_task():
     content_types=["text", "photo", "video", "document", "audio"]
 )
 def on_edited_message(msg):
+    log_info(f"EDIT EVENT: chat={msg.chat.id} mid={msg.message_id} type={msg.content_type}")
     chat_id = msg.chat.id
     key = (chat_id, msg.message_id)
 
@@ -3288,25 +3279,53 @@ def start_keep_alive_thread():
     t.start()
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def telegram_webhook():
-    json_str = request.get_data().decode("utf-8")
     try:
-        if '"edited_message"' in json_str:
-            log_info("WEBHOOK: получен update с edited_message")
+        payload = request.get_json(force=True, silent=False)
     except Exception as e:
-        log_error(f"DEBUG webhook edited check error: {e}")
-    update = telebot.types.Update.de_json(json_str)
-    bot.process_new_updates([update])
+        log_error(f"WEBHOOK: get_json failed: {e}")
+        return "BAD REQUEST", 400
+
+    try:
+        # Логи — чтобы ты 100% видел, приходят ли edited_message
+        if isinstance(payload, dict):
+            if "edited_message" in payload:
+                log_info("WEBHOOK: получен update с edited_message ✅")
+            elif "message" in payload:
+                log_info("WEBHOOK: получен update с message")
+            elif "callback_query" in payload:
+                log_info("WEBHOOK: получен update с callback_query")
+
+        update = telebot.types.Update.de_json(payload)
+        bot.process_new_updates([update])
+    except Exception as e:
+        log_error(f"WEBHOOK: process update error: {e}")
+        return "ERROR", 500
+
     return "OK", 200
+        
 def set_webhook():
     if not APP_URL:
         log_info("APP_URL не указан — работаем в режиме polling.")
         return
+
     wh_url = APP_URL.rstrip("/") + f"/{BOT_TOKEN}"
+
+    # Важно: снимаем, затем ставим заново с нужными типами апдейтов
     bot.remove_webhook()
     time.sleep(0.5)
-    bot.set_webhook(url=wh_url)
-    log_info(f"Webhook установлен: {wh_url}")
-    
+
+    bot.set_webhook(
+        url=wh_url,
+        allowed_updates=[
+            "message",
+            "edited_message",
+            "callback_query",
+            "channel_post",
+            "edited_channel_post",
+        ],
+    )
+    log_info(f"Webhook установлен: {wh_url} (allowed_updates включает edited_message)")
+        
 def main():
     global data
     restored = restore_from_gdrive_if_needed()
