@@ -766,10 +766,7 @@ def handle_finance_edit(msg):
     if not text:
         return False
 
-    store = data.get(str(chat_id))
-    if not store:
-        return False
-
+    store = get_chat_store(chat_id)
     records = store.get("records", [])
     target = None
 
@@ -782,54 +779,20 @@ def handle_finance_edit(msg):
         log_info(f"[EDIT-FIN] record not found for msg_id={msg.message_id}")
         return False
 
-    parsed = parse_amount_and_note(text)
-    if not parsed:
-        return False
-
-    amount, note = parsed
-    target["amount"] = amount
-    target["note"] = note
-
-    log_info(f"[EDIT-FIN] updated record {target['id']} amount={amount} note={note}")
-    return True
-
-    chat_id = msg.chat.id
-    text = msg.text or msg.caption
-    #text = (msg.text or "").strip()
-    if not text:
-        return False
-
-    store = get_chat_store(chat_id)
-
-    target = None
-    for rec in store.get("records", []):
-        if rec.get("origin_msg_id") == msg.message_id:
-            target = rec
-            break
-
-    if not target:
-        return False  # ⬅️ важно: ЯВНО False
-
     try:
         amount, note = split_amount_and_note(text)
     except Exception:
-        # ⬇️ КЛЮЧЕВОЕ ИЗМЕНЕНИЕ
-        # Это было финансовое сообщение, но формат плохой —
-        # значит мы ПЕРЕХВАТИЛИ редактирование, но не обновляем данные
-        log_info("finance edit ignored: bad format")
-        return True
+        log_info("[EDIT-FIN] bad format, ignored")
+        return True  # ⬅️ важно: мы перехватили edit
 
     target["amount"] = amount
     target["note"] = note
     target["timestamp"] = now_local().isoformat(timespec="seconds")
 
-    recalc_balance(chat_id)
-    save_data(data)
-    save_chat_json(chat_id)
-
-    day_key = store.get("current_view_day", today_key())
-    update_or_send_day_window(chat_id, day_key)
-
+    log_info(
+        f"[EDIT-FIN] updated record R{target['id']} "
+        f"amount={amount} note={note}"
+    )
     return True
     
 def _get_drive_service():
@@ -2254,7 +2217,8 @@ def add_record_to_chat(
         "timestamp": now_local().isoformat(timespec="seconds"),
         "amount": amount,
         "note": note,
-        "source_msg_id": msg.message_id,
+        "source_msg_id": source_msg.message_id if source_msg else None,
+        #"source_msg_id": msg.message_id,
         "owner": owner,
         "msg_id": source_msg.message_id if source_msg else None,
         "origin_msg_id": source_msg.message_id if source_msg else None,
@@ -3264,32 +3228,20 @@ def keep_alive_task():
     content_types=["text", "photo", "video", "document", "audio"]
 )
 def on_edited_message(msg):
-    log_info(
-        f"[EDIT] chat={msg.chat.id} msg_id={msg.message_id} "
-        f"text={repr(msg.text)} caption={repr(msg.caption)}"
-    )
     chat_id = msg.chat.id
 
-    # 1️⃣ Финансовое редактирование (ГЛАВНОЕ ИСПРАВЛЕНИЕ)
-    #try:
-    # 1️⃣ Финансовое редактирование — БЕЗ ЗАВИСИМОСТИ ОТ РЕЖИМА
+    # 🔴 ФИНАНСЫ — БЕЗ РЕЖИМОВ
     try:
         edited = handle_finance_edit(msg)
         if edited:
-            day_key = get_day_key_from_message(msg)
-            log_info(f"[EDIT-FIN] updated record, day_key={day_key}")
+            store = get_chat_store(chat_id)
+            day_key = store.get("current_view_day") or today_key()
+            log_info(f"[EDIT-FIN] finalize day_key={day_key}")
             schedule_finalize(chat_id, day_key)
     except Exception as e:
         log_error(f"[EDIT-FIN] failed: {e}")
-        #if is_finance_mode(chat_id):
-            #edited = handle_finance_edit(msg)
-            #if edited:
-                #day_key = get_day_key_from_message(msg)
-                #schedule_finalize(chat_id, day_key)
-    #except Exception as e:
-        #log_error(f"finance edit failed: {e}")
 
-    # 2️⃣ Пересылка (НЕ ТРОГАЕМ ЛОГИКУ)
+    # 🟢 ПЕРЕСЫЛКА — НЕ ТРОГАЕМ
     key = (chat_id, msg.message_id)
     links = forward_map.get(key)
     if not links:
@@ -3315,7 +3267,7 @@ def on_edited_message(msg):
                 )
             except Exception as e:
                 log_error(f"edit forward failed {dst_chat_id}:{dst_msg_id}: {e}")
-                            
+                                            
 def start_keep_alive_thread():
     t = threading.Thread(target=keep_alive_task, daemon=True)
     t.start()
