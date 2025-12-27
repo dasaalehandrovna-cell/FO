@@ -781,7 +781,11 @@ def handle_finance_edit(msg):
 
     try:
         amount, note = split_amount_and_note(text)
-    except Exception:
+
+# 🔥 ВАЖНО: если исходная запись была расходом — сохраняем знак
+        if target.get("amount", 0) < 0 and amount > 0:
+            amount = -amount
+            except Exception:
         log_info("[EDIT-FIN] bad format, ignored")
         return True  # edit перехвачен, но данных нет
 
@@ -800,6 +804,7 @@ def handle_finance_edit(msg):
         f"[EDIT-FIN] updated record R{target['id']} "
         f"amount={amount} note={note}"
     )
+    store["balance"] = sum(r["amount"] for r in store.get("records", []))
     return True
 
 def _get_drive_service():
