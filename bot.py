@@ -770,11 +770,16 @@ def handle_finance_edit(msg):
     records = store.get("records", [])
     target = None
 
+    #for r in records:
     for r in records:
-        if r.get("source_msg_id") == msg.message_id:
+        if (
+            r.get("source_msg_id") == msg.message_id
+            or r.get("origin_msg_id") == msg.message_id
+            or r.get("msg_id") == msg.message_id
+        ):
             target = r
             break
-
+        
     if not target:
         log_info(f"[EDIT-FIN] record not found for msg_id={msg.message_id}")
         return False
