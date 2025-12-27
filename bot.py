@@ -761,8 +761,37 @@ def handle_finance_text(msg):
         return
       
 def handle_finance_edit(msg):
-    if msg.content_type != "text":
+    chat_id = msg.chat.id
+    text = msg.text or msg.caption
+    if not text:
         return False
+
+    store = data.get(str(chat_id))
+    if not store:
+        return False
+
+    records = store.get("records", [])
+    target = None
+
+    for r in records:
+        if r.get("source_msg_id") == msg.message_id:
+            target = r
+            break
+
+    if not target:
+        log_info(f"[EDIT-FIN] record not found for msg_id={msg.message_id}")
+        return False
+
+    parsed = parse_amount_and_note(text)
+    if not parsed:
+        return False
+
+    amount, note = parsed
+    target["amount"] = amount
+    target["note"] = note
+
+    log_info(f"[EDIT-FIN] updated record {target['id']} amount={amount} note={note}")
+    return True
 
     chat_id = msg.chat.id
     text = msg.text or msg.caption
@@ -2225,6 +2254,7 @@ def add_record_to_chat(
         "timestamp": now_local().isoformat(timespec="seconds"),
         "amount": amount,
         "note": note,
+        "source_msg_id": msg.message_id,
         "owner": owner,
         "msg_id": source_msg.message_id if source_msg else None,
         "origin_msg_id": source_msg.message_id if source_msg else None,
