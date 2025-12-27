@@ -2508,10 +2508,11 @@ def cmd_help(msg):
         "/help — эта справка\n"
     )
     send_info(chat_id, help_text)
+    
 @bot.message_handler(commands=["restore"])
 def cmd_restore(msg):
     global restore_mode
-    restore_mode = True
+    restore_mode = msg.chat.id
     cleanup_forward_links(msg.chat.id)
     send_and_auto_delete(
         msg.chat.id,
@@ -2523,6 +2524,7 @@ def cmd_restore(msg):
         "• data_<chat>.csv\n\n"
         "Пересылка документов временно отключена."
     )
+    
 @bot.message_handler(commands=["restore_off"])
 def cmd_restore_off(msg):
     global restore_mode
@@ -3136,7 +3138,7 @@ def handle_document(msg):
     # ─────────────────────────────
     # 🟢 НЕ В РЕЖИМЕ RESTORE → обычная пересылка
     # ─────────────────────────────
-    if not restore_mode:
+    if restore_mode != chat_id:
         forward_any_message(chat_id, msg)
         return
 
@@ -3195,7 +3197,7 @@ def handle_document(msg):
     # ─────────────────────────────
     # 🧹 ПОСЛЕ ВОССТАНОВЛЕНИЯ
     # ─────────────────────────────
-    restore_mode = False
+    restore_mode = None
     cleanup_forward_links(chat_id)
 
     send_info(
@@ -3214,7 +3216,7 @@ def handle_document(msg):
             refresh_total_message_if_any(int(OWNER_ID))
         except Exception:
             pass
-                
+    return  # ⛔ ОБЯЗАТЕЛЬНО
                         
 def cleanup_forward_links(chat_id: int):
     """
