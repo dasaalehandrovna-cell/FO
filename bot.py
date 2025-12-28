@@ -3133,10 +3133,10 @@ def handle_document(msg):
     2) Если restore_mode == True → используется как файл восстановления
     3) Если restore_mode == False → обычная пересылка документа
     """
-    log_info(
-        f"[RESTORE] document received chat={chat_id} "
-        f"restore_mode={restore_mode} fname={fname}"
-    )
+        #log_info(
+            #f"[RESTORE] document received chat={chat_id} "
+            #f"restore_mode={restore_mode} fname={fname}"
+        #)
     global restore_mode, data
 
     chat_id = msg.chat.id
