@@ -702,25 +702,25 @@ def handle_finance_text(msg):
     store = get_chat_store(chat_id)
 
     # ✏️ режим редактирования записи
+    # ✏️ режим редактирования записи
     wait = store.get("edit_wait")
     if wait and wait.get("type") == "edit":
         rid = wait.get("rid")
         day_key = wait.get("day_key", today_key())
+
         try:
             amount, note = split_amount_and_note(text)
         except Exception:
             send_and_auto_delete(chat_id, "❌ Не удалось разобрать сумму.")
             return
 
-        add_record_to_chat(
-            chat_id,
-            amount,
-            note,
-            msg.from_user.id,
-            source_msg=msg
-        )
+        # 🔥 ВАЖНО: редактирование НЕ должно создавать новую запись
+        # Обновляем существующую запись, порядок не меняется
+        update_record_in_chat(chat_id, rid, amount, note)
+
         store["edit_wait"] = None
         save_data(data)
+
         update_or_send_day_window(chat_id, day_key)
         schedule_finalize(chat_id, day_key)
         return
@@ -2283,7 +2283,7 @@ def add_record_to_chat(
     export_global_csv(data)
     send_backup_to_channel(chat_id)
     
-def update_record_in_chat(chat_id: int, rid: int, new_amount: int, new_note: str, skip_chat_backup: bool = False):
+def update_record_in_chat(chat_id: int, rid: int, new_amount: float, new_note: str, skip_chat_backup: bool = False):
     store = get_chat_store(chat_id)
     found = None
     for r in store.get("records", []):
