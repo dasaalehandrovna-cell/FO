@@ -3139,10 +3139,12 @@ def handle_document(msg):
     # 🔒 RESTORE MODE — ПЕРЕХВАТ ДОКУМЕНТА
     # ==================================================
     if restore_mode is not None and restore_mode == chat_id:
-    #if restore_mode == chat_id:
 
         if not (fname.endswith(".json") or fname.endswith(".csv")):
-            send_and_auto_delete(chat_id, "⚠️ В режиме восстановления принимаются только JSON / CSV.")
+            send_and_auto_delete(
+                chat_id,
+                "⚠️ В режиме восстановления принимаются только JSON / CSV."
+            )
             return
 
         try:
@@ -3157,12 +3159,11 @@ def handle_document(msg):
             f.write(raw)
 
         try:
-            # 🌍 GLOBAL
+            # 🌍 GLOBAL DATA.JSON
             if fname == "data.json":
                 os.replace(tmp_path, "data.json")
                 data = load_data()
 
-# 🔧 ВАЖНО: пересобираем runtime-состояние
                 finance_active_chats.clear()
                 fac = data.get("finance_active_chats") or {}
                 for cid, enabled in fac.items():
@@ -3174,8 +3175,9 @@ def handle_document(msg):
 
                 restore_mode = None
                 send_and_auto_delete(chat_id, "🟢 Глобальный data.json восстановлен!")
+                return
 
-
+            # 🌍 CSV META
             if fname == "csv_meta.json":
                 os.replace(tmp_path, "csv_meta.json")
                 restore_mode = None
@@ -3184,54 +3186,63 @@ def handle_document(msg):
 
             # 🧾 CHAT JSON
             if fname.endswith(".json"):
-                try:
-                    payload = _load_json(tmp_path, None)
-                    if not isinstance(payload, dict):
-                        raise RuntimeError("JSON не является объектом")
+                payload = _load_json(tmp_path, None)
+                if not isinstance(payload, dict):
+                    raise RuntimeError("JSON не является объектом")
 
-                    # 🔹 Глобальный data.json
-                    if "chats" in payload:
-                        os.replace(tmp_path, "data.json")
-                        data.clear()
-                        data.update(load_data())
-                        restore_mode = None
-                        send_and_auto_delete(
-                            chat_id,
-                            "🟢 Глобальный data.json восстановлен"
-                        )
-                        return
-
-                    # 🔹 Пер-чат JSON
-                    inner_chat_id = payload.get("chat_id")
-                    if inner_chat_id is None:
-                        raise RuntimeError("В JSON нет chat_id")
-
-                    if int(inner_chat_id) != int(chat_id):
-                        raise RuntimeError(
-                            f"JSON относится к чату {inner_chat_id}, "
-                            f"а не к текущему чату {chat_id}"
-                        )
-
-                    restore_from_json(chat_id, tmp_path)
+                # если это вдруг глобальный data.json
+                if "chats" in payload:
+                    os.replace(tmp_path, "data.json")
+                    data.clear()
+                    data.update(load_data())
                     restore_mode = None
-                    send_and_auto_delete(
-                        chat_id,
-                        f"🟢 JSON чата {chat_id} восстановлен"
-                    )
+                    send_and_auto_delete(chat_id, "🟢 Глобальный data.json восстановлен")
                     return
 
-                except Exception as e:
-                    send_and_auto_delete(
-                        chat_id,
-                        f"❌ Ошибка восстановления JSON: {e}"
+                inner_chat_id = payload.get("chat_id")
+                if inner_chat_id is None:
+                    raise RuntimeError("В JSON нет chat_id")
+
+                if int(inner_chat_id) != int(chat_id):
+                    raise RuntimeError(
+                        f"JSON относится к чату {inner_chat_id}, а не к текущему {chat_id}"
                     )
-                    return
+
+                restore_from_json(chat_id, tmp_path)
+
+                # 🛠 ОБНОВЛЕНИЕ ПОСЛЕ RESTORE
+                day_key = get_chat_store(chat_id).get(
+                    "current_view_day",
+                    today_key()
+                )
+                update_or_send_day_window(chat_id, day_key)
+                send_backup_to_chat(chat_id)
+                send_backup_to_channel(chat_id)
+
+                restore_mode = None
+                send_and_auto_delete(
+                    chat_id,
+                    f"🟢 JSON чата {chat_id} восстановлен"
+                )
+                return
 
             # 📊 CHAT CSV
             if fname.startswith("data_") and fname.endswith(".csv"):
                 restore_from_csv(chat_id, tmp_path)
+
+                day_key = get_chat_store(chat_id).get(
+                    "current_view_day",
+                    today_key()
+                )
+                update_or_send_day_window(chat_id, day_key)
+                send_backup_to_chat(chat_id)
+                send_backup_to_channel(chat_id)
+
                 restore_mode = None
-                send_and_auto_delete(chat_id, f"🟢 CSV чата восстановлен ({fname})")
+                send_and_auto_delete(
+                    chat_id,
+                    f"🟢 CSV чата восстановлен ({fname})"
+                )
                 return
 
             send_and_auto_delete(chat_id, f"⚠️ Неизвестный файл: {fname}")
