@@ -662,10 +662,11 @@ def on_any_message(msg):
         pass
 
     # 🔒 restore_mode — только блокируем финансы, НЕ пересылку
-    if restore_mode:
-        if msg.content_type != "document":
+    if restore_mode == chat_id:
+        return
+        #if msg.content_type != "document":
             # ⚠️ финансы запрещены
-            pass
+            #pass
         # ❗ НО пересылка РАЗРЕШЕНА
 
     # 2️⃣ ФИНАНСЫ — ТОЛЬКО если включены
@@ -2513,26 +2514,24 @@ def cmd_help(msg):
 @bot.message_handler(commands=["restore"])
 def cmd_restore(msg):
     global restore_mode
-    restore_mode = True
+    restore_mode = msg.chat.id
     cleanup_forward_links(msg.chat.id)
     send_and_auto_delete(
         msg.chat.id,
         "📥 Режим восстановления включён.\n"
-        "Теперь отправьте файл:\n"
+        "Отправьте файл:\n"
         "• data.json\n"
         "• data_<chat_id>.json\n"
-        "• csv_meta.json\n"
-        "• data_<chat>.csv\n\n"
-        "Пересылка документов временно отключена."
+        "• data_<chat_id>.csv\n"
+        "• csv_meta.json"
     )
     
 @bot.message_handler(commands=["restore_off"])
 def cmd_restore_off(msg):
     global restore_mode
-    restore_mode = False
+    restore_mode = None
     cleanup_forward_links(msg.chat.id)
-    send_and_auto_delete(msg.chat.id, "🔒 Режим восстановления выключен.")
-@bot.message_handler(commands=["ping"])
+    send_and_auto_delete(msg.chat.id, "🔒 Режим восстановления выключен.")@bot.message_handler(commands=["ping"])
 def cmd_ping(msg):
     send_info(msg.chat.id, "PONG — бот работает 🟢")
 @bot.message_handler(commands=["view"])
@@ -3134,6 +3133,10 @@ def handle_document(msg):
     2) Если restore_mode == True → используется как файл восстановления
     3) Если restore_mode == False → обычная пересылка документа
     """
+    log_info(
+        f"[RESTORE] document received chat={chat_id} "
+        f"restore_mode={restore_mode} fname={fname}"
+    )
     global restore_mode, data
 
     chat_id = msg.chat.id
@@ -3143,7 +3146,7 @@ def handle_document(msg):
     fname = (file.file_name or "").lower()
 
                                                 
-    if restore_mode:
+    if restore_mode == chat_id:
                                    
         if not (fname.endswith(".json") or fname.endswith(".csv")):
             send_and_auto_delete(chat_id, f"⚠️ Файл '{fname}' не является JSON/CSV.")
