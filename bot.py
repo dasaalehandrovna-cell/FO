@@ -644,7 +644,7 @@ def looks_like_amount(text):
 @bot.message_handler(
     func=lambda m: not (m.text and m.text.startswith("/")),
     content_types=[
-        "text", "photo", "video", #"document",
+        "text", "photo", "video",
         "audio", "voice", "video_note",
         "sticker", "location", "venue", "contact"
     ]
@@ -663,7 +663,7 @@ def on_any_message(msg):
         pass
 
     # 🔒 restore_mode — только блокируем финансы, НЕ пересылку
-    if restore_mode == chat_id:
+    if restore_mode is not None and restore_mode == chat_id:
         return
         #if msg.content_type != "document":
             # ⚠️ финансы запрещены
@@ -2515,24 +2515,21 @@ def cmd_help(msg):
 @bot.message_handler(commands=["restore"])
 def cmd_restore(msg):
     global restore_mode
-    restore_mode = msg.chat.id
+    restore_mode = msg.chat.id  # включаем только для текущего чата
     cleanup_forward_links(msg.chat.id)
     send_and_auto_delete(
         msg.chat.id,
         "📥 Режим восстановления включён.\n"
-        "Отправьте файл:\n"
-        "• data.json\n"
-        "• data_<chat_id>.json\n"
-        "• data_<chat_id>.csv\n"
-        "• csv_meta.json"
+        "Отправьте JSON/CSV файл для восстановления."
     )
     
 @bot.message_handler(commands=["restore_off"])
 def cmd_restore_off(msg):
     global restore_mode
-    restore_mode = None
+    restore_mode = None  # выключаем
     cleanup_forward_links(msg.chat.id)
-    send_and_auto_delete(msg.chat.id, "🔒 Режим восстановления выключен.")@bot.message_handler(commands=["ping"])
+    send_and_auto_delete(msg.chat.id, "🔒 Режим восстановления выключен.")
+@bot.message_handler(commands=["ping"])
 def cmd_ping(msg):
     send_info(msg.chat.id, "PONG — бот работает 🟢")
 @bot.message_handler(commands=["view"])
@@ -3141,7 +3138,8 @@ def handle_document(msg):
     # ==================================================
     # 🔒 RESTORE MODE — ПЕРЕХВАТ ДОКУМЕНТА
     # ==================================================
-    if restore_mode == chat_id:
+    if restore_mode is not None and restore_mode == chat_id:
+    #if restore_mode == chat_id:
 
         if not (fname.endswith(".json") or fname.endswith(".csv")):
             send_and_auto_delete(chat_id, "⚠️ В режиме восстановления принимаются только JSON / CSV.")
