@@ -3183,11 +3183,49 @@ def handle_document(msg):
                 return
 
             # 🧾 CHAT JSON
-            if fname.startswith("data_") and fname.endswith(".json"):
-                restore_from_json(chat_id, tmp_path)
-                restore_mode = None
-                send_and_auto_delete(chat_id, f"🟢 JSON чата восстановлен ({fname})")
-                return
+            if fname.endswith(".json"):
+                try:
+                    payload = _load_json(tmp_path, None)
+                    if not isinstance(payload, dict):
+                        raise RuntimeError("JSON не является объектом")
+
+                    # 🔹 Глобальный data.json
+                    if "chats" in payload:
+                        os.replace(tmp_path, "data.json")
+                        data.clear()
+                        data.update(load_data())
+                        restore_mode = None
+                        send_and_auto_delete(
+                            chat_id,
+                            "🟢 Глобальный data.json восстановлен"
+                        )
+                        return
+
+                    # 🔹 Пер-чат JSON
+                    inner_chat_id = payload.get("chat_id")
+                    if inner_chat_id is None:
+                        raise RuntimeError("В JSON нет chat_id")
+
+                    if int(inner_chat_id) != int(chat_id):
+                        raise RuntimeError(
+                            f"JSON относится к чату {inner_chat_id}, "
+                            f"а не к текущему чату {chat_id}"
+                        )
+
+                    restore_from_json(chat_id, tmp_path)
+                    restore_mode = None
+                    send_and_auto_delete(
+                        chat_id,
+                        f"🟢 JSON чата {chat_id} восстановлен"
+                    )
+                    return
+
+                except Exception as e:
+                    send_and_auto_delete(
+                        chat_id,
+                        f"❌ Ошибка восстановления JSON: {e}"
+                    )
+                    return
 
             # 📊 CHAT CSV
             if fname.startswith("data_") and fname.endswith(".csv"):
