@@ -51,7 +51,8 @@ backup_flags = {
     "drive": True,
     "channel": True,
 }
-restore_mode = False
+restore_mode = None
+#restore_mode = False
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
@@ -643,7 +644,7 @@ def looks_like_amount(text):
 @bot.message_handler(
     func=lambda m: not (m.text and m.text.startswith("/")),
     content_types=[
-        "text", "photo", "video", "document",
+        "text", "photo", "video", #"document",
         "audio", "voice", "video_note",
         "sticker", "location", "venue", "contact"
     ]
@@ -3127,16 +3128,6 @@ def reset_chat_data(chat_id: int):
 
 @bot.message_handler(content_types=["document"])
 def handle_document(msg):
-    """
-    Логика обработки документов:
-    1) ВСЕ документы обновляют info/known_chats
-    2) Если restore_mode == True → используется как файл восстановления
-    3) Если restore_mode == False → обычная пересылка документа
-    """
-        #log_info(
-            #f"[RESTORE] document received chat={chat_id} "
-            #f"restore_mode={restore_mode} fname={fname}"
-        #)
     global restore_mode, data
 
     chat_id = msg.chat.id
@@ -3145,80 +3136,74 @@ def handle_document(msg):
     file = msg.document
     fname = (file.file_name or "").lower()
 
-                                                
+    log_info(f"[DOC] recv chat={chat_id} restore={restore_mode} fname={fname}")
+
+    # ==================================================
+    # 🔒 RESTORE MODE — ПЕРЕХВАТ ДОКУМЕНТА
+    # ==================================================
     if restore_mode == chat_id:
-                                   
+
         if not (fname.endswith(".json") or fname.endswith(".csv")):
-            send_and_auto_delete(chat_id, f"⚠️ Файл '{fname}' не является JSON/CSV.")
+            send_and_auto_delete(chat_id, "⚠️ В режиме восстановления принимаются только JSON / CSV.")
             return
 
         try:
             file_info = bot.get_file(file.file_id)
             raw = bot.download_file(file_info.file_path)
         except Exception as e:
-            send_and_auto_delete(chat_id, f"❌ Ошибка скачивания файла: {e}")
+            send_and_auto_delete(chat_id, f"❌ Ошибка скачивания: {e}")
             return
 
         tmp_path = f"restore_{chat_id}_{fname}"
-
         with open(tmp_path, "wb") as f:
             f.write(raw)
 
-                                 
-        if fname == "data.json":
-            try:
+        try:
+            # 🌍 GLOBAL
+            if fname == "data.json":
                 os.replace(tmp_path, "data.json")
                 data = load_data()
-                restore_mode = False
-                send_and_auto_delete(chat_id, "🟢 Глобальный data.json восстановлен!")
-            except Exception as e:
-                send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
-            return
+                restore_mode = None
+                send_and_auto_delete(chat_id, "🟢 Глобальный data.json восстановлен")
+                return
 
-                          
-        if fname == "csv_meta.json":
-            try:
+            if fname == "csv_meta.json":
                 os.replace(tmp_path, "csv_meta.json")
-                restore_mode = False
-                send_and_auto_delete(chat_id, "🟢 csv_meta.json восстановлен!")
-            except Exception as e:
-                send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
-            return
-        # 🔹 Пер-чат JSON: data_<chat_id>.json
-        if fname.startswith("data_") and fname.endswith(".json"):
-            try:
-                restore_from_json(chat_id, tmp_path)
-                restore_mode = False
-                send_and_auto_delete(
-                    chat_id,
-                    f"🟢 JSON чата восстановлен: {fname}"
-                )
-            except Exception as e:
-                send_and_auto_delete(chat_id, f"❌ Ошибка восстановления JSON: {e}")
-            finally:
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-            return
+                restore_mode = None
+                send_and_auto_delete(chat_id, "🟢 csv_meta.json восстановлён")
+                return
 
-        # 🔹 Пер-чат CSV: data_<chat_id>.csv
-        if fname.startswith("data_") and fname.endswith(".csv"):
-            try:
+            # 🧾 CHAT JSON
+            if fname.startswith("data_") and fname.endswith(".json"):
+                restore_from_json(chat_id, tmp_path)
+                restore_mode = None
+                send_and_auto_delete(chat_id, f"🟢 JSON чата восстановлен ({fname})")
+                return
+
+            # 📊 CHAT CSV
+            if fname.startswith("data_") and fname.endswith(".csv"):
                 restore_from_csv(chat_id, tmp_path)
-                restore_mode = False
-                send_and_auto_delete(
-                    chat_id,
-                    f"🟢 CSV чата восстановлен: {fname}"
-                )
-            except Exception as e:
-                send_and_auto_delete(chat_id, f"❌ Ошибка восстановления CSV: {e}")
-            finally:
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-            return
+                restore_mode = None
+                send_and_auto_delete(chat_id, f"🟢 CSV чата восстановлен ({fname})")
+                return
+
+            send_and_auto_delete(chat_id, f"⚠️ Неизвестный файл: {fname}")
+
+        except Exception as e:
+            send_and_auto_delete(chat_id, f"❌ Ошибка восстановления: {e}")
+
+        finally:
+            try:
+                os.remove(tmp_path)
+            except Exception:
+                pass
+
+        return
+
+    # ==================================================
+    # 🟢 ОБЫЧНЫЙ РЕЖИМ — ПЕРЕСЫЛКА
+    # ==================================================
+    forward_any_message(chat_id, msg)
                                     
 def cleanup_forward_links(chat_id: int):
     """
