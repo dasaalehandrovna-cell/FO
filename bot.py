@@ -2512,7 +2512,7 @@ def cmd_help(msg):
 @bot.message_handler(commands=["restore"])
 def cmd_restore(msg):
     global restore_mode
-    restore_mode = msg.chat.id
+    restore_mode = True
     cleanup_forward_links(msg.chat.id)
     send_and_auto_delete(
         msg.chat.id,
@@ -3127,6 +3127,12 @@ def reset_chat_data(chat_id: int):
 
 @bot.message_handler(content_types=["document"])
 def handle_document(msg):
+    """
+    Логика обработки документов:
+    1) ВСЕ документы обновляют info/known_chats
+    2) Если restore_mode == True → используется как файл восстановления
+    3) Если restore_mode == False → обычная пересылка документа
+    """
     global restore_mode, data
 
     chat_id = msg.chat.id
@@ -3135,89 +3141,46 @@ def handle_document(msg):
     file = msg.document
     fname = (file.file_name or "").lower()
 
-    # ─────────────────────────────
-    # 🟢 НЕ В РЕЖИМЕ RESTORE → обычная пересылка
-    # ─────────────────────────────
-    if restore_mode != chat_id:
-        forward_any_message(chat_id, msg)
-        return
-
-    # ─────────────────────────────
-    # 🔒 В РЕЖИМЕ RESTORE — принимаем ТОЛЬКО JSON / CSV
-    # ─────────────────────────────
-    if not (fname.endswith(".json") or fname.endswith(".csv")):
-        send_and_auto_delete(chat_id, "⚠️ В режиме восстановления принимаются только JSON / CSV.")
-        return
-
-    # ─────────────────────────────
-    # 🔐 ГЛОБАЛЬНЫЙ data.json — ТОЛЬКО OWNER
-    # ─────────────────────────────
-    if fname == "data.json":
-        if not OWNER_ID or str(chat_id) != str(OWNER_ID):
-            send_and_auto_delete(chat_id, "⛔ data.json может восстановить только OWNER.")
+                                                
+    if restore_mode:
+                                   
+        if not (fname.endswith(".json") or fname.endswith(".csv")):
+            send_and_auto_delete(chat_id, f"⚠️ Файл '{fname}' не является JSON/CSV.")
             return
 
-    # ─────────────────────────────
-    # ⬇️ СКАЧИВАЕМ ФАЙЛ
-    # ─────────────────────────────
-    try:
-        file_info = bot.get_file(file.file_id)
-        raw = bot.download_file(file_info.file_path)
-    except Exception as e:
-        send_and_auto_delete(chat_id, f"❌ Ошибка загрузки файла: {e}")
-        return
+        try:
+            file_info = bot.get_file(file.file_id)
+            raw = bot.download_file(file_info.file_path)
+        except Exception as e:
+            send_and_auto_delete(chat_id, f"❌ Ошибка скачивания файла: {e}")
+            return
 
-    tmp_path = f"restore_{chat_id}_{fname}"
-    try:
+        tmp_path = f"restore_{chat_id}_{fname}"
+
         with open(tmp_path, "wb") as f:
             f.write(raw)
-    except Exception as e:
-        send_and_auto_delete(chat_id, f"❌ Не удалось сохранить файл: {e}")
-        return
 
-    # ─────────────────────────────
-    # ♻️ ВОССТАНОВЛЕНИЕ
-    # ─────────────────────────────
-    try:
-        if fname.endswith(".json"):
-            restore_from_json(chat_id, tmp_path)
-            restored_what = "JSON"
-        else:
-            restore_from_csv(chat_id, tmp_path)
-            restored_what = "CSV"
-    except Exception as e:
-        send_and_auto_delete(chat_id, f"❌ Ошибка восстановления: {e}")
-        return
-    finally:
-        try:
-            os.remove(tmp_path)
-        except Exception:
-            pass
+                                 
+        if fname == "data.json":
+            try:
+                os.replace(tmp_path, "data.json")
+                data = load_data()
+                restore_mode = False
+                send_and_auto_delete(chat_id, "🟢 Глобальный data.json восстановлен!")
+            except Exception as e:
+                send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
+            return
 
-    # ─────────────────────────────
-    # 🧹 ПОСЛЕ ВОССТАНОВЛЕНИЯ
-    # ─────────────────────────────
-    restore_mode = None
-    cleanup_forward_links(chat_id)
-
-    send_info(
-        chat_id,
-        f"✅ Восстановление завершено ({restored_what}).\n"
-        f"Создаю новое окно и пересчитываю итоги…"
-    )
-
-    day_key = today_key()
-    update_or_send_day_window(chat_id, day_key)
-    refresh_total_message_if_any(chat_id)
-
-    # OWNER — обновим ещё и owner-итоги
-    if OWNER_ID and str(chat_id) != str(OWNER_ID):
-        try:
-            refresh_total_message_if_any(int(OWNER_ID))
-        except Exception:
-            pass
-    return  # ⛔ ОБЯЗАТЕЛЬНО
-                        
+                          
+        if fname == "csv_meta.json":
+            try:
+                os.replace(tmp_path, "csv_meta.json")
+                restore_mode = False
+                send_and_auto_delete(chat_id, "🟢 csv_meta.json восстановлен!")
+            except Exception as e:
+                send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
+            return
+                                    
 def cleanup_forward_links(chat_id: int):
     """
     Удаляет все связи пересылки для чата.
