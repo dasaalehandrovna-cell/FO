@@ -3161,9 +3161,20 @@ def handle_document(msg):
             if fname == "data.json":
                 os.replace(tmp_path, "data.json")
                 data = load_data()
+
+# 🔧 ВАЖНО: пересобираем runtime-состояние
+                finance_active_chats.clear()
+                fac = data.get("finance_active_chats") or {}
+                for cid, enabled in fac.items():
+                    if enabled:
+                        try:
+                            finance_active_chats.add(int(cid))
+                        except Exception:
+                            pass
+
                 restore_mode = None
-                send_and_auto_delete(chat_id, "🟢 Глобальный data.json восстановлен")
-                return
+                send_and_auto_delete(chat_id, "🟢 Глобальный data.json восстановлен!")
+
 
             if fname == "csv_meta.json":
                 os.replace(tmp_path, "csv_meta.json")
