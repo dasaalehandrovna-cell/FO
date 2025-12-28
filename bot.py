@@ -213,7 +213,7 @@ def send_backup_to_chat(chat_id: int) -> None:
             buf = io.BytesIO(data_bytes)
             buf.name = file_name
             return buf
-
+            #🟢🟢🟢🟢
         if msg_id:
             fobj = _open_file()
             if not fobj:
@@ -449,8 +449,7 @@ def restore_from_json(chat_id: int, path: str):
         return
 
     raise RuntimeError("Неизвестный формат JSON (нет 'chats' и нет 'records/daily_records').")
-
-
+#🟢🟢🟢🟢
 def restore_from_csv(chat_id: int, path: str):
     """
     Восстановление из CSV (пер-чат).
@@ -815,6 +814,7 @@ def handle_finance_edit(msg):
         f"amount={amount} note={note}"
     )
     return True
+    #🍕🍕🍕🍕
 def _get_drive_service():
     if not GOOGLE_SERVICE_ACCOUNT_JSON or not GDRIVE_FOLDER_ID:
         return None
@@ -1116,6 +1116,7 @@ def send_backup_to_channel(chat_id: int):
         send_backup_to_channel_for_file(csv_path, f"csv_{chat_id}", chat_title)
     except Exception as e:
         log_error(f"send_backup_to_channel({chat_id}): {e}")
+#⏏️⏏️⏏️⏏️⏏️⏏️
 def _owner_data_file() -> str | None:
     """
     Файл владельца, где хранится forward_rules.
@@ -1435,6 +1436,7 @@ def build_forward_direction_menu(day_key: str, owner_chat: int, target_chat: int
         )
     )
     return kb
+    #💰💰💰💰💰💰
 def build_forward_source_menu():
     """
     Меню выбора чата A (источник пересылки).
@@ -1728,8 +1730,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
         return True
 
     return False
-
-
+#🟡🟡🟡🟡🟡
 @bot.callback_query_handler(func=lambda c: True)
 def on_callback(call):
     try:
@@ -2220,7 +2221,7 @@ def on_callback(call):
             return
     except Exception as e:
         log_error(f"on_callback error: {e}")
-        
+        #🐳🐳🐳🐳🐳🐳🐳🐳
 def add_record_to_chat(
     chat_id: int,
     amount: float,
@@ -2587,7 +2588,7 @@ def cmd_next(msg):
         kb = build_main_keyboard(day_key, chat_id)
         sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
         set_active_window_id(chat_id, day_key, sent.message_id)
-        
+        #❗️❗️❗️❗️❗️❗️❗️❗️
 @bot.message_handler(commands=["balance"])
 def cmd_balance(msg):
     chat_id = msg.chat.id
@@ -2933,7 +2934,7 @@ def rebuild_global_records():
         all_recs.extend(st.get("records", []))
     data["records"] = all_recs
     data["overall_balance"] = sum(r.get("amount", 0) for r in all_recs)
-
+#🔴🔴🔴🔴🔴
 def force_backup_to_chat(chat_id: int):
     try:
         save_chat_json(chat_id)
@@ -3179,6 +3180,41 @@ def handle_document(msg):
                 send_and_auto_delete(chat_id, "🟢 csv_meta.json восстановлен!")
             except Exception as e:
                 send_and_auto_delete(chat_id, f"❌ Ошибка: {e}")
+            return
+        # 🔹 Пер-чат JSON: data_<chat_id>.json
+        if fname.startswith("data_") and fname.endswith(".json"):
+            try:
+                restore_from_json(chat_id, tmp_path)
+                restore_mode = False
+                send_and_auto_delete(
+                    chat_id,
+                    f"🟢 JSON чата восстановлен: {fname}"
+                )
+            except Exception as e:
+                send_and_auto_delete(chat_id, f"❌ Ошибка восстановления JSON: {e}")
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+            return
+
+        # 🔹 Пер-чат CSV: data_<chat_id>.csv
+        if fname.startswith("data_") and fname.endswith(".csv"):
+            try:
+                restore_from_csv(chat_id, tmp_path)
+                restore_mode = False
+                send_and_auto_delete(
+                    chat_id,
+                    f"🟢 CSV чата восстановлен: {fname}"
+                )
+            except Exception as e:
+                send_and_auto_delete(chat_id, f"❌ Ошибка восстановления CSV: {e}")
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
             return
                                     
 def cleanup_forward_links(chat_id: int):
