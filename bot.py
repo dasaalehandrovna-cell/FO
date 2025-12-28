@@ -1383,6 +1383,17 @@ def build_edit_menu_keyboard(day_key: str, chat_id=None):
         types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:back_main")
     )
     return kb
+    
+def build_cancel_edit_keyboard(day_key: str):
+    kb = types.InlineKeyboardMarkup()
+    kb.row(
+        types.InlineKeyboardButton(
+            "❌ Отмена",
+            callback_data=f"d:{day_key}:cancel_edit"
+        )
+    )
+    return kb
+
 def build_forward_chat_list(day_key: str, chat_id: int):
     """
     Меню выбора чата для пересылки.
@@ -2133,25 +2144,42 @@ def on_callback(call):
             
         if cmd.startswith("edit_rec_"):
             rid = int(cmd.split("_")[-1])
+
+            # найдём запись
+            store = get_chat_store(chat_id)
+            rec = next((r for r in store.get("records", []) if r["id"] == rid), None)
+            if not rec:
+                send_and_auto_delete(chat_id, "❌ Запись не найдена.")
+                return
+
             store["edit_wait"] = {
                 "type": "edit",
+                "rid": rid,
                 "day_key": day_key,
-                "rid": rid
             }
             save_data(data)
-            text_edit = f"✏️ Редактирование записи R{rid}\n\n"\
-                        f"Введите новую сумму и текст.\n"\
-                        f"Можно прислать несколько строк."
-            kb_back = types.InlineKeyboardMarkup()
-            kb_back.row(
-                types.InlineKeyboardButton("🔙 Назад", callback_data=f"d:{day_key}:edit_list")
+
+            # текст отдельного окна
+            text = (
+                f"✏️ Редактирование записи R{rid}\n\n"
+                f"Текущие данные:\n"
+                f"{fmt_num(rec['amount'])} {rec.get('note','')}\n\n"
+                f"✍️ Напишите новые данные.\n\n"
+                f"⏳ Это сообщение будет удалено через 30 секунд,\n"
+                f"если изменений не будет — редактирование отменится."
             )
-            bot.edit_message_text(
-                text_edit,
-                chat_id=chat_id,
-                message_id=call.message.message_id,
-                reply_markup=kb_back
+
+            kb = build_cancel_edit_keyboard(day_key)
+
+            sent = bot.send_message(
+                chat_id,
+                text,
+                reply_markup=kb
             )
+
+            # авто-отмена через 30 сек
+            schedule_cancel_edit(chat_id, sent.message_id, delay=30)
+
             return
         if cmd.startswith("del_rec_"):
             rid = int(cmd.split("_")[-1])
@@ -2242,6 +2270,18 @@ def on_callback(call):
             return
         if cmd == "pick_date":
             bot.send_message(chat_id, "Введите дату:\n/view YYYY-MM-DD")
+            return
+        if cmd == "cancel_edit":
+            store = get_chat_store(chat_id)
+            store["edit_wait"] = None
+            save_data(data)
+
+            try:
+                bot.delete_message(chat_id, call.message.message_id)
+            except Exception:
+                pass
+
+            send_and_auto_delete(chat_id, "❎ Редактирование отменено.", 5)
             return
     except Exception as e:
         log_error(f"on_callback error: {e}")
@@ -2860,6 +2900,22 @@ def schedule_cancel_wait(chat_id: int, delay: float = 15.0):
             pass
     t = threading.Timer(delay, _job)
     _edit_cancel_timers[chat_id] = t
+    t.start()
+def schedule_cancel_edit(chat_id: int, message_id: int, delay: int = 30):
+    def _job():
+        try:
+            store = get_chat_store(chat_id)
+            if store.get("edit_wait"):
+                store["edit_wait"] = None
+                save_data(data)
+            try:
+                bot.delete_message(chat_id, message_id)
+            except Exception:
+                pass
+        except Exception as e:
+            log_error(f"schedule_cancel_edit: {e}")
+
+    t = threading.Timer(delay, _job)
     t.start()
 def update_chat_info_from_message(msg):
     """
