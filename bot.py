@@ -1264,23 +1264,31 @@ def forward_any_message(source_chat_id: int, msg):
 
 def render_day_window(chat_id: int, day_key: str):
     store = get_chat_store(chat_id)
+
+    # записи за выбранный день
     recs = (store.get("daily_records", {}) or {}).get(day_key, []) or []
 
-    day_income = 0.0
-    day_expense = 0.0
-    for r in recs:
+    # ─────────────────────────────
+    # 💰 остаток по чату ДО конца выбранного дня
+    # ─────────────────────────────
+    day_end_balance = 0.0
+    day_end_dt = datetime.strptime(day_key, "%Y-%m-%d") + timedelta(days=1)
+
+    for r in store.get("records", []):
         try:
+            ts = datetime.fromisoformat(r.get("timestamp"))
             amt = float(r.get("amount") or 0)
         except Exception:
-            amt = 0.0
-        if amt >= 0:
-            day_income += amt
-        else:
-            day_expense += abs(amt)
+            continue
 
-    day_net = day_income - day_expense
+        if ts < day_end_dt:
+            day_end_balance += amt
+
     chat_balance = float(store.get("balance") or 0)
 
+    # ─────────────────────────────
+    # 📅 заголовок дня
+    # ─────────────────────────────
     lines = []
     d = datetime.strptime(day_key, "%Y-%m-%d")
     wd = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"][d.weekday()]
@@ -1295,16 +1303,21 @@ def render_day_window(chat_id: int, day_key: str):
     lines.append(f"📅 {label}")
     lines.append("")
 
-    total_income = 0.0
-    total_expense = 0.0
+    # ─────────────────────────────
+    # 🧮 итоги дня
+    # ─────────────────────────────
+    day_income = 0.0
+    day_expense = 0.0
+
     recs_sorted = sorted(recs, key=lambda x: x.get("timestamp"))
 
     for r in recs_sorted:
-        amt = r["amount"]
+        amt = float(r.get("amount") or 0)
         if amt >= 0:
-            total_income += amt
+            day_income += amt
         else:
-            total_expense += -amt
+            day_expense += -amt
+
         note = html.escape(r.get("note", ""))
         sid = r.get("short_id", f"R{r['id']}")
         lines.append(f"{sid} {fmt_num(amt)} {note}")
@@ -1315,10 +1328,10 @@ def render_day_window(chat_id: int, day_key: str):
     lines.append("")
     lines.append(f"📉 Расход за день: {fmt_num(-day_expense)}")
     lines.append(f"📈 Приход за день: {fmt_num(day_income)}")
-    lines.append(f"💰 Остаток дня: {fmt_num(day_net)}")
+    lines.append(f"💰 Остаток дня: {fmt_num(day_end_balance)}")
     lines.append(f"🏦 Остаток по чату: {fmt_num(chat_balance)}")
 
-    total = total_income - total_expense
+    total = day_income - day_expense
     return "\n".join(lines), total
     
 def build_main_keyboard(day_key: str, chat_id=None):
@@ -1695,16 +1708,38 @@ def handle_categories_callback(call, data_str: str) -> bool:
         return True
 
     if data_str == "cat_months":
-        RU_MONTHS = ["Янв", "Фев", "Мар", "Апр",
-                     "Май", "Июн", "Июл", "Авг",
-                     "Сен", "Окт", "Ноя", "Дек"]
+        RU_MONTHS = [
+            "Янв", "Фев", "Мар", "Апр",
+            "Май", "Июн", "Июл", "Авг",
+            "Сен", "Окт", "Ноя", "Дек"
+        ]
 
-        kb = types.InlineKeyboardMarkup(row_width=4)
-        for i, m in enumerate(RU_MONTHS, start=1):
-            kb.add(types.InlineKeyboardButton(m, callback_data=f"exp_by_cat_month:{i}"))
-        safe_edit(bot, call, "📦 Выберите месяц:", reply_markup=kb)
+        kb = types.InlineKeyboardMarkup()
+
+        row = []
+        for m in RU_MONTHS:
+            row.append(
+                types.InlineKeyboardButton(
+                    m,
+                    callback_data=f"cat_m:{m}"
+                )
+            )
+            if len(row) == 4:
+                kb.row(*row)
+                row = []
+
+        # на случай если остались кнопки (по правилу)
+        if row:
+            kb.row(*row)
+
+        safe_edit(
+            bot,
+            call,
+            "📦 Выберите месяц:",
+            reply_markup=kb
+        )
         return True
-
+        
     if data_str.startswith("cat_m:"):
         try:
             month = int(data_str.split(":")[1])
@@ -3011,15 +3046,14 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
                     log_error(f"finalize send_backup_to_channel({chat_id}): {e}")
 
                 # 4) ПЕРЕСОЗДАТЬ основное окно
+                # 🔥 ВАЖНО: создаём НОВОЕ основное окно С БЭКАПОМ
                 try:
-                    update_or_send_day_window(chat_id, day_key, force_new=True)
+                    send_main_window(chat_id, day_key, force_new=True)
                 except TypeError:
-                    # если сигнатура без force_new
-                    update_or_send_day_window(chat_id, day_key)
+                    send_main_window(chat_id, day_key)
                 except Exception as e:
-                    log_error(f"finalize update_or_send_day_window({chat_id},{day_key}): {e}")
-
-                # 5) обновить итоги
+                    log_error(f"finalize send_main_window({chat_id},{day_key}): {e}")
+              # 5) обновить итоги
                 try:
                     refresh_total_message_if_any(chat_id)
                 except Exception as e:
