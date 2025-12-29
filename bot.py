@@ -1272,7 +1272,10 @@ def render_day_window(chat_id: int, day_key: str):
     # 💰 остаток по чату ДО конца выбранного дня
     # ─────────────────────────────
     day_end_balance = 0.0
-    day_end_dt = datetime.strptime(day_key, "%Y-%m-%d") + timedelta(days=1)
+    day_end_dt = datetime.strptime(
+        day_key,
+        "%Y-%m-%d"
+    ).replace(tzinfo=now_local().tzinfo) + timedelta(days=1)
 
     for r in store.get("records", []):
         try:
@@ -1721,7 +1724,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
             row.append(
                 types.InlineKeyboardButton(
                     m,
-                    callback_data=f"cat_m:{m}"
+                    callback_data=f"cat_m:{i}"
                 )
             )
             if len(row) == 4:
@@ -1820,7 +1823,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                         lines.append("  • нет операций")
 
         kb = types.InlineKeyboardMarkup()
-        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{i}"))
         safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
         return True
 
