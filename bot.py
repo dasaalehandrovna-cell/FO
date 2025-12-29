@@ -1,3 +1,4 @@
+#норм
 import os
 import io
 import json
@@ -46,8 +47,6 @@ DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
 forward_map = {}
-_finalize_timers = {}
-_finalize_counters = {}
 # (src_chat_id, src_msg_id) -> [(dst_chat_id, dst_msg_id)]
 backup_flags = {
     "drive": True,
@@ -148,25 +147,25 @@ def _save_chat_backup_meta(meta: dict) -> None:
         log_info("chat_backup_meta.json updated")
     except Exception as e:
         log_error(f"_save_chat_backup_meta: {e}")
-
 def send_backup_to_chat(chat_id: int) -> None:
     """
     Универсальный авто-бэкап JSON прямо в чате.
+    Работает одинаково для владельца, групп, каналов, всех чатов.
     Логика:
     • гарантируем актуальный data_<chat_id>.json
-    • если есть msg_id → edit_message_media
-    • если нет / сообщение удалено → send_document
-    • НИКАКОЙ логики окон здесь нет
+    • читаем meta-файл chat_backup_meta.json
+    • если есть msg_id → edit_message_media()
+    • если нет / не найдено → отправляем новое сообщение
+    • обновляем meta-файл в рабочей директории (Render-friendly)
+    • при смене дня (после 00:00) создаётся НОВОЕ сообщение с файлом
     """
     try:
         if not chat_id:
             return
-
         try:
             save_chat_json(chat_id)
         except Exception as e:
             log_error(f"send_backup_to_chat save_chat_json({chat_id}): {e}")
-
         json_path = chat_json_file(chat_id)
         if not os.path.exists(json_path):
             log_error(f"send_backup_to_chat: {json_path} NOT FOUND")
@@ -182,7 +181,20 @@ def send_backup_to_chat(chat_id: int) -> None:
             f"⏱ {now_local().strftime('%Y-%m-%d %H:%M:%S')}"
         )
 
+        # 🔄 Новый файл после смены дня
+        last_ts = meta.get(ts_key)
+        msg_id = meta.get(msg_key)
+        if msg_id and last_ts:
+            try:
+                prev_dt = datetime.fromisoformat(last_ts)
+                if prev_dt.date() != now_local().date():
+                    # Новый день — старое сообщение оставляем как архив, создаём новое
+                    msg_id = None
+            except Exception as e:
+                log_error(f"send_backup_to_chat: bad timestamp for chat {chat_id}: {e}")
+
         def _open_file() -> io.BytesIO | None:
+            """Чтение JSON в BytesIO с правильным именем файла."""
             try:
                 with open(json_path, "rb") as f:
                     data_bytes = f.read()
@@ -191,56 +203,43 @@ def send_backup_to_chat(chat_id: int) -> None:
                 return None
             if not data_bytes:
                 return None
-
             base = os.path.basename(json_path)
             name_no_ext, dot, ext = base.partition(".")
             suffix = get_chat_name_for_filename(chat_id)
-            file_name = suffix if suffix else name_no_ext
+            if suffix:
+                file_name = suffix
+            else:
+                file_name = name_no_ext
             if dot:
                 file_name += f".{ext}"
-
             buf = io.BytesIO(data_bytes)
             buf.name = file_name
-            buf.seek(0)
             return buf
-
-        msg_id = meta.get(msg_key)
-
-        # ───── ПЫТАЕМСЯ ОБНОВИТЬ ─────
+            #🟢🟢🟢🟢
         if msg_id:
             fobj = _open_file()
             if not fobj:
                 return
             try:
-                bot.edit_message_media(
-                    chat_id=chat_id,
-                    message_id=msg_id,
-                    media=types.InputMediaDocument(
-                        media=fobj,
-                        caption=caption
-                    )
-                )
+                
+                log_info(f"Chat backup UPDATED in chat {chat_id}")
                 meta[ts_key] = now_local().isoformat(timespec="seconds")
                 _save_chat_backup_meta(meta)
-                log_info(f"Chat backup UPDATED in chat {chat_id}")
+                set_active_window_id(chat_id, day_key, mid)
                 return
             except Exception as e:
                 log_error(f"send_backup_to_chat edit FAILED in {chat_id}: {e}")
 
-        # ───── ОТПРАВЛЯЕМ НОВЫЙ ─────
         fobj = _open_file()
         if not fobj:
             return
-
         sent = bot.send_document(chat_id, fobj, caption=caption)
         meta[msg_key] = sent.message_id
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_chat_backup_meta(meta)
         log_info(f"Chat backup CREATED in chat {chat_id}")
-
     except Exception as e:
         log_error(f"send_backup_to_chat({chat_id}): {e}")
-
 def default_data():
     return {
         "overall_balance": 0,
@@ -315,6 +314,10 @@ def get_chat_store(chat_id: int) -> dict:
             "current_view_day": today_key(),
             "settings": {
                 "auto_add": False
+            },
+            "ui": {
+                "records_since_window": 0,
+                "last_main_window_id": None
             },
         }
     )
@@ -1264,34 +1267,7 @@ def forward_any_message(source_chat_id: int, msg):
 
 def render_day_window(chat_id: int, day_key: str):
     store = get_chat_store(chat_id)
-
-    # записи за выбранный день
-    recs = (store.get("daily_records", {}) or {}).get(day_key, []) or []
-
-    # ─────────────────────────────
-    # 💰 остаток по чату ДО конца выбранного дня
-    # ─────────────────────────────
-    day_end_balance = 0.0
-    day_end_dt = datetime.strptime(
-        day_key,
-        "%Y-%m-%d"
-    ).replace(tzinfo=now_local().tzinfo) + timedelta(days=1)
-
-    for r in store.get("records", []):
-        try:
-            ts = datetime.fromisoformat(r.get("timestamp"))
-            amt = float(r.get("amount") or 0)
-        except Exception:
-            continue
-
-        if ts < day_end_dt:
-            day_end_balance += amt
-
-    chat_balance = float(store.get("balance") or 0)
-
-    # ─────────────────────────────
-    # 📅 заголовок дня
-    # ─────────────────────────────
+    recs = store.get("daily_records", {}).get(day_key, [])
     lines = []
     d = datetime.strptime(day_key, "%Y-%m-%d")
     wd = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"][d.weekday()]
@@ -1302,41 +1278,30 @@ def render_day_window(chat_id: int, day_key: str):
     tag = "сегодня" if day_key == td else "вчера" if day_key == yd else "завтра" if day_key == tm else ""
     dk = fmt_date_ddmmyy(day_key)
     label = f"{dk} ({tag}, {wd})" if tag else f"{dk} ({wd})"
-
     lines.append(f"📅 {label}")
     lines.append("")
-
-    # ─────────────────────────────
-    # 🧮 итоги дня
-    # ─────────────────────────────
-    day_income = 0.0
-    day_expense = 0.0
-
+    total_income = 0.0
+    total_expense = 0.0
     recs_sorted = sorted(recs, key=lambda x: x.get("timestamp"))
-
     for r in recs_sorted:
-        amt = float(r.get("amount") or 0)
+        amt = r["amount"]
         if amt >= 0:
-            day_income += amt
+            total_income += amt
         else:
-            day_expense += -amt
-
+            total_expense += -amt
         note = html.escape(r.get("note", ""))
         sid = r.get("short_id", f"R{r['id']}")
         lines.append(f"{sid} {fmt_num(amt)} {note}")
-
     if not recs_sorted:
         lines.append("Нет записей за этот день.")
-
     lines.append("")
-    lines.append(f"📉 Расход за день: {fmt_num(-day_expense)}")
-    lines.append(f"📈 Приход за день: {fmt_num(day_income)}")
-    lines.append(f"💰 Остаток дня: {fmt_num(day_end_balance)}")
-    lines.append(f"🏦 Остаток по чату: {fmt_num(chat_balance)}")
-
-    total = day_income - day_expense
+    if recs_sorted:
+        lines.append(f"📉 Расход за день: {fmt_num(-total_expense) if total_expense else fmt_num(0)}")
+        lines.append(f"📈 Приход за день: {fmt_num(total_income) if total_income else fmt_num(0)}")
+    bal_chat = store.get("balance", 0)
+    lines.append(f"🏦 Остаток по чату: {fmt_num(bal_chat)}")
+    total = total_income - total_expense
     return "\n".join(lines), total
-    
 def build_main_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
@@ -1414,7 +1379,6 @@ def build_edit_menu_keyboard(day_key: str, chat_id=None):
         kb.row(
             types.InlineKeyboardButton("🔁 Пересылка", callback_data=f"d:{day_key}:forward_menu")
         )
-    kb.row(types.InlineKeyboardButton("📦 Расходы по статьям", callback_data="cat_months"))
     kb.row(
         types.InlineKeyboardButton("📅 Сегодня", callback_data=f"d:{today_key()}:open"),
         types.InlineKeyboardButton("📆 Выбрать день", callback_data=f"d:{day_key}:pick_date")
@@ -1711,38 +1675,16 @@ def handle_categories_callback(call, data_str: str) -> bool:
         return True
 
     if data_str == "cat_months":
-        RU_MONTHS = [
-            "Янв", "Фев", "Мар", "Апр",
-            "Май", "Июн", "Июл", "Авг",
-            "Сен", "Окт", "Ноя", "Дек"
-        ]
-
-        kb = types.InlineKeyboardMarkup()
-
-        row = []
-        for m in RU_MONTHS:
-            row.append(
-                types.InlineKeyboardButton(
-                    m,
-                    callback_data=f"cat_m:{i}"
-                )
-            )
-            if len(row) == 4:
-                kb.row(*row)
-                row = []
-
-        # на случай если остались кнопки (по правилу)
-        if row:
-            kb.row(*row)
-
-        safe_edit(
-            bot,
-            call,
-            "📦 Выберите месяц:",
-            reply_markup=kb
-        )
+        kb = types.InlineKeyboardMarkup(row_width=3)
+        # 12 месяцев
+        for m in range(1, 13):
+            kb.add(types.InlineKeyboardButton(
+                datetime(2000, m, 1).strftime("%b"),
+                callback_data=f"cat_m:{m}"
+            ))
+        safe_edit(bot, call, "📦 Выберите месяц:", reply_markup=kb)
         return True
-        
+
     if data_str.startswith("cat_m:"):
         try:
             month = int(data_str.split(":")[1])
@@ -1823,7 +1765,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                         lines.append("  • нет операций")
 
         kb = types.InlineKeyboardMarkup()
-        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{i}"))
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
         safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
         return True
 
@@ -2385,7 +2327,14 @@ def add_record_to_chat(
     save_chat_json(chat_id)
     export_global_csv(data)
     send_backup_to_channel(chat_id)
-    
+    store = get_chat_store(chat_id)
+    #store = get_chat_store(chat_id)
+    ui = store.setdefault("ui", {})
+    ui["records_since_window"] = ui.get("records_since_window", 0) + 1
+    if ui["records_since_window"] >= 3:
+        force_new_main_window(chat_id)
+        ui["records_since_window"] = 0    
+        
 def update_record_in_chat(chat_id: int, rid: int, new_amount: float, new_note: str, skip_chat_backup: bool = False):
     store = get_chat_store(chat_id)
     found = None
@@ -2477,11 +2426,9 @@ def delete_active_window_if_exists(chat_id: int, day_key: str):
     if day_key in aw:
         del aw[day_key]
     save_data(data)
-def update_or_send_day_window(chat_id: int, day_key: str, force_new: bool = False):
-#def update_or_send_day_window(chat_id: int, day_key: str):
+def update_or_send_day_window(chat_id: int, day_key: str):
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        send_day_window_with_backup(chat_id, day_key, force_new=force_new)
-        #backup_window_for_owner(chat_id, day_key)
+        backup_window_for_owner(chat_id, day_key)
         return
 
     txt, _ = render_day_window(chat_id, day_key)
@@ -3003,83 +2950,68 @@ def update_chat_info_from_message(msg):
         }
         save_chat_json(int(OWNER_ID))
     save_chat_json(chat_id)
-    #⚒️⚒️⚒️⚒️
-
+_finalize_timers = {}
 def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
-    """
-    Правило:
-    - пересоздаём основное окно (окно+бэкап одним сообщением) ТОЛЬКО после 3 сообщений
-    - бэкапы в чат/канал делаем только при финализации (не на каждое сообщение)
-    """
-    try:
-        key = (int(chat_id), str(day_key))
+    def _safe(action_name, func):
+        """
+        Безопасный вызов: любая ошибка — логируем и продолжаем выполнение.
+        """
+        try:
+            return func()
+        except Exception as e:
+            log_error(f"[FINALIZE ERROR] {action_name}: {e}")
+            return None
 
-        # 1) счётчик сообщений
-        cnt = _finalize_counters.get(key, 0) + 1
-        _finalize_counters[key] = cnt
+    def _job():
+        # 1️⃣ Внутренний перерасчёт и сохранение
+        _safe("recalc_balance", lambda: recalc_balance(chat_id))
+        _safe("rebuild_global_records", rebuild_global_records)
+        _safe("save_chat_json", lambda: save_chat_json(chat_id))
+        _safe("save_data", lambda: save_data(data))
+        _safe("export_global_csv", lambda: export_global_csv(data))
 
-        # ещё не 3 — просто выходим
-        if cnt < 3:
-            return
+        # 2️⃣ Окно дня + бэкап
+        if OWNER_ID and str(chat_id) == str(OWNER_ID):
+            _safe(
+                "owner_backup_window",
+                lambda: backup_window_for_owner(chat_id, day_key, None)
+            )
+        else:
+            _safe(
+                "force_new_day_window",
+                lambda: force_new_day_window(chat_id, day_key)
+            )
+            _safe(
+                "backup_to_chat",
+                lambda: force_backup_to_chat(chat_id)
+            )
 
-        # достигли 3 — сбрасываем счётчик и ставим таймер
-        _finalize_counters[key] = 0
+        # 3️⃣ Бэкап в канал (для всех)
+        _safe(
+            "backup_to_channel",
+            lambda: send_backup_to_channel(chat_id)
+        )
 
-        old = _finalize_timers.get(key)
-        if old:
-            try:
-                old.cancel()
-            except Exception:
-                pass
+        # 4️⃣ Итоги
+        _safe(
+            "refresh_total_chat",
+            lambda: refresh_total_message_if_any(chat_id)
+        )
+        if OWNER_ID and str(chat_id) != str(OWNER_ID):
+            _safe(
+                "refresh_total_owner",
+                lambda: refresh_total_message_if_any(int(OWNER_ID))
+            )
 
-        def _run():
-            try:
-                # сохранить данные
-                try:
-                    save_data(data)
-                except Exception as e:
-                    log_error(f"finalize save_data: {e}")
-
-                # бэкап в чат (обновить/пересоздать если удалён)
-                try:
-                    send_backup_to_chat(chat_id)
-                except Exception as e:
-                    log_error(f"finalize send_backup_to_chat({chat_id}): {e}")
-
-                # бэкап в канал (обновить/пересоздать если удалён)
-                try:
-                    send_backup_to_channel(chat_id)
-                except Exception as e:
-                    log_error(f"finalize send_backup_to_channel({chat_id}): {e}")
-
-                # ПЕРЕСОЗДАЁМ основное окно: документ+caption+кнопки
-                try:
-                    update_or_send_day_window(chat_id, day_key, force_new=True)
-                except Exception as e:
-                    log_error(f"finalize update_or_send_day_window({chat_id},{day_key}): {e}")
-
-                # итоги
-                try:
-                    refresh_total_message_if_any(chat_id)
-                except Exception as e:
-                    log_error(f"finalize refresh_total_message_if_any({chat_id}): {e}")
-
-                if OWNER_ID and str(chat_id) != str(OWNER_ID):
-                    try:
-                        refresh_total_message_if_any(int(OWNER_ID))
-                    except Exception:
-                        pass
-
-            finally:
-                _finalize_timers.pop(key, None)
-
-        t = threading.Timer(delay, _run)
-        _finalize_timers[key] = t
-        t.start()
-
-    except Exception as e:
-        log_error(f"schedule_finalize({chat_id},{day_key}): {e}")
-        
+    t_prev = _finalize_timers.get(chat_id)
+    if t_prev and t_prev.is_alive():
+        try:
+            t_prev.cancel()
+        except Exception:
+            pass
+    t = threading.Timer(delay, _job)
+    _finalize_timers[chat_id] = t
+    t.start()
 def recalc_balance(chat_id: int):
     store = get_chat_store(chat_id)
     store["balance"] = sum(r.get("amount", 0) for r in store.get("records", []))
@@ -3239,7 +3171,35 @@ def force_new_day_window(chat_id: int, day_key: str):
             bot.delete_message(chat_id, old_mid)
         except Exception:
             pass
-#@bot.message_handler(content_types=["text"])
+            
+def force_new_main_window(chat_id: int):
+    store = get_chat_store(chat_id)
+    ui = store.setdefault("ui", {})
+
+    # удалить старое основное окно
+    old_mid = ui.get("last_main_window_id")
+    if old_mid:
+        try:
+            bot.delete_message(chat_id, old_mid)
+        except Exception:
+            pass
+
+    # сбрасываем активные окна дня
+    store["active_windows"] = {}
+
+    day_key = store.get("current_view_day", today_key())
+    text, _ = render_day_window(chat_id, day_key)
+    kb = build_main_keyboard(day_key, chat_id)
+
+    sent = bot.send_message(
+        chat_id,
+        text,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+    ui["last_main_window_id"] = sent.message_id
+
 def reset_chat_data(chat_id: int):
     """
     Полное обнуление данных чата:
@@ -3258,6 +3218,10 @@ def reset_chat_data(chat_id: int):
         store["daily_records"] = {}
         store["next_id"] = 1
         store["active_windows"] = {}
+        store["ui"] = {
+            "records_since_window": 0,
+            "last_main_window_id": None
+        }
         store["edit_wait"] = None
         store["edit_target"] = None
         save_data(data)
