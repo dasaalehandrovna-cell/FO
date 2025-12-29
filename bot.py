@@ -46,6 +46,8 @@ DATA_FILE = "data.json"
 CSV_FILE = "data.csv"
 CSV_META_FILE = "csv_meta.json"
 forward_map = {}
+_finalize_timers = {}
+_finalize_counters = {}
 # (src_chat_id, src_msg_id) -> [(dst_chat_id, dst_msg_id)]
 backup_flags = {
     "drive": True,
@@ -2962,18 +2964,28 @@ def update_chat_info_from_message(msg):
         save_chat_json(int(OWNER_ID))
     save_chat_json(chat_id)
     #⚒️⚒️⚒️⚒️
-_finalize_timers = {}
+
 def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
     """
-    Финализация после серии сообщений:
-    - НЕ создаём новое окно и НЕ удаляем старое
-    - только обновляем текущее окно (edit -> send при необходимости)
-    - обновляем бэкап в чат (и пересоздаём если удалён)
-    - обновляем бэкап-канал (и пересоздаём если удалён)
+    Финализация по правилу:
+    - пересоздаём основное окно ТОЛЬКО после 3 сообщений
+    - до этого только обновляем данные в памяти
     """
     try:
         key = (int(chat_id), str(day_key))
 
+        # ───── счётчик сообщений ─────
+        cnt = _finalize_counters.get(key, 0) + 1
+        _finalize_counters[key] = cnt
+
+        # ещё не 3 сообщения — выходим
+        if cnt < 3:
+            return
+
+        # достигли 3 → сбрасываем счётчик
+        _finalize_counters[key] = 0
+
+        # ───── debounce по времени ─────
         old = _finalize_timers.get(key)
         if old:
             try:
@@ -2986,31 +2998,34 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
                 # 1) сохранить данные
                 save_data(data)
 
-                # 2) бэкап в ЧАТ (обновить/пересоздать)
+                # 2) бэкап в ЧАТ (один раз)
                 try:
                     send_backup_to_chat(chat_id)
                 except Exception as e:
                     log_error(f"finalize send_backup_to_chat({chat_id}): {e}")
 
-                # 3) бэкап в КАНАЛ (обновить/пересоздать)
+                # 3) бэкап в КАНАЛ (один раз)
                 try:
                     send_backup_to_channel(chat_id)
                 except Exception as e:
                     log_error(f"finalize send_backup_to_channel({chat_id}): {e}")
 
-                # 4) обновить ОКНО (без удаления и без создания нового если можно отредактировать)
+                # 4) ПЕРЕСОЗДАТЬ основное окно
                 try:
+                    update_or_send_day_window(chat_id, day_key, force_new=True)
+                except TypeError:
+                    # если сигнатура без force_new
                     update_or_send_day_window(chat_id, day_key)
                 except Exception as e:
                     log_error(f"finalize update_or_send_day_window({chat_id},{day_key}): {e}")
 
-                # 5) обновить итоговые окна (если есть)
+                # 5) обновить итоги
                 try:
                     refresh_total_message_if_any(chat_id)
                 except Exception as e:
                     log_error(f"finalize refresh_total_message_if_any({chat_id}): {e}")
 
-                # OWNER — если действие было не в owner-чате
+                # OWNER
                 if OWNER_ID and str(chat_id) != str(OWNER_ID):
                     try:
                         refresh_total_message_if_any(int(OWNER_ID))
