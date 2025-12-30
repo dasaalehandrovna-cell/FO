@@ -2327,13 +2327,16 @@ def add_record_to_chat(
     save_chat_json(chat_id)
     export_global_csv(data)
     send_backup_to_channel(chat_id)
+    
     store = get_chat_store(chat_id)
-    #store = get_chat_store(chat_id)
     ui = store.setdefault("ui", {})
+    
     ui["records_since_window"] = ui.get("records_since_window", 0) + 1
     if ui["records_since_window"] >= 3:
         force_new_main_window(chat_id)
-        ui["records_since_window"] = 0    
+        ui["records_since_window"] = 0 
+    else:
+        update_or_send_day_window(chat_id, today_key())
         
 def update_record_in_chat(chat_id: int, rid: int, new_amount: float, new_note: str, skip_chat_backup: bool = False):
     store = get_chat_store(chat_id)
