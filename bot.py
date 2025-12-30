@@ -1,4 +1,4 @@
-#норм с ост дня
+#норм
 import os
 import io
 import json
@@ -313,10 +313,7 @@ def get_chat_store(chat_id: int) -> dict:
             "edit_target": None,
             "current_view_day": today_key(),
             "settings": {
-                "auto_add": False},
-            "ui": {
-                "records_since_window": 0,
-                "last_main_window_id": None
+                "auto_add": False
             },
         }
     )
@@ -1297,39 +1294,10 @@ def render_day_window(chat_id: int, day_key: str):
     if recs_sorted:
         lines.append(f"📉 Расход за день: {fmt_num(-total_expense) if total_expense else fmt_num(0)}")
         lines.append(f"📈 Приход за день: {fmt_num(total_income) if total_income else fmt_num(0)}")
-    # =============================
-    # 💵 ОСТАТОК ПРОШЛОГО ДНЯ
-    # =============================
-    prev_balance = 0.0
-    daily_all = store.get("daily_records", {}) or {}
-
-    for dkey, drecs in daily_all.items():
-        if dkey < day_key:
-            for r in drecs:
-                prev_balance += float(r.get("amount", 0) or 0)
-
-    # =============================
-    # 📊 ДВИЖЕНИЕ ТЕКУЩЕГО ДНЯ
-    # =============================
-    day_sum = 0.0
-    for r in recs_sorted:
-        day_sum += float(r.get("amount", 0) or 0)
-
-    # =============================
-    # 🧮 ОСТАТОК ДНЯ
-    # =============================
-    day_balance = prev_balance - day_sum
-    lines.append(f"💵 Остаток дня: {fmt_num(day_balance)}")
-
-    # =============================
-    # 🏦 ОБЩИЙ БАЛАНС ЧАТА
-    # =============================
     bal_chat = store.get("balance", 0)
     lines.append(f"🏦 Остаток по чату: {fmt_num(bal_chat)}")
-
     total = total_income - total_expense
     return "\n".join(lines), total
-    
 def build_main_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
@@ -3192,7 +3160,7 @@ def force_new_day_window(chat_id: int, day_key: str):
             bot.delete_message(chat_id, old_mid)
         except Exception:
             pass
-
+#@bot.message_handler(content_types=["text"])
 def reset_chat_data(chat_id: int):
     """
     Полное обнуление данных чата:
