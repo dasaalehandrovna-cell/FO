@@ -748,6 +748,7 @@ def handle_finance_text(msg):
         store["edit_wait"] = None
         save_data(data)
         update_or_send_day_window(chat_id, day_key)
+        refresh_main_window_after_add(chat_id, day_key)
         schedule_finalize(chat_id, day_key)
         return
 
@@ -762,6 +763,7 @@ def handle_finance_text(msg):
         #add_record_to_chat(chat_id, amount, note, msg.from_user.id)
         add_record_to_chat(chat_id, amount, note, msg.from_user.id, source_msg=msg)
         day_key = store.get("current_view_day", today_key())
+        refresh_main_window_after_add(chat_id, day_key)
         update_or_send_day_window(chat_id, day_key)
         schedule_finalize(chat_id, day_key)
         return
@@ -3215,7 +3217,16 @@ def force_new_main_window(chat_id: int):
     store["active_windows"] = {day_key: sent.message_id}
 
     ui["last_main_window_id"] = sent.message_id
+def refresh_main_window_after_add(chat_id: int, day_key: str):
+    store = get_chat_store(chat_id)
+    ui = store.setdefault("ui", {})
+    ui["records_since_window"] = ui.get("records_since_window", 0) + 1
 
+    if ui["records_since_window"] >= 7:
+        force_new_day_window(chat_id, day_key)
+        ui["records_since_window"] = 0
+    else:
+        update_or_send_day_window(chat_id, day_key)
 def force_new_day_window(chat_id: int, day_key: str):
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         backup_window_for_owner(chat_id, day_key)
