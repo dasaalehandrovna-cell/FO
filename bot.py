@@ -3071,20 +3071,12 @@ def force_backup_to_chat(chat_id: int):
         log_error(f"force_backup_to_chat({chat_id}): {e}")
 
 def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int | None = None):
-    """
-    Для OWNER_ID: одно сообщение, в котором:
-      • документ JSON (backup)
-      • caption = окно дня (render_day_window)
-      • те же кнопки (build_main_keyboard)
-    """
     if not OWNER_ID or str(chat_id) != str(OWNER_ID):
         return
 
-    # Текст окна и кнопки
     txt, _ = render_day_window(chat_id, day_key)
     kb = build_main_keyboard(day_key, chat_id)
 
-    # Обновляем JSON-файл
     save_chat_json(chat_id)
     json_path = chat_json_file(chat_id)
     if not os.path.exists(json_path):
@@ -3101,28 +3093,22 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         base = os.path.basename(json_path)
         name_no_ext, dot, ext = base.partition(".")
         suffix = get_chat_name_for_filename(chat_id)
-        if suffix:
-            file_name = suffix
-        else:
-            file_name = name_no_ext
+        file_name = suffix if suffix else name_no_ext
         if dot:
             file_name += f".{ext}"
 
         buf = io.BytesIO(data_bytes)
         buf.name = file_name
 
-        # Если кнопка нажата на конкретном сообщении — редактируем именно его
         mid = message_id_override or get_active_window_id(chat_id, day_key)
-        if message_id_override:
-            try:
-                set_active_window_id(chat_id, day_key, message_id_override)
-            except Exception:
-                pass
 
-        # Пытаемся обновить старое окно, если оно есть
         if mid:
             try:
-                media = InputMediaDocument(buf, caption=txt, parse_mode="HTML")
+                media = InputMediaDocument(
+                    media=buf,
+                    caption=txt,
+                    parse_mode="HTML"
+                )
                 bot.edit_message_media(
                     chat_id=chat_id,
                     message_id=mid,
@@ -3132,26 +3118,14 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
                 set_active_window_id(chat_id, day_key, mid)
                 return
             except Exception as e:
-                log_error(f"backup_window_for_owner: edit_message_media failed: {e}")
-                # fallback: пробуем хотя бы caption+кнопки обновить
+                log_error(f"backup_window_for_owner: edit failed, recreate: {e}")
+                # ❗ ВАЖНО: сбрасываем битое окно
                 try:
-                    bot.edit_message_caption(
-                        chat_id=chat_id,
-                        message_id=mid,
-                        caption=txt,
-                        reply_markup=kb,
-                        parse_mode="HTML"
-                    )
-                    set_active_window_id(chat_id, day_key, mid)
-                    return
-                except Exception as e2:
-                    log_error(f"backup_window_for_owner: edit_caption failed: {e2}")
-                    try:
-                        bot.delete_message(chat_id, mid)
-                    except Exception:
-                        pass
+                    bot.delete_message(chat_id, mid)
+                except Exception:
+                    pass
 
-        # Если не получилось отредактировать — создаём новое сообщение
+        # ✅ ГАРАНТИРОВАННО создаём НОВОЕ окно
         sent = bot.send_document(
             chat_id,
             buf,
@@ -3159,9 +3133,10 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
             reply_markup=kb
         )
         set_active_window_id(chat_id, day_key, sent.message_id)
+
     except Exception as e:
         log_error(f"backup_window_for_owner({chat_id}, {day_key}): {e}")
-        
+                
 def force_new_day_window(chat_id: int, day_key: str):
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         backup_window_for_owner(chat_id, day_key)
