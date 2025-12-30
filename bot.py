@@ -1298,10 +1298,40 @@ def render_day_window(chat_id: int, day_key: str):
     if recs_sorted:
         lines.append(f"📉 Расход за день: {fmt_num(-total_expense) if total_expense else fmt_num(0)}")
         lines.append(f"📈 Приход за день: {fmt_num(total_income) if total_income else fmt_num(0)}")
+    # =============================
+    # 💵 ОСТАТОК ПРОШЛОГО ДНЯ
+    # =============================
+    prev_balance = 0.0
+    daily_all = store.get("daily_records", {}) or {}
+
+    for dkey, drecs in daily_all.items():
+        if dkey < day_key:
+            for r in drecs:
+                prev_balance += float(r.get("amount", 0) or 0)
+
+    # =============================
+    # 📊 ДВИЖЕНИЕ ТЕКУЩЕГО ДНЯ
+    # =============================
+    day_sum = 0.0
+    for r in recs_sorted:
+        day_sum += float(r.get("amount", 0) or 0)
+
+    # =============================
+    # 🧮 ОСТАТОК ДНЯ
+    # =============================
+    day_balance = prev_balance - day_sum
+
+    lines.append(f"💵 Остаток дня: {fmt_num(day_balance)}")
+
+    # =============================
+    # 🏦 ОБЩИЙ БАЛАНС ЧАТА
+    # =============================
     bal_chat = store.get("balance", 0)
     lines.append(f"🏦 Остаток по чату: {fmt_num(bal_chat)}")
+
     total = total_income - total_expense
     return "\n".join(lines), total
+    
 def build_main_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
@@ -2332,7 +2362,7 @@ def add_record_to_chat(
     ui = store.setdefault("ui", {})
     
     ui["records_since_window"] = ui.get("records_since_window", 0) + 1
-    if ui["records_since_window"] >= 3:
+    if ui["records_since_window"] >= 7:
         force_new_main_window(chat_id)
         ui["records_since_window"] = 0 
     else:
