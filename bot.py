@@ -3191,6 +3191,9 @@ def force_new_main_window(chat_id: int):
     store = get_chat_store(chat_id)
     ui = store.setdefault("ui", {})
 
+    day_key = store.get("current_view_day", today_key())
+
+    # удалить старое окно (если было)
     old_mid = ui.get("last_main_window_id")
     if old_mid:
         try:
@@ -3198,10 +3201,6 @@ def force_new_main_window(chat_id: int):
         except Exception:
             pass
 
-    # Очистить активные окна (чтобы не мешали)
-    store["active_windows"] = {}
-
-    day_key = store.get("current_view_day", today_key())
     text, _ = render_day_window(chat_id, day_key)
     kb = build_main_keyboard(day_key, chat_id)
 
@@ -3212,7 +3211,11 @@ def force_new_main_window(chat_id: int):
         parse_mode="HTML"
     )
 
+    # 🔴 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ
+    store["active_windows"] = {day_key: sent.message_id}
+
     ui["last_main_window_id"] = sent.message_id
+
 def force_new_day_window(chat_id: int, day_key: str):
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         backup_window_for_owner(chat_id, day_key)
