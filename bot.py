@@ -1074,6 +1074,9 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
                 sent = True
                 log_info(f"[BACKUP] channel file updated: {base_path}")
             except Exception as e:
+                if "Too Many Requests" in str(e):
+                    log_error(f"[FLOOD] channel edit skipped: {base_path}")
+                    return
                 log_error(f"[BACKUP] edit failed, will resend: {e}")
                 try:
                     bot.delete_message(int(BACKUP_CHAT_ID), meta[msg_key])
@@ -1087,13 +1090,19 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
             fobj = _open_for_telegram()
             if not fobj:
                 return
-            sent_msg = bot.send_document(
-                int(BACKUP_CHAT_ID),
-                fobj,
-                caption=caption
-            )
-            meta[msg_key] = sent_msg.message_id
-            log_info(f"[BACKUP] channel file sent new: {base_path}")
+            try:
+                sent_msg = bot.send_document(
+                    int(BACKUP_CHAT_ID),
+                    fobj,
+                    caption=caption
+                )
+                meta[msg_key] = sent_msg.message_id
+                log_info(f"[BACKUP] channel file sent new: {base_path}")
+            except Exception as e:
+                if "Too Many Requests" in str(e):
+                    log_error(f"[FLOOD] channel send skipped: {base_path}")
+                    return
+                raise
 
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_csv_meta(meta)
