@@ -313,7 +313,10 @@ def get_chat_store(chat_id: int) -> dict:
             "edit_target": None,
             "current_view_day": today_key(),
             "settings": {
-                "auto_add": False
+                "auto_add": False},
+            "ui": {
+                "records_since_window": 0,
+                "last_main_window_id": None
             },
         }
     )
@@ -1294,10 +1297,39 @@ def render_day_window(chat_id: int, day_key: str):
     if recs_sorted:
         lines.append(f"📉 Расход за день: {fmt_num(-total_expense) if total_expense else fmt_num(0)}")
         lines.append(f"📈 Приход за день: {fmt_num(total_income) if total_income else fmt_num(0)}")
+    # =============================
+    # 💵 ОСТАТОК ПРОШЛОГО ДНЯ
+    # =============================
+    prev_balance = 0.0
+    daily_all = store.get("daily_records", {}) or {}
+
+    for dkey, drecs in daily_all.items():
+        if dkey < day_key:
+            for r in drecs:
+                prev_balance += float(r.get("amount", 0) or 0)
+
+    # =============================
+    # 📊 ДВИЖЕНИЕ ТЕКУЩЕГО ДНЯ
+    # =============================
+    day_sum = 0.0
+    for r in recs_sorted:
+        day_sum += float(r.get("amount", 0) or 0)
+
+    # =============================
+    # 🧮 ОСТАТОК ДНЯ
+    # =============================
+    day_balance = prev_balance - day_sum
+    lines.append(f"💵 Остаток дня: {fmt_num(day_balance)}")
+
+    # =============================
+    # 🏦 ОБЩИЙ БАЛАНС ЧАТА
+    # =============================
     bal_chat = store.get("balance", 0)
     lines.append(f"🏦 Остаток по чату: {fmt_num(bal_chat)}")
+
     total = total_income - total_expense
     return "\n".join(lines), total
+    
 def build_main_keyboard(day_key: str, chat_id=None):
     kb = types.InlineKeyboardMarkup(row_width=3)
     kb.row(
@@ -2323,6 +2355,17 @@ def add_record_to_chat(
     save_chat_json(chat_id)
     export_global_csv(data)
     send_backup_to_channel(chat_id)
+    store = get_chat_store(chat_id)
+    
+    ui = store.setdefault("ui", {})
+    ui["records_since_window"] = ui.get("records_since_window", 0) + 1
+    if ui["records_since_window"] >= 7:
+        force_new_main_window(chat_id)
+        ui["records_since_window"] = 0
+    else:
+    # Обновить обычное окно ДНЯ
+        day_key = store.get("current_view_day", today_key())
+        update_or_send_day_window(chat_id, day_key)
     
 def update_record_in_chat(chat_id: int, rid: int, new_amount: float, new_note: str, skip_chat_backup: bool = False):
     store = get_chat_store(chat_id)
@@ -3144,7 +3187,32 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         set_active_window_id(chat_id, day_key, sent.message_id)
     except Exception as e:
         log_error(f"backup_window_for_owner({chat_id}, {day_key}): {e}")
-        
+def force_new_main_window(chat_id: int):
+    store = get_chat_store(chat_id)
+    ui = store.setdefault("ui", {})
+
+    old_mid = ui.get("last_main_window_id")
+    if old_mid:
+        try:
+            bot.delete_message(chat_id, old_mid)
+        except Exception:
+            pass
+
+    # Очистить активные окна (чтобы не мешали)
+    store["active_windows"] = {}
+
+    day_key = store.get("current_view_day", today_key())
+    text, _ = render_day_window(chat_id, day_key)
+    kb = build_main_keyboard(day_key, chat_id)
+
+    sent = bot.send_message(
+        chat_id,
+        text,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+    ui["last_main_window_id"] = sent.message_id
 def force_new_day_window(chat_id: int, day_key: str):
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         backup_window_for_owner(chat_id, day_key)
@@ -3160,7 +3228,7 @@ def force_new_day_window(chat_id: int, day_key: str):
             bot.delete_message(chat_id, old_mid)
         except Exception:
             pass
-#@bot.message_handler(content_types=["text"])
+
 def reset_chat_data(chat_id: int):
     """
     Полное обнуление данных чата:
@@ -3179,6 +3247,10 @@ def reset_chat_data(chat_id: int):
         store["daily_records"] = {}
         store["next_id"] = 1
         store["active_windows"] = {}
+        store["ui"] = {
+            "records_since_window": 0,
+            "last_main_window_id": None
+        }
         store["edit_wait"] = None
         store["edit_target"] = None
         save_data(data)
