@@ -25,7 +25,7 @@ from telebot.types import InputMediaDocument
 # -----------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("B_T")
 OWNER_ID = os.getenv("OWNER_ID") or os.getenv("ID")
-#BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")
+BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")
 
 OWNER_ID = int(OWNER_ID) if OWNER_ID and OWNER_ID.isdigit() else None
 BACKUP_CHAT_ID = int(BACKUP_CHAT_ID) if BACKUP_CHAT_ID and BACKUP_CHAT_ID.isdigit() else None
