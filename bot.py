@@ -1073,12 +1073,12 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
                 )
                 sent = True
                 log_info(f"[BACKUP] channel file updated: {base_path}")
-            except Exception as e:
-                log_error(f"[BACKUP] edit failed, will resend: {e}")
-                try:
-                    bot.delete_message(int(BACKUP_CHAT_ID), meta[msg_key])
-                except Exception:
-                    pass
+            #except Exception as e:# делет канал
+                #log_error(f"[BACKUP] edit failed, will resend: {e}")
+                #try:
+                    #bot.delete_message(int(BACKUP_CHAT_ID), meta[msg_key])
+                #except Exception:
+                    #pass
 
         # ─────────────────────────────
         # ➕ ОТПРАВЛЯЕМ НОВЫЙ
