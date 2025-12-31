@@ -23,16 +23,23 @@ from telebot.types import InputMediaDocument
 # -----------------------------
 # ⚙️ Конфигурация (жёстко прописанные значения для Render)
 # -----------------------------
-BOT_TOKEN = os.getenv("B_T")
+BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("B_T")
+OWNER_ID = os.getenv("OWNER_ID") or os.getenv("ID")
+#BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID")
+
+OWNER_ID = int(OWNER_ID) if OWNER_ID and OWNER_ID.isdigit() else None
+BACKUP_CHAT_ID = int(BACKUP_CHAT_ID) if BACKUP_CHAT_ID and BACKUP_CHAT_ID.isdigit() else None
+
+#BOT_TOKEN = os.getenv("BOT_TOKEN") or os.getenv("B_T")
 #OWNER_ID = "8592220081"
 APP_URL = "https://fo-1.onrender.com"
 WEBHOOK_URL = "https://fo-1.onrender.com"  # если дальше в коде используется отдельная переменная вебхука
 PORT = 5000
 
-BACKUP_CHAT_ID = "-1003291414261"
+#BACKUP_CHAT_ID = "-1003291414261"
 
 #BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
-OWNER_ID = os.getenv("ID", "").strip()
+#OWNER_ID = os.getenv("ID", "").strip()
 #BACKUP_CHAT_ID = os.getenv("BACKUP_CHAT_ID", "").strip()
 GOOGLE_SERVICE_ACCOUNT_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON", "").strip()
 GDRIVE_FOLDER_ID = os.getenv("GDRIVE_FOLDER_ID", "").strip()
