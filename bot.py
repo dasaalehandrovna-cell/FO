@@ -1074,9 +1074,6 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
                 sent = True
                 log_info(f"[BACKUP] channel file updated: {base_path}")
             except Exception as e:
-                if "Too Many Requests" in str(e):
-                    log_error(f"[FLOOD] channel edit skipped: {base_path}")
-                    return
                 log_error(f"[BACKUP] edit failed, will resend: {e}")
                 try:
                     bot.delete_message(int(BACKUP_CHAT_ID), meta[msg_key])
@@ -1090,19 +1087,13 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
             fobj = _open_for_telegram()
             if not fobj:
                 return
-            try:
-                sent_msg = bot.send_document(
-                    int(BACKUP_CHAT_ID),
-                    fobj,
-                    caption=caption
-                )
-                meta[msg_key] = sent_msg.message_id
-                log_info(f"[BACKUP] channel file sent new: {base_path}")
-            except Exception as e:
-                if "Too Many Requests" in str(e):
-                    log_error(f"[FLOOD] channel send skipped: {base_path}")
-                    return
-                raise
+            sent_msg = bot.send_document(
+                int(BACKUP_CHAT_ID),
+                fobj,
+                caption=caption
+            )
+            meta[msg_key] = sent_msg.message_id
+            log_info(f"[BACKUP] channel file sent new: {base_path}")
 
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_csv_meta(meta)
@@ -2546,31 +2537,14 @@ def cmd_start(msg):
     if not require_finance(chat_id):
         return
     day_key = today_key()
-    # 🔥 ВСЕГДА создаём НОВОЕ окно
-    # старое активное окно больше не используем
-    try:
-        old_mid = get_active_window_id(chat_id, day_key)
-        if old_mid:
-            try:
-                bot.delete_message(chat_id, old_mid)
-            except Exception:
-                pass
-    except Exception:
-        pass
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        # OWNER: новое document+caption окно
         backup_window_for_owner(chat_id, day_key, None)
     else:
         txt, _ = render_day_window(chat_id, day_key)
         kb = build_main_keyboard(day_key, chat_id)
-        sent = bot.send_message(
-            chat_id,
-            txt,
-            reply_markup=kb,
-            parse_mode="HTML"
-        )
+        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
         set_active_window_id(chat_id, day_key, sent.message_id)
-                
+        
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
     chat_id = msg.chat.id
@@ -3080,12 +3054,20 @@ def force_backup_to_chat(chat_id: int):
         log_error(f"force_backup_to_chat({chat_id}): {e}")
 
 def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int | None = None):
+    """
+    Для OWNER_ID: одно сообщение, в котором:
+      • документ JSON (backup)
+      • caption = окно дня (render_day_window)
+      • те же кнопки (build_main_keyboard)
+    """
     if not OWNER_ID or str(chat_id) != str(OWNER_ID):
         return
 
+    # Текст окна и кнопки
     txt, _ = render_day_window(chat_id, day_key)
     kb = build_main_keyboard(day_key, chat_id)
 
+    # Обновляем JSON-файл
     save_chat_json(chat_id)
     json_path = chat_json_file(chat_id)
     if not os.path.exists(json_path):
@@ -3102,22 +3084,28 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
         base = os.path.basename(json_path)
         name_no_ext, dot, ext = base.partition(".")
         suffix = get_chat_name_for_filename(chat_id)
-        file_name = suffix if suffix else name_no_ext
+        if suffix:
+            file_name = suffix
+        else:
+            file_name = name_no_ext
         if dot:
             file_name += f".{ext}"
 
         buf = io.BytesIO(data_bytes)
         buf.name = file_name
 
+        # Если кнопка нажата на конкретном сообщении — редактируем именно его
         mid = message_id_override or get_active_window_id(chat_id, day_key)
+        if message_id_override:
+            try:
+                set_active_window_id(chat_id, day_key, message_id_override)
+            except Exception:
+                pass
 
+        # Пытаемся обновить старое окно, если оно есть
         if mid:
             try:
-                media = InputMediaDocument(
-                    media=buf,
-                    caption=txt,
-                    parse_mode="HTML"
-                )
+                media = InputMediaDocument(buf, caption=txt, parse_mode="HTML")
                 bot.edit_message_media(
                     chat_id=chat_id,
                     message_id=mid,
@@ -3127,14 +3115,26 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
                 set_active_window_id(chat_id, day_key, mid)
                 return
             except Exception as e:
-                log_error(f"backup_window_for_owner: edit failed, recreate: {e}")
-                # ❗ ВАЖНО: сбрасываем битое окно
+                log_error(f"backup_window_for_owner: edit_message_media failed: {e}")
+                # fallback: пробуем хотя бы caption+кнопки обновить
                 try:
-                    bot.delete_message(chat_id, mid)
-                except Exception:
-                    pass
+                    bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=mid,
+                        caption=txt,
+                        reply_markup=kb,
+                        parse_mode="HTML"
+                    )
+                    set_active_window_id(chat_id, day_key, mid)
+                    return
+                except Exception as e2:
+                    log_error(f"backup_window_for_owner: edit_caption failed: {e2}")
+                    try:
+                        bot.delete_message(chat_id, mid)
+                    except Exception:
+                        pass
 
-        # ✅ ГАРАНТИРОВАННО создаём НОВОЕ окно
+        # Если не получилось отредактировать — создаём новое сообщение
         sent = bot.send_document(
             chat_id,
             buf,
@@ -3142,10 +3142,9 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
             reply_markup=kb
         )
         set_active_window_id(chat_id, day_key, sent.message_id)
-
     except Exception as e:
         log_error(f"backup_window_for_owner({chat_id}, {day_key}): {e}")
-                
+        
 def force_new_day_window(chat_id: int, day_key: str):
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         backup_window_for_owner(chat_id, day_key)
