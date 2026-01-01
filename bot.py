@@ -1013,24 +1013,31 @@ def _get_chat_title_for_backup(chat_id: int) -> str:
         log_error(f"_get_chat_title_for_backup({chat_id}): {e}")
     return f"chat_{chat_id}"
 def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_title: str = None):
-    """Helper to send or update a file in BACKUP_CHAT_ID with csv_meta tracking.
-    Правило:
-    • edit → если не удалось → send
-    • если сообщение удалено вручную — файл создаётся заново
+    """
+    Отправляет ИЛИ ОБНОВЛЯЕТ файл в BACKUP_CHAT_ID.
+
+    Поведение:
+    • если сообщение уже есть → edit_message_media
+    • если сообщение удалено / edit упал → send_document
+    • НИКОГДА не удаляет сообщения
+    • не плодит файлы
     """
     if not BACKUP_CHAT_ID:
         return
+
     if not os.path.exists(base_path):
-        log_error(f"send_backup_to_channel_for_file: {base_path} not found")
+        log_error(f"[BACKUP] file not found: {base_path}")
         return
 
     try:
-        meta = _load_csv_meta()
+        meta = _load_csv_meta() or {}
+
         msg_key = f"msg_{meta_key_prefix}"
         ts_key = f"timestamp_{meta_key_prefix}"
 
+        # ───────────── имя файла ─────────────
         base_name = os.path.basename(base_path)
-        name_without_ext, dot, ext = base_name.partition(".")
+        _, dot, ext = base_name.partition(".")
         safe_title = _safe_chat_title_for_filename(chat_title)
 
         if safe_title:
@@ -1038,68 +1045,69 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
         else:
             file_name = base_name
 
-        caption = f"📦 {file_name} — {now_local().strftime('%Y-%m-%d %H:%M')}"
+        caption = f"📦 {file_name}\n⏱ {now_local().strftime('%Y-%m-%d %H:%M:%S')}"
 
-        def _open_for_telegram() -> io.BytesIO | None:
-            if not os.path.exists(base_path):
+        # ───────────── файл → BytesIO ─────────────
+        def _open_file() -> io.BytesIO | None:
+            try:
+                with open(base_path, "rb") as f:
+                    data = f.read()
+                if not data:
+                    return None
+                buf = io.BytesIO(data)
+                buf.name = file_name
+                buf.seek(0)
+                return buf
+            except Exception as e:
+                log_error(f"[BACKUP] open failed: {e}")
                 return None
-            with open(base_path, "rb") as src:
-                data_bytes = src.read()
-            if not data_bytes:
-                log_error(f"send_backup_to_channel_for_file: {base_path} is empty, skip")
-                return None
-            buf = io.BytesIO(data_bytes)
-            buf.name = file_name
-            buf.seek(0)
-            return buf
 
         sent = False
 
-        # ─────────────────────────────
-        # 🔄 ПРОБУЕМ ОБНОВИТЬ
-        # ─────────────────────────────
-        if meta.get(msg_key):
+        # ───────────── ПЫТАЕМСЯ ОБНОВИТЬ ─────────────
+        msg_id = meta.get(msg_key)
+        if msg_id:
             try:
-                fobj = _open_for_telegram()
+                fobj = _open_file()
                 if not fobj:
                     return
+
                 bot.edit_message_media(
                     chat_id=int(BACKUP_CHAT_ID),
-                    message_id=meta[msg_key],
+                    message_id=int(msg_id),
                     media=types.InputMediaDocument(
                         media=fobj,
                         caption=caption
                     )
                 )
-                sent = True
-                log_info(f"[BACKUP] channel file updated: {base_path}")
-            except Exception as e:# делет канал
-                log_error(f"[BACKUP] edit failed, will resend: {e}")
-                #try:
-                    #bot.delete_message(int(BACKUP_CHAT_ID), meta[msg_key])
-                #except Exception:
-                    #pass
 
-        # ─────────────────────────────
-        # ➕ ОТПРАВЛЯЕМ НОВЫЙ
-        # ─────────────────────────────
+                sent = True
+                log_info(f"[BACKUP] channel updated: {file_name}")
+
+            except Exception as e:
+                log_error(f"[BACKUP] edit failed, will resend: {e}")
+
+        # ───────────── ОТПРАВЛЯЕМ НОВЫЙ ─────────────
         if not sent:
-            fobj = _open_for_telegram()
+            fobj = _open_file()
             if not fobj:
                 return
+
             sent_msg = bot.send_document(
                 int(BACKUP_CHAT_ID),
                 fobj,
                 caption=caption
             )
+
             meta[msg_key] = sent_msg.message_id
-            log_info(f"[BACKUP] channel file sent new: {base_path}")
+            log_info(f"[BACKUP] channel sent new: {file_name}")
 
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_csv_meta(meta)
 
     except Exception as e:
-        log_error(f"send_backup_to_channel_for_file({base_path}): {e}")
+        log_error(f"send_backup_to_channel_for_file fatal: {e}")
+        
 def send_backup_to_channel(chat_id: int):
     """
     Общий бэкап файлов чата в BACKUP_CHAT_ID.
