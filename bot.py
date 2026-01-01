@@ -1140,7 +1140,7 @@ def send_backup_to_channel(chat_id: int):
         json_path = chat_json_file(chat_id)
         csv_path = chat_csv_file(chat_id)
         send_backup_to_channel_for_file(json_path, f"json_{chat_id}", chat_title)
-        #send_backup_to_channel_for_file(csv_path, f"csv_{chat_id}", chat_title)
+        send_backup_to_channel_for_file(csv_path, f"csv_{chat_id}", chat_title)
 
                                                                                
                                                                                 
