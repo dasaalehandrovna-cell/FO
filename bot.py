@@ -1093,7 +1093,7 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
 
     except Exception as e:
         log_error(f"send_backup_to_channel_for_file({base_path}): {e}")
-        
+                
 def send_backup_to_channel(chat_id: int):
     """
     Общий бэкап файлов чата в BACKUP_CHAT_ID.
