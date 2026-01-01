@@ -3129,10 +3129,10 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
                     return
                 except Exception as e2:
                     log_error(f"backup_window_for_owner: edit_caption failed: {e2}")
-                    try:
-                        bot.delete_message(chat_id, mid)
-                    except Exception:
-                        pass
+                    #try:
+                        #bot.delete_message(chat_id, mid)
+                    #except Exception:
+                       # pass
 
         # Если не получилось отредактировать — создаём новое сообщение
         sent = bot.send_document(
