@@ -1012,11 +1012,11 @@ def _get_chat_title_for_backup(chat_id: int) -> str:
     except Exception as e:
         log_error(f"_get_chat_title_for_backup({chat_id}): {e}")
     return f"chat_{chat_id}"
-
 def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_title: str = None):
     """Helper to send or update a file in BACKUP_CHAT_ID with csv_meta tracking.
-    • edit → если удалось → ТОЛЬКО обновление
-    • send → ТОЛЬКО если файла ещё нет или edit не удался
+    Правило:
+    • edit → если не удалось → send
+    • если сообщение удалено вручную — файл создаётся заново
     """
     if not BACKUP_CHAT_ID:
         return
@@ -1025,12 +1025,12 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
         return
 
     try:
-        meta = _load_csv_meta() or {}
+        meta = _load_csv_meta()
         msg_key = f"msg_{meta_key_prefix}"
         ts_key = f"timestamp_{meta_key_prefix}"
 
         base_name = os.path.basename(base_path)
-        _, dot, ext = base_name.partition(".")
+        name_without_ext, dot, ext = base_name.partition(".")
         safe_title = _safe_chat_title_for_filename(chat_title)
 
         if safe_title:
@@ -1041,51 +1041,58 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
         caption = f"📦 {file_name} — {now_local().strftime('%Y-%m-%d %H:%M')}"
 
         def _open_for_telegram() -> io.BytesIO | None:
-            try:
-                with open(base_path, "rb") as src:
-                    data_bytes = src.read()
-                if not data_bytes:
-                    log_error(f"send_backup_to_channel_for_file: {base_path} is empty, skip")
-                    return None
-                buf = io.BytesIO(data_bytes)
-                buf.name = file_name
-                buf.seek(0)
-                return buf
-            except Exception as e:
-                log_error(f"send_backup_to_channel_for_file open error: {e}")
+            if not os.path.exists(base_path):
                 return None
+            with open(base_path, "rb") as src:
+                data_bytes = src.read()
+            if not data_bytes:
+                log_error(f"send_backup_to_channel_for_file: {base_path} is empty, skip")
+                return None
+            buf = io.BytesIO(data_bytes)
+            buf.name = file_name
+            buf.seek(0)
+            return buf
 
-        updated = False
+        sent = False
 
-        msg_id = meta.get(msg_key)
-        if msg_id:
+        # ─────────────────────────────
+        # 🔄 ПРОБУЕМ ОБНОВИТЬ
+        # ─────────────────────────────
+        if meta.get(msg_key):
             try:
                 fobj = _open_for_telegram()
                 if not fobj:
                     return
                 bot.edit_message_media(
                     chat_id=int(BACKUP_CHAT_ID),
-                    message_id=int(msg_id),
-                    media=telebot.types.InputMediaDocument(
+                    message_id=meta[msg_key],
+                    media=types.InputMediaDocument(
                         media=fobj,
                         caption=caption
                     )
                 )
-                updated = True
+                sent = True
                 log_info(f"[BACKUP] channel file updated: {base_path}")
             except Exception as e:
-                log_error(f"[BACKUP] edit_message_media failed ({base_path}): {e}")
+                log_error(f"[BACKUP] edit failed, will resend: {e}")
+                #try:
+                    #bot.delete_message(int(BACKUP_CHAT_ID), meta[msg_key])
+                #except Exception:
+                   # pass
 
-        if not updated:
+        # ─────────────────────────────
+        # ➕ ОТПРАВЛЯЕМ НОВЫЙ
+        # ─────────────────────────────
+        if not sent:
             fobj = _open_for_telegram()
             if not fobj:
                 return
-            sent = bot.send_document(
+            sent_msg = bot.send_document(
                 int(BACKUP_CHAT_ID),
                 fobj,
                 caption=caption
             )
-            meta[msg_key] = sent.message_id
+            meta[msg_key] = sent_msg.message_id
             log_info(f"[BACKUP] channel file sent new: {base_path}")
 
         meta[ts_key] = now_local().isoformat(timespec="seconds")
@@ -1093,7 +1100,6 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
 
     except Exception as e:
         log_error(f"send_backup_to_channel_for_file({base_path}): {e}")
-                
 def send_backup_to_channel(chat_id: int):
     """
     Общий бэкап файлов чата в BACKUP_CHAT_ID.
@@ -1110,21 +1116,15 @@ def send_backup_to_channel(chat_id: int):
         if not backup_flags.get("channel", True):
             log_info("send_backup_to_channel: channel backup disabled by flag.")
             return
-
         try:
             backup_chat_id = int(BACKUP_CHAT_ID)
         except Exception:
             log_error("send_backup_to_channel: BACKUP_CHAT_ID не является числом.")
             return
-
-                                  
         save_chat_json(chat_id)
         export_global_csv(data)
         save_data(data)
-
         chat_title = _get_chat_title_for_backup(chat_id)
-
-                                                              
         if chat_id not in backup_channel_notified_chats:
             try:
                 emoji_id = format_chat_id_emoji(chat_id)
@@ -1135,21 +1135,12 @@ def send_backup_to_channel(chat_id: int):
                     f"send_backup_to_channel: не удалось отправить emoji chat_id "
                     f"в канал: {e}"
                 )
-
-                                                                         
         json_path = chat_json_file(chat_id)
         csv_path = chat_csv_file(chat_id)
         send_backup_to_channel_for_file(json_path, f"json_{chat_id}", chat_title)
         send_backup_to_channel_for_file(csv_path, f"csv_{chat_id}", chat_title)
-
-                                                                               
-                                                                                
-                                                                              
     except Exception as e:
         log_error(f"send_backup_to_channel({chat_id}): {e}")
-
-              
-                                                        
 #⏏️⏏️⏏️⏏️⏏️⏏️
 def _owner_data_file() -> str | None:
     """
@@ -2413,15 +2404,16 @@ def get_active_window_id(chat_id: int, day_key: str):
     aw = get_or_create_active_windows(chat_id)
     return aw.get(day_key)
 def delete_active_window_if_exists(chat_id: int, day_key: str):
-    mid = get_active_window_id(chat_id, day_key)
+    mid = message_id_override or get_active_window_id(chat_id, day_key)
     if not mid:
         return
     try:
         bot.delete_message(chat_id, mid)
-    except Exception:
+    except:
         pass
     aw = get_or_create_active_windows(chat_id)
-    aw.pop(day_key, None)
+    if day_key in aw:
+        del aw[day_key]
     save_data(data)
 def update_or_send_day_window(chat_id: int, day_key: str):
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
@@ -2975,12 +2967,12 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
             )
         else:
             _safe(
-                "update_or_send_day_window",
-                lambda: update_or_send_day_window(chat_id, day_key)
+                "force_new_day_window",
+                lambda: force_new_day_window(chat_id, day_key)
             )
             _safe(
                 "backup_to_chat",
-                lambda: send_backup_to_chat(chat_id)
+                lambda: force_backup_to_chat(chat_id)
             )
 
         # 3️⃣ Бэкап в канал (для всех)
@@ -3153,21 +3145,21 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
     except Exception as e:
         log_error(f"backup_window_for_owner({chat_id}, {day_key}): {e}")
         
-#def force_new_day_window(chat_id: int, day_key: str):
-    #if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        #backup_window_for_owner(chat_id, day_key)
-        #return
+def force_new_day_window(chat_id: int, day_key: str):
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        backup_window_for_owner(chat_id, day_key)
+        return
 
-    #old_mid = get_active_window_id(chat_id, day_key)
-    #txt, _ = render_day_window(chat_id, day_key)
-    #kb = build_main_keyboard(day_key, chat_id)
-    #sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
-    #set_active_window_id(chat_id, day_key, sent.message_id)
-    #if old_mid:
-        #try:
-            #bot.delete_message(chat_id, old_mid)
-        #except Exception:
-            #pass
+    old_mid = get_active_window_id(chat_id, day_key)
+    txt, _ = render_day_window(chat_id, day_key)
+    kb = build_main_keyboard(day_key, chat_id)
+    sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+    set_active_window_id(chat_id, day_key, sent.message_id)
+    if old_mid:
+        try:
+            bot.delete_message(chat_id, old_mid)
+        except Exception:
+            pass
 #@bot.message_handler(content_types=["text"])
 def reset_chat_data(chat_id: int):
     """
