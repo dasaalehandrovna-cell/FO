@@ -1015,9 +1015,9 @@ def _get_chat_title_for_backup(chat_id: int) -> str:
 
 def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_title: str = None):
     """Helper to send or update a file in BACKUP_CHAT_ID with csv_meta tracking.
-    Правило:
-    • edit → если не удалось → send
-    • если сообщение удалено вручную — файл создаётся заново
+    Добавлено:
+    • если передан chat_title — он включается в имя файла, которое видит Telegram
+    • защита от пустого файла (Telegram даёт 400)
     """
     if not BACKUP_CHAT_ID:
         return
@@ -1035,7 +1035,9 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
         safe_title = _safe_chat_title_for_filename(chat_title)
 
         if safe_title:
-            file_name = safe_title + (f".{ext}" if dot else "")
+            file_name = safe_title
+            if dot:                   
+                file_name += f".{ext}"
         else:
             file_name = base_name
 
@@ -1043,6 +1045,7 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
 
         def _open_for_telegram() -> io.BytesIO | None:
             if not os.path.exists(base_path):
+                log_error(f"send_backup_to_channel_for_file: {base_path} not found")
                 return None
             with open(base_path, "rb") as src:
                 data_bytes = src.read()
@@ -1054,12 +1057,8 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
             buf.seek(0)
             return buf
 
-        sent = False
-
-        # ─────────────────────────────
-        # 🔄 ПРОБУЕМ ОБНОВИТЬ
-        # ─────────────────────────────
         if meta.get(msg_key):
+                                                            
             try:
                 fobj = _open_for_telegram()
                 if not fobj:
@@ -1067,41 +1066,38 @@ def send_backup_to_channel_for_file(base_path: str, meta_key_prefix: str, chat_t
                 bot.edit_message_media(
                     chat_id=int(BACKUP_CHAT_ID),
                     message_id=meta[msg_key],
-                    media=types.InputMediaDocument(
-                        media=fobj,
-                        caption=caption
-                    )
+                    media=telebot.types.InputMediaDocument(fobj, caption=caption),
                 )
-                sent = True
-                log_info(f"[BACKUP] channel file updated: {base_path}")
-            except Exception as e:# делет канал
-                log_error(f"[BACKUP] edit failed, will resend: {e}")
-                #try:
-                    #bot.delete_message(int(BACKUP_CHAT_ID), meta[msg_key])
-                #except Exception:
-                    #pass
+                log_info(f"Channel file updated: {base_path}")
+            except Exception as e:
+                log_error(f"edit_message_media {base_path}: {e}")
 
-        # ─────────────────────────────
-        # ➕ ОТПРАВЛЯЕМ НОВЫЙ
-        # ─────────────────────────────
-        if not sent:
+                                                                                         
+                                                              
+                try:
+                    bot.delete_message(int(BACKUP_CHAT_ID), meta[msg_key])
+                except Exception as del_e:
+                    log_error(f"delete_message {base_path}: {del_e}")
+
+                                                                             
+                fobj = _open_for_telegram()
+                if not fobj:
+                    return
+                sent = bot.send_document(int(BACKUP_CHAT_ID), fobj, caption=caption)
+                meta[msg_key] = sent.message_id
+        else:
+                                                     
             fobj = _open_for_telegram()
             if not fobj:
                 return
-            sent_msg = bot.send_document(
-                int(BACKUP_CHAT_ID),
-                fobj,
-                caption=caption
-            )
-            meta[msg_key] = sent_msg.message_id
-            log_info(f"[BACKUP] channel file sent new: {base_path}")
+            sent = bot.send_document(int(BACKUP_CHAT_ID), fobj, caption=caption)
+            meta[msg_key] = sent.message_id
 
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_csv_meta(meta)
-
     except Exception as e:
         log_error(f"send_backup_to_channel_for_file({base_path}): {e}")
-
+        
 def send_backup_to_channel(chat_id: int):
     """
     Общий бэкап файлов чата в BACKUP_CHAT_ID.
@@ -1118,15 +1114,21 @@ def send_backup_to_channel(chat_id: int):
         if not backup_flags.get("channel", True):
             log_info("send_backup_to_channel: channel backup disabled by flag.")
             return
+
         try:
             backup_chat_id = int(BACKUP_CHAT_ID)
         except Exception:
             log_error("send_backup_to_channel: BACKUP_CHAT_ID не является числом.")
             return
+
+                                  
         save_chat_json(chat_id)
         export_global_csv(data)
         save_data(data)
+
         chat_title = _get_chat_title_for_backup(chat_id)
+
+                                                              
         if chat_id not in backup_channel_notified_chats:
             try:
                 emoji_id = format_chat_id_emoji(chat_id)
@@ -1137,12 +1139,21 @@ def send_backup_to_channel(chat_id: int):
                     f"send_backup_to_channel: не удалось отправить emoji chat_id "
                     f"в канал: {e}"
                 )
+
+                                                                         
         json_path = chat_json_file(chat_id)
         csv_path = chat_csv_file(chat_id)
         send_backup_to_channel_for_file(json_path, f"json_{chat_id}", chat_title)
         send_backup_to_channel_for_file(csv_path, f"csv_{chat_id}", chat_title)
+
+                                                                               
+                                                                                
+                                                                              
     except Exception as e:
         log_error(f"send_backup_to_channel({chat_id}): {e}")
+
+              
+                                                        
 #⏏️⏏️⏏️⏏️⏏️⏏️
 def _owner_data_file() -> str | None:
     """
