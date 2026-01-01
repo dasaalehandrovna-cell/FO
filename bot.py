@@ -1140,7 +1140,7 @@ def send_backup_to_channel(chat_id: int):
         json_path = chat_json_file(chat_id)
         csv_path = chat_csv_file(chat_id)
         send_backup_to_channel_for_file(json_path, f"json_{chat_id}", chat_title)
-        #send_backup_to_channel_for_file(csv_path, f"csv_{chat_id}", chat_title)
+        send_backup_to_channel_for_file(csv_path, f"csv_{chat_id}", chat_title)
 
                                                                                
                                                                                 
@@ -2413,16 +2413,15 @@ def get_active_window_id(chat_id: int, day_key: str):
     aw = get_or_create_active_windows(chat_id)
     return aw.get(day_key)
 def delete_active_window_if_exists(chat_id: int, day_key: str):
-    mid = message_id_override or get_active_window_id(chat_id, day_key)
+    mid = get_active_window_id(chat_id, day_key)
     if not mid:
         return
     try:
         bot.delete_message(chat_id, mid)
-    except:
+    except Exception:
         pass
     aw = get_or_create_active_windows(chat_id)
-    if day_key in aw:
-        del aw[day_key]
+    aw.pop(day_key, None)
     save_data(data)
 def update_or_send_day_window(chat_id: int, day_key: str):
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
@@ -2976,12 +2975,12 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
             )
         else:
             _safe(
-                "force_new_day_window",
-                lambda: force_new_day_window(chat_id, day_key)
+                "update_or_send_day_window",
+                lambda: update_or_send_day_window(chat_id, day_key)
             )
             _safe(
                 "backup_to_chat",
-                lambda: force_backup_to_chat(chat_id)
+                lambda: send_backup_to_chat(chat_id)
             )
 
         # 3️⃣ Бэкап в канал (для всех)
@@ -3154,21 +3153,21 @@ def backup_window_for_owner(chat_id: int, day_key: str, message_id_override: int
     except Exception as e:
         log_error(f"backup_window_for_owner({chat_id}, {day_key}): {e}")
         
-def force_new_day_window(chat_id: int, day_key: str):
-    if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key)
-        return
+#def force_new_day_window(chat_id: int, day_key: str):
+    #if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        #backup_window_for_owner(chat_id, day_key)
+        #return
 
-    old_mid = get_active_window_id(chat_id, day_key)
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-    sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
-    set_active_window_id(chat_id, day_key, sent.message_id)
-    if old_mid:
-        try:
-            bot.delete_message(chat_id, old_mid)
-        except Exception:
-            pass
+    #old_mid = get_active_window_id(chat_id, day_key)
+    #txt, _ = render_day_window(chat_id, day_key)
+    #kb = build_main_keyboard(day_key, chat_id)
+    #sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
+    #set_active_window_id(chat_id, day_key, sent.message_id)
+    #if old_mid:
+        #try:
+            #bot.delete_message(chat_id, old_mid)
+        #except Exception:
+            #pass
 #@bot.message_handler(content_types=["text"])
 def reset_chat_data(chat_id: int):
     """
