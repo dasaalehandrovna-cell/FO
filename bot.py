@@ -2534,17 +2534,36 @@ def cmd_enable_finance(msg):
 def cmd_start(msg):
     chat_id = msg.chat.id
     delete_message_later(chat_id, msg.message_id, 15)
+
     if not require_finance(chat_id):
         return
+
     day_key = today_key()
+
+    # 🔹 УДАЛЯЕМ СТАРОЕ ОСНОВНОЕ ОКНО
+    old_mid = get_active_window_id(chat_id, day_key)
+    if old_mid:
+        try:
+            bot.delete_message(chat_id, old_mid)
+        except Exception:
+            pass
+
+    # 🔹 OWNER-логика — без изменений
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         backup_window_for_owner(chat_id, day_key, None)
-    else:
-        txt, _ = render_day_window(chat_id, day_key)
-        kb = build_main_keyboard(day_key, chat_id)
-        sent = bot.send_message(chat_id, txt, reply_markup=kb, parse_mode="HTML")
-        set_active_window_id(chat_id, day_key, sent.message_id)
-        
+        return
+
+    # 🔹 СОЗДАЁМ НОВОЕ ОСНОВНОЕ ОКНО
+    txt, _ = render_day_window(chat_id, day_key)
+    kb = build_main_keyboard(day_key, chat_id)
+    sent = bot.send_message(
+        chat_id,
+        txt,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+    set_active_window_id(chat_id, day_key, sent.message_id)        
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
     chat_id = msg.chat.id
