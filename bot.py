@@ -2599,10 +2599,34 @@ def cmd_start(msg):
 
     day_key = today_key()
 
+    # 👑 OWNER — своя логика
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         backup_window_for_owner(chat_id, day_key, None)
-    else:
-        update_or_send_day_window(chat_id, day_key)         
+        return
+
+    # 🔴 1. запоминаем старое окно
+    old_mid = get_active_window_id(chat_id, day_key)
+
+    # 🆕 2. создаём НОВОЕ окно
+    txt, _ = render_day_window(chat_id, day_key)
+    kb = build_main_keyboard(day_key, chat_id)
+    sent = bot.send_message(
+        chat_id,
+        txt,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+    # 💾 3. сохраняем новое как активное
+    set_active_window_id(chat_id, day_key, sent.message_id)
+
+    # 🗑 4. удаляем старое окно (если было)
+    if old_mid:
+        try:
+            bot.delete_message(chat_id, old_mid)
+        except Exception:
+            pass
+            
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
     chat_id = msg.chat.id
