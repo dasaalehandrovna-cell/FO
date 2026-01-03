@@ -681,6 +681,36 @@ def on_any_message(msg):
 
     # 3️⃣ ПЕРЕСЫЛКА — ВСЕГДА
     forward_any_message(chat_id, msg)
+def update_or_send_day_window(chat_id: int, day_key: str):
+    store = get_chat_store(chat_id)
+    mid = get_active_window_id(chat_id, day_key)
+
+    txt, _ = render_day_window(chat_id, day_key)
+    kb = build_main_keyboard(day_key, chat_id)
+
+    if mid:
+        try:
+            bot.edit_message_text(
+                txt,
+                chat_id=chat_id,
+                message_id=mid,
+                reply_markup=kb,
+                parse_mode="HTML"
+            )
+            return
+        except Exception:
+            # ❌ окно удалено / недоступно
+            pass
+
+    # ✅ если окна нет ИЛИ edit упал — создаём новое
+    sent = bot.send_message(
+        chat_id,
+        txt,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+    set_active_window_id(chat_id, day_key, sent.message_id)
+    
 def handle_finance_text(msg):
     """
     Обработка обычного текстового ввода:
