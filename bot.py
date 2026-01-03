@@ -2594,8 +2594,8 @@ def cmd_start(msg):
     chat_id = msg.chat.id
     delete_message_later(chat_id, msg.message_id, 15)
 
-    if not require_finance(chat_id):
-        return
+    #if not require_finance(chat_id):
+        #return
 
     day_key = today_key()
 
