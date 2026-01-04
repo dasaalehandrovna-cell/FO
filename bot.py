@@ -2542,7 +2542,8 @@ def cmd_start(msg):
 
     # 🔹 УДАЛЯЕМ СТАРОЕ ОСНОВНОЕ ОКНО
     
-
+# 🔥 ЖЁСТКО: забываем старый message_id
+    set_active_window_id(chat_id, day_key, None)
     # 🔹 OWNER-логика — без изменений
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         backup_window_for_owner(chat_id, day_key, None)
