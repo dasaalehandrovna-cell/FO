@@ -104,6 +104,34 @@ def week_bounds_from_start(start_key: str):
         s = now_local().date() - timedelta(days=now_local().date().weekday())
     e = s + timedelta(days=6)
     return s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")
+    
+def week_start_thursday(day_key: str) -> str:
+    """
+    Возвращает YYYY-MM-DD (четверг недели ЧТ–СР) для day_key
+    """
+    try:
+        d = datetime.strptime(day_key, "%Y-%m-%d").date()
+    except Exception:
+        d = now_local().date()
+
+    # weekday(): ПН=0 ... ВС=6
+    # ЧТ = 3
+    offset = (d.weekday() - 3) % 7
+    start = d - timedelta(days=offset)
+    return start.strftime("%Y-%m-%d")
+
+
+def week_bounds_thu_wed(start_key: str):
+    """
+    start_key (четверг) -> (четверг, среда)
+    """
+    try:
+        s = datetime.strptime(start_key, "%Y-%m-%d").date()
+    except Exception:
+        s = now_local().date()
+    e = s + timedelta(days=6)
+    return s.strftime("%Y-%m-%d"), e.strftime("%Y-%m-%d")
+    
 def _load_json(path: str, default):
     if not os.path.exists(path):
         return default
@@ -113,6 +141,7 @@ def _load_json(path: str, default):
     except Exception as e:
         log_error(f"JSON load error {path}: {e}")
         return default
+
 def _save_json(path: str, obj):
     try:
         with open(path, "w", encoding="utf-8") as f:
@@ -1609,7 +1638,13 @@ def safe_edit(bot, call, text, reply_markup=None, parse_mode=None):
         pass
     bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
 
-
+def build_week_thu_keyboard(start_key: str):
+    kb = types.InlineKeyboardMarkup(row_width=2)
+    kb.row(
+        types.InlineKeyboardButton("⬅️", callback_data=f"wthu:{start_key}:prev"),
+        types.InlineKeyboardButton("➡️", callback_data=f"wthu:{start_key}:next"),
+    )
+    return kb
 
 def handle_categories_callback(call, data_str: str) -> bool:
     """UI: 12 месяцев → 4 недели → отчёт по статьям. Возвращает True если обработано."""
@@ -1662,10 +1697,11 @@ def handle_categories_callback(call, data_str: str) -> bool:
             prev_start = start
             next_start = start
         kb.row(
-            types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{prev_start}"),
+            types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{ }"),
             types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
             types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
         )
+        kb.row(types.InlineKeyboardButton("🟦 ЧТ–СР", callback_data=f"cat_wthu:{start}"))
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
         safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
         return True
@@ -1766,8 +1802,76 @@ def handle_categories_callback(call, data_str: str) -> bool:
         return True
 
     return False
+    
+def render_week_thu_wed_report(chat_id: int):
+    store = get_chat_store(chat_id)
+
+    ref_day = store.get("current_week_thu", today_key())
+    start_key = week_start_thursday(ref_day)
+    start, end = week_bounds_thu_wed(start_key)
+
+    store["current_week_thu"] = start_key
+    save_data(data)
+
+    cats = calc_categories_for_period(store, start, end)
+
+    lines = [
+        f"📊 Расходы по статьям",
+        f"🗓 {fmt_date_ddmmyy(start)} → {fmt_date_ddmmyy(end)} (ЧТ–СР)",
+        ""
+    ]
+
+    if not cats:
+        lines.append("Нет расходов за период.")
+    else:
+        for cat, amt in sorted(cats.items()):
+            lines.append(f"• {cat}: {fmt_num(amt)}")
+
+    return "\n".join(lines), start_key
 #🟡🟡🟡🟡🟡
 @bot.callback_query_handler(func=lambda c: True)
+# ─────────────────────────────
+# ЧТ–СР НЕДЕЛЯ
+# ─────────────────────────────
+if data_str.startswith("cat_wthu:"):
+    ref = data_str.split(":", 1)[1] or today_key()
+    store = get_chat_store(chat_id)
+
+    start_key = week_start_thursday(ref)
+    start, end = week_bounds_thu_wed(start_key)
+
+    store["current_week_thu"] = start_key
+    save_data(data)
+
+    cats = calc_categories_for_period(store, start, end)
+
+    lines = [
+        "📦 Расходы по статьям",
+        f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (ЧТ–СР)",
+        ""
+    ]
+
+    if not cats:
+        lines.append("Нет расходов за период.")
+    else:
+        for cat, amt in sorted(cats.items()):
+            lines.append(f"{cat}: −{fmt_num(amt)}")
+
+    kb = types.InlineKeyboardMarkup()
+    prev_k = (datetime.strptime(start_key, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
+    next_k = (datetime.strptime(start_key, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
+
+    kb.row(
+        types.InlineKeyboardButton("⬅️ ЧТ–СР", callback_data=f"cat_wthu:{prev_k}"),
+        types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
+        types.InlineKeyboardButton("ЧТ–СР ➡️", callback_data=f"cat_wthu:{next_k}")
+    )
+    kb.row(
+        types.InlineKeyboardButton("⬜ ПН–ВС", callback_data=f"cat_wk:{week_start_monday(today_key())}")
+    )
+
+    safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
+    return True
 def on_callback(call):
     try:
         bot.answer_callback_query(call.id)
