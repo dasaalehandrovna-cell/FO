@@ -1,4 +1,4 @@
-#норм
+#норм ок
 import os
 import io
 import json
@@ -642,43 +642,6 @@ def looks_like_amount(text):
         return True
     except:
         return False
-@bot.message_handler(commands=["start"])
-def cmd_start(msg):
-    chat_id = msg.chat.id
-    delete_message_later(chat_id, msg.message_id, 15)
-
-    #if not require_finance(chat_id):
-        #return
-
-    day_key = today_key()
-
-    # 👑 OWNER — своя логика
-    if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key, None)
-        return
-
-    # 🔴 1. запоминаем старое окно
-    old_mid = get_active_window_id(chat_id, day_key)
-
-    # 🆕 2. создаём НОВОЕ окно
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-    sent = bot.send_message(
-        chat_id,
-        txt,
-        reply_markup=kb,
-        parse_mode="HTML"
-    )
-
-    # 💾 3. сохраняем новое как активное
-    set_active_window_id(chat_id, day_key, sent.message_id)
-
-    # 🗑 4. удаляем старое окно (если было)
-    if old_mid:
-        try:
-            bot.delete_message(chat_id, old_mid)
-        except Exception:
-            pass
 @bot.message_handler(
     func=lambda m: not (m.text and m.text.startswith("/")),
     content_types=[
@@ -718,35 +681,6 @@ def on_any_message(msg):
 
     # 3️⃣ ПЕРЕСЫЛКА — ВСЕГДА
     forward_any_message(chat_id, msg)
-def update_or_send_day_window(chat_id: int, day_key: str):
-    store = get_chat_store(chat_id)
-    mid = get_active_window_id(chat_id, day_key)
-
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-
-    if mid:
-        try:
-            bot.edit_message_text(
-                txt,
-                chat_id=chat_id,
-                message_id=mid,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-            return
-        except Exception:
-            # ❌ окно удалено / недоступно
-            pass
-
-    # ✅ если окна нет ИЛИ edit упал — создаём новое
-    sent = bot.send_message(
-        chat_id,
-        txt,
-        reply_markup=kb,
-        parse_mode="HTML"
-    )
-    set_active_window_id(chat_id, day_key, sent.message_id)
 def handle_finance_text(msg):
     """
     Обработка обычного текстового ввода:
@@ -1384,36 +1318,6 @@ def build_main_keyboard(day_key: str, chat_id=None):
         types.InlineKeyboardButton("💰 Общий итог", callback_data=f"d:{day_key}:total")
     )
     return kb
-def update_or_send_day_window(chat_id: int, day_key: str):
-    store = get_chat_store(chat_id)
-    mid = get_active_window_id(chat_id, day_key)
-
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-
-    if mid:
-        try:
-            bot.edit_message_text(
-                txt,
-                chat_id=chat_id,
-                message_id=mid,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-            return
-        except Exception:
-            # ❌ окно удалено / недоступно
-            pass
-
-    # ✅ если окна нет ИЛИ edit упал — создаём новое
-    sent = bot.send_message(
-        chat_id,
-        txt,
-        reply_markup=kb,
-        parse_mode="HTML"
-    )
-    set_active_window_id(chat_id, day_key, sent.message_id)
-
 def build_calendar_keyboard(center_day: datetime, chat_id=None):
     """
     Календарь на 31 день.
@@ -2626,8 +2530,72 @@ def cmd_enable_finance(msg):
     save_data(data)
 
     send_info(chat_id, "🚀 Финансовый режим включён!\nОтправьте /start")
+@bot.message_handler(commands=["start"])
+def cmd_start(msg):
+    chat_id = msg.chat.id
+    delete_message_later(chat_id, msg.message_id, 15)
 
-            
+    if not require_finance(chat_id):
+        return
+
+    day_key = today_key()
+
+    # 🔹 УДАЛЯЕМ СТАРОЕ ОСНОВНОЕ ОКНО
+    
+
+    # 🔹 OWNER-логика — без изменений
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        backup_window_for_owner(chat_id, day_key, None)
+        return
+
+    # 🔹 СОЗДАЁМ НОВОЕ ОСНОВНОЕ ОКНО
+    txt, _ = render_day_window(chat_id, day_key)
+    kb = build_main_keyboard(day_key, chat_id)
+    sent = bot.send_message(
+        chat_id,
+        txt,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+    set_active_window_id(chat_id, day_key, sent.message_id)        
+@bot.message_handler(commands=["start_new"])
+def cmd_start_new(msg):
+    chat_id = msg.chat.id
+    delete_message_later(chat_id, msg.message_id, 15)
+
+    if not require_finance(chat_id):
+        return
+
+    day_key = today_key()
+
+    # 🔥 ЖЁСТКО: удаляем старое окно
+    old_mid = get_active_window_id(chat_id, day_key)
+    if old_mid:
+        try:
+            bot.delete_message(chat_id, old_mid)
+        except Exception:
+            pass
+
+    # 🔥 ЖЁСТКО: забываем старый message_id
+    set_active_window_id(chat_id, day_key, None)
+
+    # OWNER — как и раньше
+    if OWNER_ID and str(chat_id) == str(OWNER_ID):
+        backup_window_for_owner(chat_id, day_key, None)
+        return
+
+    # 🔥 создаём НОВОЕ окно
+    txt, _ = render_day_window(chat_id, day_key)
+    kb = build_main_keyboard(day_key, chat_id)
+    sent = bot.send_message(
+        chat_id,
+        txt,
+        reply_markup=kb,
+        parse_mode="HTML"
+    )
+
+    set_active_window_id(chat_id, day_key, sent.message_id)
 @bot.message_handler(commands=["help"])
 def cmd_help(msg):
     chat_id = msg.chat.id
