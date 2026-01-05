@@ -550,6 +550,15 @@ def fmt_num(x):
         s = int_part
     return f"{sign}{s}"
 num_re = re.compile(r"[+\-–]?\s*\d[\d\s.,_'’]*")
+def fmt_num_plain(x):
+    """
+    Формат числа БЕЗ знака (+/-).
+    Использовать только для отчётов по статьям расходов.
+    """
+    try:
+        return fmt_num(x).lstrip("+-")
+    except Exception:
+        return str(x)
 def parse_amount(raw: str) -> float:
     """
     Универсальный парсер:
@@ -1675,9 +1684,9 @@ def handle_categories_callback(call, data_str: str) -> bool:
         else:
             for cat, amt in sorted(cats.items()):
                    # 📋 список операций по статье (ЧТ–СР)
-                lines.append(f"{cat}: {fmt_num(amt)}")
+                lines.append(f"{cat}: {fmt_num_plain(amt)}")
                 for day_i, amt_i, note_i in collect_items_for_category(store, start, end, cat):
-                    lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num(amt_i)} {(note_i or '').strip()}")
+                    lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {(note_i or '').strip()}")
         kb = types.InlineKeyboardMarkup()
         prev_k = (datetime.strptime(start_key, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
         next_k = (datetime.strptime(start_key, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
@@ -1727,13 +1736,13 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                lines.append(f"{cat}: {fmt_num(cats[cat])}")
+                lines.append(f"{cat}: {fmt_num_plain(cats[cat])}")
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
                         for day_i, amt_i, note_i in items:
                             note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num(amt_i)} {note_i}")
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {note_i}")
 
         kb = types.InlineKeyboardMarkup()
         try:
@@ -1831,14 +1840,14 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                lines.append(f"{cat}: {fmt_num(cats[cat])}")
+                lines.append(f"{cat}: {fmt_num_plain(cats[cat])}")
 
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
                         for day_i, amt_i, note_i in items:
                             note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num(amt_i)} {note_i}")
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {note_i}")
                     else:
                         lines.append("  • нет операций")
 
@@ -1871,7 +1880,7 @@ def render_week_thu_wed_report(chat_id: int):
         lines.append("Нет расходов за период.")
     else:
         for cat, amt in sorted(cats.items()):
-            lines.append(f"• {cat}: {fmt_num(amt)}")
+            lines.append(f"• {cat}: {fmt_num_plain(amt)}")
 
     return "\n".join(lines), start_key
 #🟡🟡🟡🟡🟡
