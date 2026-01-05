@@ -1675,7 +1675,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (ЧТ–СР)",
+            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Чт–Ср)",
             ""
         ]
 
@@ -1692,13 +1692,13 @@ def handle_categories_callback(call, data_str: str) -> bool:
         next_k = (datetime.strptime(start_key, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
 
         kb.row(
-            types.InlineKeyboardButton("⬅️ ЧТ–СР", callback_data=f"cat_wthu:{prev_k}"),
+            types.InlineKeyboardButton("⬅️ Чт–Ср", callback_data=f"cat_wthu:{prev_k}"),
             types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
-            types.InlineKeyboardButton("ЧТ–СР ➡️", callback_data=f"cat_wthu:{next_k}")
+            types.InlineKeyboardButton("Чт-Ср ➡️", callback_data=f"cat_wthu:{next_k}")
         )
         kb.row(
             types.InlineKeyboardButton(
-                "⬜ ПН–ВС",
+                "⬜ с Пн по Вскр",
                 callback_data=f"cat_wk:{week_start_monday(today_key())}"
             )
         )
@@ -1721,7 +1721,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)}",
+            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Пн - Ср)",
             ""
         ]
 
@@ -1756,7 +1756,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
             types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
             types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
         )
-        kb.row(types.InlineKeyboardButton("🟦 ЧТ–СР", callback_data=f"cat_wthu:{start}"))
+        kb.row(types.InlineKeyboardButton("🟦 с Чт по Ср", callback_data=f"cat_wthu:{start}"))
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
         safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
         return True
@@ -1872,7 +1872,7 @@ def render_week_thu_wed_report(chat_id: int):
 
     lines = [
         f"📊 Расходы по статьям",
-        f"🗓 {fmt_date_ddmmyy(start)} → {fmt_date_ddmmyy(end)} (ЧТ–СР)",
+        f"🗓 {fmt_date_ddmmyy(start)} → {fmt_date_ddmmyy(end)} (Чт–Ср)",
         ""
     ]
 
