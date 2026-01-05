@@ -1727,13 +1727,13 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                lines.append(f"{cat}: −{fmt_num(cats[cat])}")
+                lines.append(f"{cat}: {fmt_num(cats[cat])}")
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
                         for day_i, amt_i, note_i in items:
                             note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: −{fmt_num(amt_i)} {note_i}")
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num(amt_i)} {note_i}")
 
         kb = types.InlineKeyboardMarkup()
         try:
@@ -1831,14 +1831,14 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 keys = sorted(keys)
 
             for cat in keys:
-                lines.append(f"{cat}: −{fmt_num(cats[cat])}")
+                lines.append(f"{cat}: {fmt_num(cats[cat])}")
 
                 if cat == "ПРОДУКТЫ":
                     items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
                     if items:
                         for day_i, amt_i, note_i in items:
                             note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: −{fmt_num(amt_i)} {note_i}")
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num(amt_i)} {note_i}")
                     else:
                         lines.append("  • нет операций")
 
