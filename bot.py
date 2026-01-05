@@ -1674,8 +1674,8 @@ def handle_categories_callback(call, data_str: str) -> bool:
             lines.append("Нет расходов за период.")
         else:
             for cat, amt in sorted(cats.items()):
-                lines.append(f"{cat}: −{fmt_num(amt)}")
-
+                   # 📋 список операций по статье (ЧТ–СР)
+                lines.append(f"{cat}: {fmt_num(amt)}")items = collect_items_for_category(store, start, end, cat)if items:for day_i, amt_i, note_i in items:note_i = (note_i or "").strip()lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num(amt_i)} {note_i}")
         kb = types.InlineKeyboardMarkup()
         prev_k = (datetime.strptime(start_key, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
         next_k = (datetime.strptime(start_key, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
