@@ -829,10 +829,10 @@ def handle_finance_edit(msg):
         amount, note = split_amount_and_note(text)
 
         # 🔥 ВАЖНО: если исходная запись была расходом — сохраняем знак
-        raw = text.strip()
-        explicit_plus = raw.startswith("+")
-        if target.get("amount", 0) < 0 and amount > 0:
-            amount = -amount
+        #raw = text.strip()
+        #explicit_plus = raw.startswith("+")
+        #if target.get("amount", 0) < 0 and amount > 0:
+            #amount = -amount
 
     except Exception:
         log_info("[EDIT-FIN] bad format, ignored")
