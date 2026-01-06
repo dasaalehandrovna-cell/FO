@@ -1417,6 +1417,8 @@ def build_edit_menu_keyboard(day_key: str, chat_id=None):
         types.InlineKeyboardButton("📅 CSV за день", callback_data=f"d:{day_key}:csv_day"),
         types.InlineKeyboardButton("⚙️ Обнулить", callback_data=f"d:{day_key}:reset")
     )
+    kb.row(types.InlineKeyboardButton("📊 Статьи расходов",callback_data="cat_today"))
+
     if OWNER_ID and str(chat_id) == str(OWNER_ID):
         kb.row(
             types.InlineKeyboardButton("🔁 Пересылка", callback_data=f"d:{day_key}:forward_menu")
