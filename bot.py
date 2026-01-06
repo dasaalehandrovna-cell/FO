@@ -1332,6 +1332,10 @@ def render_day_window(chat_id: int, day_key: str):
     if recs_sorted:
         lines.append(f"📉 Расход за день: {fmt_num(-total_expense) if total_expense else fmt_num(0)}")
         lines.append(f"📈 Приход за день: {fmt_num(total_income) if total_income else fmt_num(0)}")
+    
+    day_balance = calc_day_balance(store, day_key)
+    lines.append(f"📆 Остаток на конец дня: {fmt_num(day_balance)}")
+    
     bal_chat = store.get("balance", 0)
     lines.append(f"🏦 Остаток по чату: {fmt_num(bal_chat)}")
     total = total_income - total_expense
@@ -3174,6 +3178,23 @@ def schedule_finalize(chat_id: int, day_key: str, delay: float = 2.0):
 def recalc_balance(chat_id: int):
     store = get_chat_store(chat_id)
     store["balance"] = sum(r.get("amount", 0) for r in store.get("records", []))
+# ✅ ВСТАВИТЬ СЮДА ↓↓↓
+def calc_day_balance(store: dict, day_key: str) -> float:
+    """
+    Остаток на конец указанного дня.
+    Сумма всех операций <= day_key.
+    """
+    total = 0.0
+    daily = store.get("daily_records", {}) or {}
+
+    for dk in sorted(daily.keys()):
+        if dk > day_key:
+            break
+        for r in daily.get(dk, []):
+            total += float(r.get("amount", 0) or 0)
+
+    return total
+# ✅ ДО СЮДА ↑↑↑
 def rebuild_global_records():
     all_recs = []
     for cid, st in data.get("chats", {}).items():
