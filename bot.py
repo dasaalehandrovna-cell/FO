@@ -829,6 +829,8 @@ def handle_finance_edit(msg):
         amount, note = split_amount_and_note(text)
 
         # 🔥 ВАЖНО: если исходная запись была расходом — сохраняем знак
+        raw = text.strip()
+        explicit_plus = raw.startswith("+")
         if target.get("amount", 0) < 0 and amount > 0:
             amount = -amount
 
@@ -854,8 +856,10 @@ def handle_finance_edit(msg):
         f"[EDIT-FIN] updated record R{target['id']} "
         f"amount={amount} note={note}"
     )
+    day_key = target.get("day_key") or today_key()
+    update_or_send_day_window(chat_id, day_key)
     return True
-    #🍕🍕🍕🍕
+    #🍕🍕🍕к🍕
 def _get_drive_service():
     if not GOOGLE_SERVICE_ACCOUNT_JSON or not GDRIVE_FOLDER_ID:
         return None
