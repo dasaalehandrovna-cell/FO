@@ -1657,6 +1657,29 @@ def safe_edit(bot, call, text, reply_markup=None, parse_mode=None):
         pass
     bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
 
+def send_or_edit_categories_window(chat_id, text, reply_markup=None, parse_mode=None):
+    """Отдельное окно для отчёта по статьям расходов (одно сообщение на чат)."""
+    store = get_chat_store(chat_id)
+    mid = store.get("categories_msg_id")
+
+    if mid:
+        try:
+            bot.edit_message_text(
+                text,
+                chat_id=chat_id,
+                message_id=mid,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode
+            )
+            return
+        except Exception:
+            store["categories_msg_id"] = None
+            save_chat_json(chat_id)
+
+    sent = bot.send_message(chat_id, text, reply_markup=reply_markup, parse_mode=parse_mode)
+    store["categories_msg_id"] = sent.message_id
+    save_chat_json(chat_id)
+
 def build_week_thu_keyboard(start_key: str):
     kb = types.InlineKeyboardMarkup(row_width=2)
     kb.row(
@@ -1713,7 +1736,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
             )
         )
 
-        safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
+        send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
         return True
     # Быстрый переход: текущая неделя (сегодня)
     if data_str == "cat_today":
@@ -1768,7 +1791,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
         )
         kb.row(types.InlineKeyboardButton("🟦 с Чт по Ср", callback_data=f"cat_wthu:{start}"))
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
-        safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
+        send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
         return True
 
     if data_str == "cat_months":
@@ -1779,7 +1802,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
                 datetime(2000, m, 1).strftime("%b"),
                 callback_data=f"cat_m:{m}"
             ))
-        safe_edit(bot, call, "📦 Выберите месяц:", reply_markup=kb)
+        send_or_edit_categories_window(chat_id, "📦 Выберите месяц:", reply_markup=kb)
         return True
 
     if data_str.startswith("cat_m:"):
@@ -1863,7 +1886,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
 
         kb = types.InlineKeyboardMarkup()
         kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
-        safe_edit(bot, call, "\n".join(lines), reply_markup=kb)
+        send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
         return True
 
     return False
