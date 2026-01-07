@@ -1740,10 +1740,8 @@ def handle_categories_callback(call, data_str: str) -> bool:
         )
         
         kb.row(
-            types.InlineKeyboardButton(
-                "⬜ с Пн по Вскр",
-                callback_data=f"cat_wk:{week_start_monday(today_key())}"
-            )
+            types.InlineKeyboardButton("⬜ с Пн по Вскр",callback_data=f"cat_wk:{week_start_monday(today_key())}"),
+            types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close")
         )
         kb.row(types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"))
         send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
@@ -1798,8 +1796,11 @@ def handle_categories_callback(call, data_str: str) -> bool:
             types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{prev_start}"),
             types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
             types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}"))
-       # kb.row(types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"))
-        kb.row(types.InlineKeyboardButton("🟦 с Чт по Ср", callback_data=f"cat_wthu:{start}"))
+     
+        kb.row(types.InlineKeyboardButton("🟦 с Чт по Ср", callback_data=f"cat_wthu:{start}"),
+                types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"),
+                types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months")
+        )
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
         kb.row(types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"))
         send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
