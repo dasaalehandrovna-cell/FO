@@ -1694,6 +1694,15 @@ def handle_categories_callback(call, data_str: str) -> bool:
     # ─────────────────────────────
     # ЧТ–СР НЕДЕЛЯ
     # ─────────────────────────────
+    if data_str=="cat_close":
+        store=get_chat_store(chat_id)
+        mid=store.get("categories_msg_id")
+        if mid:
+            try: bot.delete_message(chat_id,mid)
+            except Exception: pass
+        store["categories_msg_id"]=None
+        save_chat_json(chat_id)
+        return True
     if data_str.startswith("cat_wthu:"):
         ref = data_str.split(":", 1)[1] or today_key()
         store = get_chat_store(chat_id)
@@ -1754,7 +1763,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
 
         lines = [
             "📦 Расходы по статьям",
-            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Пн - Ср)",
+            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Пн - Вскр)",
             ""
         ]
 
@@ -1792,6 +1801,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
         kb.row(types.InlineKeyboardButton("🟦 с Чт по Ср", callback_data=f"cat_wthu:{start}"))
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
         send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
+        kb.row(types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"))
         return True
 
     if data_str == "cat_months":
