@@ -1800,8 +1800,9 @@ def handle_categories_callback(call, data_str: str) -> bool:
         )
         kb.row(types.InlineKeyboardButton("🟦 с Чт по Ср", callback_data=f"cat_wthu:{start}"))
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
-        send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
         kb.row(types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"))
+        send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
+        
         return True
 
     if data_str == "cat_months":
