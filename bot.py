@@ -1796,8 +1796,8 @@ def handle_categories_callback(call, data_str: str) -> bool:
         kb.row(
             types.InlineKeyboardButton("⬅️ Неделя", callback_data=f"cat_wk:{prev_start}"),
             types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
-            types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
-        )
+            types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}"))
+        kb.row(types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"))
         kb.row(types.InlineKeyboardButton("🟦 с Чт по Ср", callback_data=f"cat_wthu:{start}"))
         kb.row(types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months"))
         kb.row(types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"))
