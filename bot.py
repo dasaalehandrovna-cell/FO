@@ -1756,7 +1756,7 @@ def handle_categories_callback(call, data_str: str) -> bool:
             types.InlineKeyboardButton("📋 Показать список" if not show_list else "🙈 Скрыть список",
                                        callback_data=f"cat_toggle:cat_wthu:{start_key}"),
             types.InlineKeyboardButton("❌ Закрыть статьи", callback_data="cat_close"),
-            types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months")
+            types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_wthu")
         )
 
         send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
