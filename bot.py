@@ -1688,10 +1688,11 @@ def build_week_thu_keyboard(start_key: str):
         types.InlineKeyboardButton("➡️", callback_data=f"wthu:{start_key}:next"),
     )
     return kb
-
 def handle_categories_callback(call, data_str: str) -> bool:
     """UI: 12 месяцев → 4 недели → отчёт по статьям. Возвращает True если обработано."""
     chat_id = call.message.chat.id
+
+    # ── ДОБАВЛЕНО: флаг показа списка ──
     store = get_chat_store(chat_id)
     settings = store.setdefault("settings", {})
     show_list = settings.get("cat_show_list", True)
@@ -1701,13 +1702,17 @@ def handle_categories_callback(call, data_str: str) -> bool:
         save_chat_json(chat_id)
         data_str = data_str.split(":", 1)[1]
         show_list = settings.get("cat_show_list", True)
+    # ────────────────────────────────
 
-    if data_str == "cat_close":
-        mid = store.get("categories_msg_id")
+    # ─────────────────────────────
+    # ЧТ–СР НЕДЕЛЯ
+    # ─────────────────────────────
+    if data_str=="cat_close":
+        mid=store.get("categories_msg_id")
         if mid:
-            try: bot.delete_message(chat_id, mid)
+            try: bot.delete_message(chat_id,mid)
             except Exception: pass
-        store["categories_msg_id"] = None
+        store["categories_msg_id"]=None
         save_chat_json(chat_id)
         return True
 
@@ -1715,18 +1720,24 @@ def handle_categories_callback(call, data_str: str) -> bool:
         ref = data_str.split(":", 1)[1] or today_key()
         start_key = week_start_thursday(ref)
         start, end = week_bounds_thu_wed(start_key)
+
         store["current_week_thu"] = start_key
         save_data(data)
 
         cats = calc_categories_for_period(store, start, end)
-        lines = ["📦 Расходы по статьям", f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Чт–Ср)", ""]
+
+        lines = [
+            "📦 Расходы по статьям",
+            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Чт–Ср)",
+            ""
+        ]
 
         if not cats:
             lines.append("Нет расходов за период.")
         else:
             for cat, amt in sorted(cats.items()):
                 lines.append(f"{cat}: {fmt_num_plain(amt)}")
-                if show_list:
+                if show_list:  # ← ДОБАВЛЕНО
                     for day_i, amt_i, note_i in collect_items_for_category(store, start, end, cat):
                         lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {(note_i or '').strip()}")
 
@@ -1740,24 +1751,39 @@ def handle_categories_callback(call, data_str: str) -> bool:
             types.InlineKeyboardButton("Чт-Ср ➡️", callback_data=f"cat_wthu:{next_k}")
         )
         kb.row(
-            types.InlineKeyboardButton("🙈 Скрыть список" if show_list else "📋 Показать список", callback_data=f"cat_toggle:{data_str}"),
-            types.InlineKeyboardButton("❌ Закрыть статьи", callback_data="cat_close"),
+            types.InlineKeyboardButton("⬜ с Пн по Вскр",callback_data=f"cat_wk:{week_start_monday(today_key())}"),
+            types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"),
             types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months")
         )
+        # ── ДОБАВЛЕНО: кнопка вкл/выкл списка ──
+        kb.row(types.InlineKeyboardButton(
+            "🙈 Скрыть список" if show_list else "📋 Показать список",
+            callback_data=f"cat_toggle:{data_str}"
+        ))
+        # ───────────────────────────────
         send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
         return True
 
+    # Быстрый переход: текущая неделя (сегодня)
     if data_str == "cat_today":
-        return handle_categories_callback(call, f"cat_wk:{week_start_monday(today_key())}")
+        start = week_start_monday(today_key())
+        return handle_categories_callback(call, f"cat_wk:{start}")
 
+    # Навигация по неделям: start=понедельник недели
     if data_str.startswith("cat_wk:"):
-        start = data_str.split(":", 1)[1] or week_start_monday(today_key())
+        start = data_str.split(":", 1)[1].strip() or week_start_monday(today_key())
         start, end = week_bounds_from_start(start)
         cats = calc_categories_for_period(store, start, end)
 
-        lines = ["📦 Расходы по статьям", f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Пн - Вскр)", ""]
+        lines = [
+            "📦 Расходы по статьям",
+            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Пн - Вскр)",
+            ""
+        ]
 
-        if cats:
+        if not cats:
+            lines.append("Нет данных по статьям за этот период.")
+        else:
             keys = list(cats.keys())
             if "ПРОДУКТЫ" in keys:
                 keys.remove("ПРОДУКТЫ")
@@ -1767,11 +1793,12 @@ def handle_categories_callback(call, data_str: str) -> bool:
 
             for cat in keys:
                 lines.append(f"{cat}: {fmt_num_plain(cats[cat])}")
-                if show_list and cat == "ПРОДУКТЫ":
-                    for day_i, amt_i, note_i in collect_items_for_category(store, start, end, "ПРОДУКТЫ"):
-                        lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {(note_i or '').strip()}")
-        else:
-            lines.append("Нет данных по статьям за этот период.")
+                if cat == "ПРОДУКТЫ" and show_list:  # ← ДОБАВЛЕНО
+                    items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
+                    if items:
+                        for day_i, amt_i, note_i in items:
+                            note_i = (note_i or "").strip()
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {note_i}")
 
         kb = types.InlineKeyboardMarkup()
         prev_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
@@ -1783,10 +1810,113 @@ def handle_categories_callback(call, data_str: str) -> bool:
             types.InlineKeyboardButton("Неделя ➡️", callback_data=f"cat_wk:{next_start}")
         )
         kb.row(
-            types.InlineKeyboardButton("🙈 Скрыть список" if show_list else "📋 Показать список", callback_data=f"cat_toggle:{data_str}"),
-            types.InlineKeyboardButton("❌ Закрыть статьи", callback_data="cat_close"),
+            types.InlineKeyboardButton("🟦 с Чт по Ср", callback_data=f"cat_wthu:{start}"),
+            types.InlineKeyboardButton("❌ Закрыть статьи",callback_data="cat_close"),
             types.InlineKeyboardButton("📆 Выбор недели", callback_data="cat_months")
         )
+        # ── ДОБАВЛЕНО ──
+        kb.row(types.InlineKeyboardButton(
+            "🙈 Скрыть список" if show_list else "📋 Показать список",
+            callback_data=f"cat_toggle:{data_str}"
+        ))
+        # ───────────────
+        send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
+        return True
+
+    #return False
+
+    if data_str == "cat_months":
+        kb = types.InlineKeyboardMarkup(row_width=3)
+        # 12 месяцев
+        for m in range(1, 13):
+            kb.add(types.InlineKeyboardButton(
+                datetime(2000, m, 1).strftime("%b"),
+                callback_data=f"cat_m:{m}"
+            ))
+        send_or_edit_categories_window(chat_id, "📦 Выберите месяц:", reply_markup=kb)
+        return True
+
+    if data_str.startswith("cat_m:"):
+        try:
+            month = int(data_str.split(":")[1])
+        except Exception:
+            return True
+        year = now_local().year
+
+        # 4 недели месяца (простая разметка 1–7, 8–14, 15–21, 22–31)
+        kb = types.InlineKeyboardMarkup(row_width=2)
+        weeks = [(1, 7), (8, 14), (15, 21), (22, 31)]
+        for a, b in weeks:
+            kb.add(types.InlineKeyboardButton(
+                f"{a:02d}–{b:02d}",
+                callback_data=f"cat_w:{year}:{month}:{a}:{b}"
+            ))
+        kb.row(
+            types.InlineKeyboardButton("📅 Сегодня", callback_data="cat_today"),
+            types.InlineKeyboardButton("🔙 Назад", callback_data="cat_months")
+        )
+        safe_edit(bot, call, "📆 Выберите неделю:", reply_markup=kb)
+        return True
+
+    if data_str.startswith("cat_w:"):
+        try:
+            _, y, m, a, b = data_str.split(":")
+            y, m, a, b = map(int, (y, m, a, b))
+        except Exception:
+            return True
+
+        # нормализация конца месяца (если месяц короче 31)
+        try:
+            # последний день месяца: первый день следующего месяца - 1 день
+            if m == 12:
+                last_day = (datetime(y + 1, 1, 1) - timedelta(days=1)).day
+            else:
+                last_day = (datetime(y, m + 1, 1) - timedelta(days=1)).day
+        except Exception:
+            last_day = 31
+
+        a = max(1, min(a, last_day))
+        b = max(1, min(b, last_day))
+        if b < a:
+            b = a
+
+        start = f"{y}-{m:02d}-{a:02d}"
+        end = f"{y}-{m:02d}-{b:02d}"
+
+        store = get_chat_store(chat_id)
+        cats = calc_categories_for_period(store, start, end)
+
+        lines = [
+            "📦 Расходы по статьям",
+            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)}",
+            ""
+        ]
+
+        if not cats:
+            lines.append("Нет данных по статьям за этот период.")
+        else:
+            # Стабильно: сначала ПРОДУКТЫ, затем остальные по алфавиту
+            keys = list(cats.keys())
+            if "ПРОДУКТЫ" in keys:
+                keys.remove("ПРОДУКТЫ")
+                keys = ["ПРОДУКТЫ"] + sorted(keys)
+            else:
+                keys = sorted(keys)
+
+            for cat in keys:
+                lines.append(f"{cat}: {fmt_num_plain(cats[cat])}")
+
+                if cat == "ПРОДУКТЫ":
+                    items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
+                    if items:
+                        for day_i, amt_i, note_i in items:
+                            note_i = (note_i or "").strip()
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {note_i}")
+                    else:
+                        lines.append("  • нет операций")
+
+        kb = types.InlineKeyboardMarkup()
+        kb.row(types.InlineKeyboardButton("🔙 Назад", callback_data=f"cat_m:{m}"))
         send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
         return True
 
