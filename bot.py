@@ -1691,7 +1691,9 @@ def build_week_thu_keyboard(start_key: str):
 def handle_categories_callback(call, data_str: str) -> bool:
     """UI: 12 месяцев → 4 недели → отчёт по статьям. Возвращает True если обработано."""
     chat_id = call.message.chat.id
-
+# ── ДОБАВЛЕНО: приоритет Чт–Ср при первом открытии ──
+    if data_str == "cat_today":
+        return handle_categories_callback(call, f"cat_wthu:{today_key()}")
     # ── ДОБАВЛЕНО: флаг показа списка ──
     store = get_chat_store(chat_id)
     settings = store.setdefault("settings", {})
