@@ -1742,6 +1742,43 @@ def handle_categories_callback(call, data_str: str) -> bool:
                     for day_i, amt_i, note_i in collect_items_for_category(store, start, end, cat):
                         lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {(note_i or '').strip()}")
         #^
+    # Быстрый переход: текущая неделя (сегодня)
+    if data_str == "cat_today":
+        start = week_start_monday(today_key())
+        return handle_categories_callback(call, f"cat_wk:{start}")
+
+    # Навигация по неделям: start=понедельник недели
+    if data_str.startswith("cat_wk:"):
+        start = data_str.split(":", 1)[1].strip() or week_start_monday(today_key())
+        start, end = week_bounds_from_start(start)
+        cats = calc_categories_for_period(store, start, end)
+
+        lines = [
+            "📦 Расходы по статьям",
+            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Пн - Вскр)",
+            ""
+        ]
+
+        if not cats:
+            lines.append("Нет данных по статьям за этот период.")
+        else:
+            keys = list(cats.keys())
+            if "ПРОДУКТЫ" in keys:
+                keys.remove("ПРОДУКТЫ")
+                keys = ["ПРОДУКТЫ"] + sorted(keys)
+            else:
+                keys = sorted(keys)
+
+            for cat in keys:
+                lines.append(f"{cat}: {fmt_num_plain(cats[cat])}")
+                if cat == "ПРОДУКТЫ" and show_list:  # ← ДОБАВЛЕНО
+                    items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
+                    if items:
+                        for day_i, amt_i, note_i in items:
+                            note_i = (note_i or "").strip()
+                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {note_i}")
+
+
         kb = types.InlineKeyboardMarkup()
         prev_start = (datetime.strptime(start, "%Y-%m-%d") - timedelta(days=7)).strftime("%Y-%m-%d")
         next_start = (datetime.strptime(start, "%Y-%m-%d") + timedelta(days=7)).strftime("%Y-%m-%d")
@@ -1787,42 +1824,6 @@ def handle_categories_callback(call, data_str: str) -> bool:
         # ───────────────────────────────
         send_or_edit_categories_window(chat_id, "\n".join(lines), reply_markup=kb)
         return True
-
-    # Быстрый переход: текущая неделя (сегодня)
-    if data_str == "cat_today":
-        start = week_start_monday(today_key())
-        return handle_categories_callback(call, f"cat_wk:{start}")
-
-    # Навигация по неделям: start=понедельник недели
-    if data_str.startswith("cat_wk:"):
-        start = data_str.split(":", 1)[1].strip() or week_start_monday(today_key())
-        start, end = week_bounds_from_start(start)
-        cats = calc_categories_for_period(store, start, end)
-
-        lines = [
-            "📦 Расходы по статьям",
-            f"🗓 {fmt_date_ddmmyy(start)} — {fmt_date_ddmmyy(end)} (Пн - Вскр)",
-            ""
-        ]
-
-        if not cats:
-            lines.append("Нет данных по статьям за этот период.")
-        else:
-            keys = list(cats.keys())
-            if "ПРОДУКТЫ" in keys:
-                keys.remove("ПРОДУКТЫ")
-                keys = ["ПРОДУКТЫ"] + sorted(keys)
-            else:
-                keys = sorted(keys)
-
-            for cat in keys:
-                lines.append(f"{cat}: {fmt_num_plain(cats[cat])}")
-                if cat == "ПРОДУКТЫ" and show_list:  # ← ДОБАВЛЕНО
-                    items = collect_items_for_category(store, start, end, "ПРОДУКТЫ")
-                    if items:
-                        for day_i, amt_i, note_i in items:
-                            note_i = (note_i or "").strip()
-                            lines.append(f"  • {fmt_date_ddmmyy(day_i)}: {fmt_num_plain(amt_i)} {note_i}")
 
 
 
