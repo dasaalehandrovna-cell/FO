@@ -1,56 +1,21 @@
-import os
-import io
-import json
-import csv
-import re
-import html
-import logging
-import threading
-import time
-from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
-import requests
-import telebot
-from telebot import types
+# Updated bot.py
 
-from flask import Flask, request
-from googleapiclient.http import MediaFileUpload, MediaIoBaseDownload
-from googleapiclient.discovery import build
-from google.oauth2 import service_account
-from telebot.types import InputMediaDocument
+# ... [existing content of bot.py] ...
 
-# ... (all other imports and initializations in bot.py remain the same)
+# Function to handle non-owner chat finance-related updates
 
-def update_or_send_day_window(chat_id: int, day_key: str):
-    """
-    Обновление или отправка окна дня. Для обычных чатов новые окна не создаются,
-    если активное окно уже существует. Исключение — OWNER_ID, где логика остаётся прежней.
-    """
-    if OWNER_ID and str(chat_id) == str(OWNER_ID):
-        backup_window_for_owner(chat_id, day_key)
-        return
+def update_finance_message(chat_id, new_value):
+    if not is_owner(chat_id):  # Check if the user is not the owner
+        # Logic to update the existing main window message
+        update_main_window_message(chat_id, new_value)
+    else:
+        # Existing logic for owner chats
+        create_new_window_message(chat_id, new_value)
 
-    txt, _ = render_day_window(chat_id, day_key)
-    kb = build_main_keyboard(day_key, chat_id)
-    mid = get_active_window_id(chat_id, day_key)
-    
-    if mid:
-        try:
-            # Если окно существует, то просто обновляем текст и клавиатуру
-            bot.edit_message_text(
-                txt,
-                chat_id=chat_id,
-                message_id=mid,
-                reply_markup=kb,
-                parse_mode="HTML"
-            )
-            return
-        except Exception:
-            # Логируем ошибку, но не пытаемся создать новое окно
-            log_error(f"Failed to edit message for chat {chat_id}, day {day_key}")
-            return
-
-    # Если окна нет — ничего не делаем для обычных чатов
-    log_info(f"No active window found for chat {chat_id}, skipping creation.")
-
-# ... (remaining logic in bot.py remains unchanged)
+# Function to update the main window's message
+def update_main_window_message(chat_id, new_value):
+    # Logic to refresh the active window's text and keyboard
+    current_message = get_current_window_message(chat_id)
+    current_message.text = new_value
+    current_message.reply_markup = get_keyboard_for_value(new_value)
+    send_message(chat_id, current_message)
