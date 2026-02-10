@@ -63,7 +63,6 @@ bot = telebot.TeleBot(BOT_TOKEN, parse_mode=None)
 app = Flask(__name__)
 data = {}
 finance_active_chats = set()
-data[chat_id]["backup_message_id"] = None
 
 def log_info(msg: str):
     logger.info(msg)
@@ -3290,18 +3289,7 @@ def force_backup_to_chat(chat_id: int):
         buf = io.BytesIO(data_bytes)
         buf.name = file_name
 
-        # если backup уже был — удаляем его
-        old_msg_id = meta.get(msg_key)
-        if old_msg_id:
-            try:
-                bot.delete_message(chat_id, old_msg_id)
-            except Exception:
-                pass  # если удаление не удалось — не критично
-
-        # отправляем новый документ
         sent = bot.send_document(chat_id, buf, caption=caption)
-
-        # сохраняем НОВЫЙ message_id
         meta[msg_key] = sent.message_id
         meta[ts_key] = now_local().isoformat(timespec="seconds")
         _save_chat_backup_meta(meta)
