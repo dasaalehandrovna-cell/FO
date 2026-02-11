@@ -1,4 +1,4 @@
-#норм ок
+#нормок
 import os
 import io
 import json
